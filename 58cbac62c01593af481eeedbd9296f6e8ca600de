@@ -1,0 +1,4 @@
+commit: 58cbac6
+date: 2026-05-29
+claude-code: opus-4-8[1m] (ultracode)
+note: iroh slice C mapped-addr layer, byte-exact vs Rust mapped_addrs.rs. Golden tests pass.
