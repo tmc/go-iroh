@@ -1,0 +1,5 @@
+commit: e8a4c5f
+date: 2026-05-29
+claude-code: opus-4-8[1m] (ultracode)
+ITERM_SESSION_ID: w5t1p0:A604F88B-0F8D-4DA8-BB94-F00123EA3E61
+note: iroh pkg TLS glue (golden SNI matches Rust) + DESIGN.md + noq-proto reference for X1-X3 extensions. User opted to attempt full noq extension port.
