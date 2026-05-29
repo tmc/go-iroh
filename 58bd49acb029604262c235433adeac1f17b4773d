@@ -1,0 +1,8 @@
+commit: 58bd49a
+date: 2026-05-29
+claude-code: opus-4-8[1m] (ultracode)
+tty: not a tty
+n/a
+pid: 37644
+ITERM_SESSION_ID: w5t1p0:A604F88B-0F8D-4DA8-BB94-F00123EA3E61
+note: quic-go v0.59.1 fork onto RFC 7250 TLS; Config.Clone RawPublicKeys fix; e2e QUIC raw-key handshake passes.
