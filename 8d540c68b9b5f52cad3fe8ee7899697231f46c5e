@@ -1,0 +1,4 @@
+commit: 8d540c6
+date: 2026-05-29
+claude-code: opus-4-8[1m] (ultracode)
+note: iroh slice B direct-path Endpoint/Conn/streams. TestEndpointDirectEcho passes (loopback echo + datagram, peer-id verified).
