@@ -1,0 +1,1 @@
+claude-code: Opus 4.8 (1M) | 2026-05-29T16:05:49Z | go-iroh vendored crypto/tls compiles+handshakes out-of-tree (RFC7250 foundation)
