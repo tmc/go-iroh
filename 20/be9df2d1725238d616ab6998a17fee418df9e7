@@ -1,12 +1,12 @@
 commit: 20be9df2d1725238d616ab6998a17fee418df9e7
 
-date: 2026-05-31T00:00:00-07:00
+date: 2026-05-30T23:33:56-07:00
 
-codex: codex
+codex: codex-cli 0.135.0
 
 model: gpt-5.5
 
-tty: unknown
+tty: not a tty
 
 pid: unknown
 
