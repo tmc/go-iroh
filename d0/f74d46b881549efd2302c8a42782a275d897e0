@@ -1,0 +1,6 @@
+fix committed 2026-06-28 20:49:46 PDT
+claude-code: opus-4-8[1m]
+tty: not a tty
+n/a  pid: 56077
+ITERM_SESSION_ID: w13t2p0:F5CEBCC8-82C4-48F7-9FA8-C4CBA0F4010D
+context: qng sconn send-path data race (reported by session 6941B15C via diloco-mesh -race); root cause inline fast-path in 12ae69d broke quic-go single-writer invariant; fixed with sconn.writeMu. Verified: base 63bc315 races+fails TestStreamConn -race, fix green.
