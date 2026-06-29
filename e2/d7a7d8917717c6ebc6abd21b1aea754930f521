@@ -1,0 +1,9 @@
+commit: e2d7a7d8917717c6ebc6abd21b1aea754930f521
+date: 2026-06-29T23:36:07Z
+claude-code-version: 2.1.170 (Claude Code)
+model: claude-opus-4-8[1m]
+tty: not a tty
+not a tty
+pid: 95722
+ITERM_SESSION_ID: w13t2p0:F5CEBCC8-82C4-48F7-9FA8-C4CBA0F4010D
+note: replayed from 9ca5c97 by rebase dropping iroh:add tcp stream transport (moved to branch stream-transport)
