@@ -1,0 +1,9 @@
+commit: ad73bd3ff423a2e8cccc4d763074c17f7bc34603
+date: 2026-06-29T23:43:44Z
+claude-code-version: 2.1.170 (Claude Code)
+model: claude-opus-4-8[1m]
+tty: not a tty
+not a tty
+pid: 1885
+ITERM_SESSION_ID: w13t2p0:F5CEBCC8-82C4-48F7-9FA8-C4CBA0F4010D
+note: history-audit reorder moved this race fix to lead so no commit is -race-dirty under bisect; content identical to 9ca5c97/e2d7a7d (patch-id 186b3cb3)
