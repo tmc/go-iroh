@@ -1,0 +1,8 @@
+commit: f307428
+date: 2026-07-01T10:36:01Z
+claude_code_version: 2.1.197 (Claude Code)
+model: claude-opus-4-8
+tty: not a tty
+pid: 88046
+ITERM_SESSION_ID: w5t6p1:CB8ECAB5-E364-4CFD-9B55-D9A54DD2D130
+context: WASM-merge track — merged wasm-support (forked 742acdc) into main. Validated in isolated worktree first: native+wasm build/vet/test, 5 Brave browser tests, -race on iroh/socket/qng all green. Merge auto-resolved iroh/endpoint.go, zero conflicts.
