@@ -1,0 +1,9 @@
+commit: a30eb5c
+date: 2026-07-01T10:33:17Z
+claude_code_version: 2.1.197 (Claude Code)
+model: claude-opus-4-8
+tty: not a tty
+not a tty
+pid: 85864
+ITERM_SESSION_ID: w5t6p1:CB8ECAB5-E364-4CFD-9B55-D9A54DD2D130
+context: WASM-merge track — fix pre-existing wasm test-vet blemish before merge
