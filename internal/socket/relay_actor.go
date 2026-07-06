@@ -265,7 +265,6 @@ func (a *RelayActor) RemoveRelay(url netaddr.RelayURL) (relay.Config, bool) {
 			ar.setHome(key == next.String())
 		}
 		a.ensureActiveLocked(next, true)
-		break
 	}
 	return prev, true
 }
