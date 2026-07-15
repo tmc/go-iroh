@@ -3,3 +3,10 @@ date: 2026-07-05T07:35:26Z
 tty: not a tty
 pid: 69841
 iterm_session_id: w5t6p17:20F0B5C3-AE24-47B7-B3EB-6F0D91F9F47B
+
+fold: moved rdmaStreamPostWork/rdmaStreamWorkRequest into rdma_conn.go so the package cross-compiles (js/wasm, linux); folded during 2026-07-14 rebase onto main
+date: 2026-07-15T02:03:31Z
+claude-code: 2.1.197 (Claude Code) model: claude-fable-5
+tty: not a tty
+not-a-tty pid: 93402
+iterm_session_id: w2t10p0:416AFC3D-B8E1-4C3F-937A-189735122B36
