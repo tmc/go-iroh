@@ -623,6 +623,22 @@ func (c streamConn) RemoteID() key.EndpointID { return c.remoteID }
 // data. Replay safety is application-specific.
 func (c streamConn) Used0RTT() bool { return c.used0RTT }
 
+// Close closes both stream directions. [Stream.Close] closes only the send
+// direction; CancelRead closes the receive direction, allowing QUIC to retire
+// the stream and replenish stream credit. An already-canceled send direction
+// is treated as closed.
+func (c streamConn) Close() error {
+	err := c.Stream.Close()
+	c.Stream.CancelRead(0)
+	if err != nil {
+		var serr *quic.StreamError
+		if errors.As(context.Cause(c.Stream.Context()), &serr) {
+			return nil
+		}
+	}
+	return err
+}
+
 // connAdapter adapts a qng *quic.Conn to the socket package's
 // [socket.Connection] interface so the per-remote state actor can track its
 // liveness, RTT, and path without the socket package importing iroh.

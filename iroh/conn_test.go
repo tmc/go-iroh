@@ -629,6 +629,44 @@ func TestStreamConn(t *testing.T) {
 	}
 }
 
+func TestStreamConnCloseReturnsCredit(t *testing.T) {
+	client, server := connPair(t, "iroh-stream-conn-credit/0")
+	defer client.Close()
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		for i := 0; i < 150; i++ {
+			c, err := server.AcceptStreamConn(ctx)
+			if err != nil {
+				done <- fmt.Errorf("accept stream %d: %w", i, err)
+				return
+			}
+			if err := c.Close(); err != nil {
+				done <- fmt.Errorf("close stream %d: %w", i, err)
+				return
+			}
+		}
+		done <- nil
+	}()
+
+	for i := 0; i < 150; i++ {
+		c, err := client.OpenStreamConn(ctx)
+		if err != nil {
+			t.Fatalf("open stream %d: %v", i, err)
+		}
+		if err := c.Close(); err != nil {
+			t.Fatalf("close stream %d: %v", i, err)
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSideString(t *testing.T) {
 	tests := []struct {
 		side Side
