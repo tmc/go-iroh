@@ -385,6 +385,8 @@ func TestActorHeartbeatSyncsQNGRoutes(t *testing.T) {
 	})
 }
 
+// TestActorUpgradeTickStartsQNT asserts the upgrade tick punches while the
+// selected path is RELAYED — the state a punch can actually improve.
 func TestActorUpgradeTickStartsQNT(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -392,7 +394,7 @@ func TestActorUpgradeTickStartsQNT(t *testing.T) {
 		m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
 		id := testEndpointID(t)
 
-		conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
+		conn := newFakeConn(relayPath(t, 1), time.Millisecond)
 		conn.multipathNegotiated = true
 		defer conn.Close()
 		events := m.AddConnection(id, conn)
@@ -414,6 +416,38 @@ func TestActorUpgradeTickStartsQNT(t *testing.T) {
 		synctest.Wait()
 		if got := conn.initiateRoundCalls.Load(); got != 1 {
 			t.Fatalf("InitiateNATTraversalRound calls after upgrade = %d, want 1", got)
+		}
+		cancel()
+		synctest.Wait()
+		<-eventsDone
+	})
+}
+
+// TestActorUpgradeTickSkipsDirectSelected: a direct-selected connection gets
+// no QNT round from the tick.
+func TestActorUpgradeTickSkipsDirectSelected(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+		id := testEndpointID(t)
+
+		conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
+		conn.multipathNegotiated = true
+		defer conn.Close()
+		events := m.AddConnection(id, conn)
+		eventsDone := make(chan struct{})
+		go func() {
+			for range events {
+			}
+			close(eventsDone)
+		}()
+		synctest.Wait()
+
+		time.Sleep(UpgradeInterval + time.Nanosecond)
+		synctest.Wait()
+		if got := conn.initiateRoundCalls.Load(); got != 0 {
+			t.Fatalf("InitiateNATTraversalRound calls on a direct-selected conn = %d, want 0", got)
 		}
 		cancel()
 		synctest.Wait()

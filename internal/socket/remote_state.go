@@ -368,12 +368,23 @@ func (a *RemoteStateActor) run(ctx context.Context) {
 		case <-heartbeat.C:
 			a.reselect()
 		case <-upgrade.C:
-			// Upgrade tick: first ask qng to validate a direct RFC 9000 path, then
-			// try a QNT round when the active connection supports it. Errors are
-			// non-fatal; the actor keeps using the best path it already knows and
-			// tries again on the next cadence.
-			_ = a.ValidateDirectPath(context.Background())
-			_ = a.TriggerHolepunch()
+			// Upgrade tick: fallback behind the punch-on-ready trigger.
+			// Direct selected: nothing to upgrade toward. Relay selected:
+			// only a punch can help — ValidateDirectPath opens a path over
+			// the current four-tuple (the relay itself) and just burns its
+			// timeout. Off-loop: they block for seconds and the actor must
+			// keep processing messages.
+			sel, selected := a.SelectedPath()
+			switch {
+			case selected && sel.Kind() == AddrIP:
+			case selected && sel.Kind() == AddrRelay:
+				go func() { _ = a.TriggerHolepunch() }()
+			default:
+				go func() {
+					_ = a.ValidateDirectPath(context.Background())
+					_ = a.TriggerHolepunch()
+				}()
+			}
 			a.reselect()
 		}
 		// Keep the idle timer disarmed (reset to a fresh full timeout) while

@@ -24,10 +24,12 @@
 // reflexive address with OBSERVED_ADDRESS frames; the latest report is surfaced
 // as [Report.GlobalV4]/[Report.GlobalV6] (and the matching UDP fields).
 //
-// Reports arrive asynchronously over the connection, so a probe that completes
-// before any report has been received is still treated as latency-only: in that
-// timing window, and when QAD is not negotiated at all,
-// [qadConn.observedAddr] returns [ErrExtensionNotNegotiated] rather than
-// fabricate an address. Relay selection and latency measurement are unaffected
-// either way.
+// Reports arrive after the handshake, so [qadConn.observedAddr] waits briefly
+// for the first one; an immediate read would always miss. Without a report
+// (not negotiated, or timed out) the probe stays latency-only.
+//
+// Which socket a probe rides decides what the observed address means: a
+// private per-probe socket learns a mapping that dies with it.
+// [Client.WithQADDialer] routes probes through the caller's transport instead,
+// so the observed address is the caller's real public mapping.
 package netreport

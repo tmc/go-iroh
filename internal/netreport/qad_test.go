@@ -162,28 +162,19 @@ func TestQADObservedAddrLoopback(t *testing.T) {
 			}
 			defer qad.close(qadCloseCode, qadCloseReason)
 
-			deadline := time.Now().Add(5 * time.Second)
-			for {
-				got, err := qad.observedAddr(context.Background())
-				if err == nil {
-					if tt.ip.To4() != nil && !got.Addr().Is4() {
-						t.Fatalf("observedAddr = %v, want IPv4", got)
-					}
-					if tt.ip.To4() == nil && !got.Addr().Is6() {
-						t.Fatalf("observedAddr = %v, want IPv6", got)
-					}
-					if got.Port() == 0 {
-						t.Fatalf("observedAddr = %v, want non-zero port", got)
-					}
-					return
-				}
-				if !errors.Is(err, ErrExtensionNotNegotiated) {
-					t.Fatalf("observedAddr err = %v, want nil or ErrExtensionNotNegotiated", err)
-				}
-				if time.Now().After(deadline) {
-					t.Fatal("observedAddr never received a report")
-				}
-				time.Sleep(20 * time.Millisecond)
+			// Single call, no polling: observedAddr must wait for the report.
+			got, err := qad.observedAddr(context.Background())
+			if err != nil {
+				t.Fatalf("observedAddr: %v", err)
+			}
+			if tt.ip.To4() != nil && !got.Addr().Is4() {
+				t.Fatalf("observedAddr = %v, want IPv4", got)
+			}
+			if tt.ip.To4() == nil && !got.Addr().Is6() {
+				t.Fatalf("observedAddr = %v, want IPv6", got)
+			}
+			if got.Port() == 0 {
+				t.Fatalf("observedAddr = %v, want non-zero port", got)
 			}
 		})
 	}
@@ -209,4 +200,35 @@ func selfSignedCert(t *testing.T) tls.Certificate {
 		t.Fatal(err)
 	}
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: priv}
+}
+
+// TestQADObservedAddrNotNegotiatedReturnsPromptly pins the other half of the
+// wait: a relay that never reports must not cost the probe its whole budget.
+func TestQADObservedAddrNotNegotiatedReturnsPromptly(t *testing.T) {
+	addr, stop := startLoopbackQADWithConfig(t, net.IPv4(127, 0, 0, 1), &quic.Config{
+		// Address discovery deliberately not offered by the server.
+		KeepAlivePeriod: 100 * time.Millisecond,
+		MaxIdleTimeout:  qadMaxIdle,
+	})
+	defer stop()
+
+	qad, err := newQADClient(addr, "relay.iroh.invalid",
+		&tls.Config{InsecureSkipVerify: true},
+		&quic.Config{
+			ReceiveObservedAddressReports: true,
+			KeepAlivePeriod:               100 * time.Millisecond,
+			MaxIdleTimeout:                qadMaxIdle,
+		})
+	if err != nil {
+		t.Fatalf("newQADClient: %v", err)
+	}
+	defer qad.close(qadCloseCode, qadCloseReason)
+
+	start := time.Now()
+	if _, err := qad.observedAddr(context.Background()); !errors.Is(err, ErrExtensionNotNegotiated) {
+		t.Fatalf("observedAddr err = %v, want ErrExtensionNotNegotiated", err)
+	}
+	if elapsed := time.Since(start); elapsed >= qadObservedAddrWait {
+		t.Fatalf("waited %v for a relay that never reports; want a prompt return", elapsed)
+	}
 }

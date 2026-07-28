@@ -62,6 +62,10 @@ const (
 	// iroh-relay/src/quic.rs:297.
 	qadKeepAlive = 25 * time.Second
 
+	// qadObservedAddrWait bounds the wait for the relay's OBSERVED_ADDRESS
+	// report after the QAD handshake: one round trip normally, and a relay
+	// that negotiated but never reports must not stall the probe.
+	qadObservedAddrWait = time.Second
 	// qadMaxIdle is the QAD connection idle timeout.
 	// iroh-relay/src/quic.rs:298-300.
 	qadMaxIdle = 35 * time.Second

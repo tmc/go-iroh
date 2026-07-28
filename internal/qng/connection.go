@@ -236,6 +236,9 @@ type Conn struct {
 	observedAddrSeqNo  uint64
 	observedAddrValid  bool
 	observedAddrSeqSet bool
+	// observedAddrReadyCh is closed at the first report so a reader can wait
+	// instead of polling; created lazily under observedAddrMu.
+	observedAddrReadyCh chan struct{}
 
 	streamsMap      *streamsMap
 	connIDManager   *connIDManager
@@ -3233,10 +3236,14 @@ func (c *Conn) handleObservedAddrFrame(frame *wire.ObservedAddrFrame) error {
 		// Stale or duplicate report; ignore (paths.rs:621-622).
 		return nil
 	}
+	first := !c.observedAddrValid
 	c.observedAddrSeqNo = frame.SeqNo
 	c.observedAddrSeqSet = true
 	c.observedAddr = netip.AddrPortFrom(frame.Addr.Unmap(), frame.Port)
 	c.observedAddrValid = true
+	if first {
+		close(c.observedAddrReadyLocked())
+	}
 	return nil
 }
 
@@ -3278,6 +3285,44 @@ func (c *Conn) ObservedAddr() (netip.AddrPort, bool) {
 		return netip.AddrPort{}, false
 	}
 	return c.observedAddr, true
+}
+
+// observedAddrReadyLocked returns the channel closed on the first report,
+// creating it on demand. observedAddrMu must be held.
+func (c *Conn) observedAddrReadyLocked() chan struct{} {
+	if c.observedAddrReadyCh == nil {
+		c.observedAddrReadyCh = make(chan struct{})
+	}
+	return c.observedAddrReadyCh
+}
+
+// AwaitObservedAddr returns the reflexive address the peer reported via the
+// QUIC Address Discovery OBSERVED_ADDRESS extension, waiting for the first
+// report if none has arrived yet (reports are sent after the handshake, so an
+// immediate read misses). Returns ok=false without waiting when address
+// discovery was not negotiated to receive reports, and when ctx ends or the
+// connection closes first.
+func (c *Conn) AwaitObservedAddr(ctx context.Context) (netip.AddrPort, bool) {
+	c.observedAddrMu.Lock()
+	if c.observedAddrValid {
+		addr := c.observedAddr
+		c.observedAddrMu.Unlock()
+		return addr, true
+	}
+	ready := c.observedAddrReadyLocked()
+	c.observedAddrMu.Unlock()
+
+	if !c.acceptsObservedAddr() {
+		return netip.AddrPort{}, false
+	}
+	select {
+	case <-ready:
+		return c.ObservedAddr()
+	case <-ctx.Done():
+		return netip.AddrPort{}, false
+	case <-c.Context().Done():
+		return netip.AddrPort{}, false
+	}
 }
 
 func (c *Conn) triggerSending(now monotime.Time) error {

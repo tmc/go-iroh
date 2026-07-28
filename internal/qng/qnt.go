@@ -50,6 +50,25 @@ type qntLocalState struct {
 	validatedProbes        []netip.AddrPort
 	retryAttempt           uint8
 	nextRetry              monotime.Time
+	// remoteReady is closed once the remote candidate set first becomes
+	// non-empty; created lazily under mu.
+	remoteReady     chan struct{}
+	remoteReadyDone bool
+}
+
+func (st *qntLocalState) remoteReadyChLocked() chan struct{} {
+	if st.remoteReady == nil {
+		st.remoteReady = make(chan struct{})
+	}
+	return st.remoteReady
+}
+
+func (st *qntLocalState) signalRemoteReadyLocked() {
+	if st.remoteReadyDone {
+		return
+	}
+	st.remoteReadyDone = true
+	close(st.remoteReadyChLocked())
 }
 
 type qntLocalAddress struct {
@@ -145,6 +164,7 @@ func (c *Conn) AddRemoteNATTraversalAddress(addr netip.AddrPort) error {
 	seq := st.nextRemoteAddressSeqNo
 	st.nextRemoteAddressSeqNo++
 	st.remote.addrs[seq] = addr
+	st.signalRemoteReadyLocked()
 	return nil
 }
 
@@ -183,6 +203,18 @@ func (c *Conn) InitiateNATTraversalRound(ctx context.Context) ([]netip.AddrPort,
 	st.mu.Unlock()
 	c.qntQueuePendingReachOutFrames()
 	return remote, nil
+}
+
+// NATTraversalRemoteAddrsReady returns a channel closed once this connection
+// first knows a remote NAT traversal candidate (peer ADD_ADDRESS frame or
+// [Conn.AddRemoteNATTraversalAddress]) — the earliest moment a QNT round can
+// start. It never closes when no candidate ever arrives, e.g. on the server
+// side of QNT, which receives no ADD_ADDRESS.
+func (c *Conn) NATTraversalRemoteAddrsReady() <-chan struct{} {
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.remoteReadyChLocked()
 }
 
 // NATTraversalAddresses returns the remote ADD_ADDRESS set known to qng.
@@ -660,6 +692,9 @@ func (c *Conn) addRemoteNATTraversalAddressFrame(frame *wire.AddAddressFrame) er
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	_, _, err := st.remote.add(frame)
+	if err == nil && len(st.remote.addresses()) > 0 {
+		st.signalRemoteReadyLocked()
+	}
 	return err
 }
 

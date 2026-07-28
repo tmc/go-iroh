@@ -47,6 +47,8 @@ type Client struct {
 	// quicConfig overrides QAD transport defaults; if nil, defaultQADConfig is
 	// used.
 	quicConfig *quic.Config
+	// qadDialer, if non-nil, opens QAD probe connections; see WithQADDialer.
+	qadDialer QADDialer
 	// now returns the current time; overridable in tests for deterministic
 	// hysteresis-window pruning.
 	now func() time.Time
@@ -93,6 +95,40 @@ func (c *Client) WithQUICConfig(cfg *quic.Config) *Client {
 func (c *Client) WithQADTLSConfig(cfg *itls.Config) *Client {
 	c.qadTLS = cfg
 	return c
+}
+
+// QADDialer opens the QUIC connection for one QAD probe to addr; tlsConf
+// already carries the QAD ALPN and server name.
+type QADDialer func(ctx context.Context, addr netip.AddrPort, tlsConf *itls.Config, cfg *quic.Config) (*quic.Conn, error)
+
+// WithQADDialer routes QAD probes through d instead of a private per-probe
+// UDP socket, so the observed address is the mapping of the dialer's own
+// socket. A per-probe socket's mapping dies with it and its port is nobody's
+// dial candidate; per-probe mappings also differ between relays, which makes
+// MappingVariesByDest misreport symmetric NAT.
+func (c *Client) WithQADDialer(d QADDialer) *Client {
+	c.qadDialer = d
+	return c
+}
+
+// dialQAD opens the QAD connection for a probe to addr, via the configured
+// dialer or a private per-probe socket.
+func (c *Client) dialQAD(ctx context.Context, addr netip.AddrPort, host string) (*qadConn, error) {
+	if c.qadDialer == nil {
+		return newQADClient(addr, host, c.qadTLS, c.quicConfig)
+	}
+	cfg := c.quicConfig
+	if cfg == nil {
+		cfg = defaultQADConfig()
+	}
+	ctx, cancel := context.WithTimeout(ctx, probesTimeout)
+	defer cancel()
+	conn, err := c.qadDialer(ctx, addr, qadTLSConfig(host, c.qadTLS), cfg)
+	if err != nil {
+		return nil, err
+	}
+	// ownsTransport stays false: the dialer's transport outlives the probe.
+	return &qadConn{conn: conn}, nil
 }
 
 // GetReport runs a single net_report. doFull forces a full report (captive
@@ -230,16 +266,17 @@ func (c *Client) runQADProbe(ctx context.Context, cfg relay.Config, probe Probe)
 		return nil
 	}
 
-	qad, err := newQADClient(addr, host, c.qadTLS, c.quicConfig)
+	qad, err := c.dialQAD(ctx, addr, host)
 	if err != nil {
 		return nil
 	}
 	defer qad.close(qadCloseCode, qadCloseReason)
 
 	// Read the connection RTT (iroh-relay/src/quic.rs:345) and the relay's
-	// observed-address report if one has arrived. observedAddr returns
-	// ErrExtensionNotNegotiated when no report is available yet, in which case
-	// the probe is latency-only.
+	// observed-address report, which observedAddr waits briefly for because it
+	// is sent just after the handshake this dial already completed. It returns
+	// ErrExtensionNotNegotiated when the relay does not report or none arrives
+	// in time, in which case the probe is latency-only.
 	latency := qad.rtt(0)
 	addrPort, addrErr := qad.observedAddr(ctx)
 	rep := &probeReport{probe: probe, relay: cfg.URL, latency: latency}

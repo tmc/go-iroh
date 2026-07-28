@@ -13,9 +13,9 @@ import (
 
 // ErrExtensionNotNegotiated is returned by [qadConn.observedAddr] when no
 // reflexive address is available: either QUIC Address Discovery was not
-// negotiated on the connection, or no OBSERVED_ADDRESS report has arrived yet
-// (reports are asynchronous, so a probe can complete first). The forked quic-go
-// implements the extension (slice X3); see the package doc.
+// negotiated on the connection, or no OBSERVED_ADDRESS report arrived within
+// [qadObservedAddrWait]. The forked quic-go implements the extension (slice
+// X3); see the package doc.
 var ErrExtensionNotNegotiated = errors.New("netreport: quic observed-address extension not negotiated")
 
 // qadConn is a client-side QUIC Address Discovery connection to a relay. It
@@ -115,17 +115,18 @@ func (qad *qadConn) rtt(pathID uint64) time.Duration {
 }
 
 // observedAddr returns the host's reflexive address as reported by the relay
-// over the QUIC Address Discovery OBSERVED_ADDRESS extension. When QAD was
-// negotiated and the relay has reported an address, it returns that address.
-// Otherwise it returns [ErrExtensionNotNegotiated] rather than fabricate an
-// address: QAD reports arrive asynchronously, so a probe that completes before
-// any report is treated as latency-only, as is a connection where QAD was not
-// negotiated. See the package doc.
+// via QUIC Address Discovery, waiting up to [qadObservedAddrWait] for the
+// first report — relays send OBSERVED_ADDRESS after the handshake the dial
+// waits for, so an immediate read always loses that race. Returns
+// [ErrExtensionNotNegotiated], without waiting, when the relay did not
+// negotiate address discovery, and when no report arrives in time.
 func (qad *qadConn) observedAddr(ctx context.Context) (netip.AddrPort, error) {
 	if qad.conn == nil {
 		return netip.AddrPort{}, ErrExtensionNotNegotiated
 	}
-	if addr, ok := qad.conn.ObservedAddr(); ok {
+	ctx, cancel := context.WithTimeout(ctx, qadObservedAddrWait)
+	defer cancel()
+	if addr, ok := qad.conn.AwaitObservedAddr(ctx); ok {
 		return addr, nil
 	}
 	return netip.AddrPort{}, ErrExtensionNotNegotiated
