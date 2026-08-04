@@ -53,7 +53,14 @@ func (c *Connecting) Connection(ctx context.Context) (*Conn, error) {
 	if c == nil || c.qc == nil {
 		return nil, errors.New("iroh: nil connecting")
 	}
-	conn, err := newConn(c.qc, c.remoteID, c.alpn, SideClient, c.ep.connStableID(c.qc))
+	qc, err := c.qc.NextConnection(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := context.Cause(qc.Context()); err != nil {
+		return nil, err
+	}
+	conn, err := newConn(qc, c.remoteID, c.alpn, SideClient, c.ep.connStableID(qc))
 	if err != nil {
 		return nil, err
 	}
