@@ -1,6 +1,6 @@
 use std::{
     io::{Read, Write},
-    net::{SocketAddr, TcpStream},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
     str::FromStr,
     time::Duration,
 };
@@ -80,9 +80,106 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             return dns_publish(&addr);
         }
+        if command == "transport-server" {
+            let mode = args.next().ok_or("transport-server requires a mode")?;
+            if args.next().is_some() {
+                return Err("transport-server accepts one mode".into());
+            }
+            return transport_server(&mode).await;
+        }
         return Err(format!("unknown command {command}").into());
     }
     write_corpus()
+}
+
+async fn transport_server(mode: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use iroh::{Endpoint, RelayMode, endpoint::presets};
+
+    const ALPN: &[u8] = b"go-iroh-compat/1";
+    let endpoint = Endpoint::builder(presets::N0)
+        .alpns(vec![ALPN.to_vec()])
+        .secret_key(iroh::SecretKey::from_bytes(&[0x45; 32]))
+        .relay_mode(RelayMode::Disabled)
+        .bind_addr(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))?
+        .bind()
+        .await?;
+    let endpoint_addr = endpoint.addr();
+    let addr = endpoint_addr
+        .ip_addrs()
+        .next()
+        .copied()
+        .ok_or("Rust endpoint has no direct address")?;
+    println!("{{\"id\":\"{}\",\"addr\":\"{}\"}}", endpoint.id(), addr);
+    std::io::stdout().flush()?;
+
+    if mode == "zero-rtt" {
+        let mut second_was_0rtt = false;
+        for round in 0..2 {
+            let incoming = endpoint.accept().await.ok_or("endpoint closed")?;
+            let conn = incoming.accept()?.into_0rtt();
+            let (mut send, mut recv) = conn.accept_bi().await?;
+            if round == 1 {
+                second_was_0rtt = recv.is_0rtt();
+            }
+            let data = recv.read_to_end(64).await?;
+            send.write_all(&data).await?;
+            send.finish()?;
+            conn.closed().await;
+        }
+        if !second_was_0rtt {
+            return Err("second Rust receive stream was not 0-RTT".into());
+        }
+        println!("zero-rtt-ok");
+        return Ok(());
+    }
+
+    let incoming = endpoint.accept().await.ok_or("endpoint closed")?;
+    let conn = incoming.accept()?.await?;
+    match mode {
+        "datagrams" => {
+            let got = conn.read_datagram().await?;
+            if got.as_ref() != b"go-datagram" {
+                return Err("Rust peer received the wrong datagram".into());
+            }
+            conn.send_datagram(bytes::Bytes::from_static(b"rust-datagram"))?;
+            if conn.read_datagram().await?.as_ref() != b"go-ack" {
+                return Err("Rust peer received the wrong datagram acknowledgement".into());
+            }
+            let mut ack = conn.open_uni().await?;
+            ack.write_all(b"datagrams-ok").await?;
+            ack.finish()?;
+            conn.closed().await;
+            println!("datagrams-ok");
+        }
+        "close" => {
+            let reason = format!("{:?}", conn.closed().await);
+            if !reason.contains("ApplicationClosed")
+                || !reason.contains("42")
+                || !reason.contains("bye")
+            {
+                return Err(format!("unexpected close reason {reason}").into());
+            }
+            println!("close-ok");
+        }
+        "remote-info" => {
+            let remote = conn.remote_id();
+            let info = endpoint
+                .remote_info(remote)
+                .await
+                .ok_or("Rust remote info missing")?;
+            if info.id() != remote || info.addrs().next().is_none() {
+                return Err("Rust remote info did not identify an address".into());
+            }
+            let (mut send, mut recv) = conn.accept_bi().await?;
+            let data = recv.read_to_end(64).await?;
+            send.write_all(&data).await?;
+            send.finish()?;
+            println!("remote-info-ok");
+        }
+        _ => return Err(format!("unknown transport mode {mode}").into()),
+    }
+    endpoint.close().await;
+    Ok(())
 }
 
 fn dns_publish(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
