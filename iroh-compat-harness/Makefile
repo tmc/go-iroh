@@ -16,7 +16,7 @@ parity-native:
 	trap 'rm -rf "$$work"' EXIT; \
 	go build -o "$$work/iroh-relay" ../cmd/iroh-relay; \
 	go build -o "$$work/iroh-dns-server" ../cmd/iroh-dns-server; \
-	go run ./cmd/parity -iroh-version $(IROH_VERSION) -go-relay "$$work/iroh-relay" -go-dns "$$work/iroh-dns-server" -rust-doctor "$(RUST_DOCTOR_BIN)" -rust-relay "$(RUST_RELAY_BIN)" -rust-dns "$(RUST_DNS_BIN)" -rust-vector "$(RUST_VECTOR_BIN)"
+	go run ./cmd/iroh-compat -iroh-version $(IROH_VERSION) -go-relay "$$work/iroh-relay" -go-dns "$$work/iroh-dns-server" -rust-doctor "$(RUST_DOCTOR_BIN)" -rust-relay "$(RUST_RELAY_BIN)" -rust-dns "$(RUST_DNS_BIN)" -rust-vector "$(RUST_VECTOR_BIN)"
 
 test:
 	go test ./...
