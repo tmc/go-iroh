@@ -27,7 +27,70 @@ func RunDoctorEcho(bin, version, digest string) []Cell {
 	return []Cell{
 		runRustClientGoServer(bin, version, digest),
 		runGoClientRustServer(bin, version, digest),
+		runDoctorNegative(bin, version, digest, "handshake/alpn-mismatch", true),
+		runDoctorNegative(bin, version, digest, "handshake/wrong-endpoint-id", false),
 	}
+}
+
+func runDoctorNegative(bin, version, digest, scenario string, wrongALPN bool) (cell Cell) {
+	cell = Cell{Scenario: scenario, Iroh: version, Tier: "A", Expected: Pass, Peer: "iroh-doctor@" + digest, PeerDigest: digest}
+	start := time.Now()
+	defer func() { cell.DurationMS = time.Since(start).Milliseconds() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "accept", "--secret-key", strings.Repeat("2a", 32), "--size", "1", "--iterations", "1", "--disable-address-lookup", "--socket-addr", "127.0.0.1:0")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return finishCell(cell, SetupError, fmt.Sprintf("Rust peer stdout: %v", err))
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return finishCell(cell, SetupError, fmt.Sprintf("Rust peer stderr: %v", err))
+	}
+	if err := cmd.Start(); err != nil {
+		return finishCell(cell, SetupError, fmt.Sprintf("start Rust peer: %v", err))
+	}
+	cell.PeerPID = cmd.Process.Pid
+	var output lockedBuffer
+	ready := make(chan doctorReady, 1)
+	var scans sync.WaitGroup
+	scans.Add(2)
+	go scanDoctor(stdout, &output, ready, &scans)
+	go scanDoctor(stderr, &output, ready, &scans)
+	defer func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		scans.Wait()
+	}()
+
+	var r doctorReady
+	select {
+	case r = <-ready:
+	case <-ctx.Done():
+		return finishCell(cell, Fail, "Rust server readiness: "+ctx.Err().Error())
+	}
+	ep, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.MustParseAddrPort("127.0.0.1:0")), irohRelayDisabled())
+	if err != nil {
+		return finishCell(cell, SetupError, fmt.Sprintf("bind Go client: %v", err))
+	}
+	defer ep.Shutdown(context.Background())
+	id := r.id
+	alpn := doctorALPN
+	if wrongALPN {
+		alpn = "n0/not-doctor/1"
+	} else {
+		other := key.NewSecretKey([key.SeedSize]byte{1})
+		id = other.Public().EndpointID()
+	}
+	dialCtx, dialCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer dialCancel()
+	conn, err := ep.Connect(dialCtx, netaddr.NewEndpointAddr(id).WithIP(r.addr), alpn)
+	if err == nil {
+		_ = conn.Close()
+		return finishCell(cell, Fail, "negative dial unexpectedly connected")
+	}
+	return finishCell(cell, Pass, "dial rejected cleanly: "+err.Error())
 }
 
 func runRustClientGoServer(bin, version, digest string) (cell Cell) {
