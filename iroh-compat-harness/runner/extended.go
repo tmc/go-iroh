@@ -9,7 +9,6 @@ func ExtendedCells(version string) []Cell {
 	scenarios := []unsupportedScenario{
 		{"handshake/pq-only", "go-iroh does not expose a pq-only TLS key-exchange policy"},
 		{"handshake/prefer-pq", "go-iroh does not expose a prefer-pq TLS key-exchange policy"},
-		{"relay/go-client-go-relay", "a Go-only quadrant cannot satisfy the real-Rust-peer pass invariant"},
 		{"discovery/qad-report", "go-iroh does not expose the upstream report schema needed for a field-by-field QAD assertion"},
 	}
 	cells := make([]Cell, len(scenarios))

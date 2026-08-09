@@ -49,11 +49,10 @@ func TestMarkdownNamesRustCounterpart(t *testing.T) {
 		Cells: []Cell{
 			{Scenario: "echo", Iroh: "1.0.3", Tier: "A", Result: Pass, Peer: "iroh-doctor@sha256:abc"},
 			{Scenario: "datagrams", Iroh: "1.0.3", Tier: "B", Result: Pass, Peer: "rust-driver@sha256:def"},
-			{Scenario: "relay/go-client-go-relay", Iroh: "1.0.3", Tier: "A", Result: Unsupported},
 		},
 	}
 	got := string(r.Markdown())
-	for _, want := range []string{"| Rust counterpart |", "| upstream CLI |", "| Rust test driver |", "| none (Go-only) |"} {
+	for _, want := range []string{"| Rust counterpart |", "| upstream CLI |", "| Rust test driver |", "Go-client↔Go-relay pairings contain no Rust peer"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Markdown() does not contain %q", want)
 		}
