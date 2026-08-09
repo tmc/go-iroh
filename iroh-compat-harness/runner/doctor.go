@@ -344,6 +344,12 @@ type lockedBuffer struct {
 	b  strings.Builder
 }
 
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
 func (b *lockedBuffer) WriteLine(s string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

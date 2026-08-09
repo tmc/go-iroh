@@ -31,6 +31,7 @@ func main() {
 	report.Cells = append(report.Cells, runEcho(*doctor, *version)...)
 	report.Cells = append(report.Cells, runRelay(*goRelay, *rustRelay, *vector, *version)...)
 	report.Cells = append(report.Cells, runDiscovery(*goDNS, *rustDNS, *rustRelay, *vector, *version)...)
+	report.Cells = append(report.Cells, runTransport(*vector, *version)...)
 	report.Cells = append(report.Cells, runner.ExtendedCells(*version)...)
 	if err := runner.ApplyExpected(filepath.Join(root, "iroh-compat-harness", "scenarios"), *version, report.Cells); err != nil {
 		fatal(err)
@@ -38,6 +39,18 @@ func main() {
 	if err := report.Write(filepath.Join(root, "iroh-compat-harness", "results"), root); err != nil {
 		fatal(err)
 	}
+}
+
+func runTransport(rustClient, version string) []runner.Cell {
+	scenarios := []string{"handshake/datagrams", "handshake/close-semantics", "handshake/remote-info", "handshake/zero-rtt"}
+	if rustClient == "" {
+		return setupCells(scenarios, version, "set the pinned Rust driver binary path")
+	}
+	digest, err := runner.FileDigest(rustClient)
+	if err != nil {
+		return setupCells(scenarios, version, err.Error())
+	}
+	return runner.RunTransportMatrix(rustClient, version, digest)
 }
 
 func runDiscovery(goDNS, rustDNS, rustRelay, rustClient, version string) []runner.Cell {
