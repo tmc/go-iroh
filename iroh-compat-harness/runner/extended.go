@@ -7,7 +7,6 @@ type unsupportedScenario struct {
 
 func ExtendedCells(version string) []Cell {
 	scenarios := []unsupportedScenario{
-		{"discovery/qad-report", "go-iroh does not expose the upstream report schema needed for a field-by-field QAD assertion"},
 	}
 	cells := make([]Cell, len(scenarios))
 	for i, s := range scenarios {

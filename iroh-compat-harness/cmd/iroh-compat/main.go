@@ -32,6 +32,7 @@ func main() {
 	report.Cells = append(report.Cells, runEcho(*doctor, *version)...)
 	report.Cells = append(report.Cells, runRelay(*goRelay, *rustRelay, *vector, *version)...)
 	report.Cells = append(report.Cells, runDiscovery(*goDNS, *rustDNS, *rustRelay, *vector, *version)...)
+	report.Cells = append(report.Cells, runQAD(*doctor, *version))
 	report.Cells = append(report.Cells, runTransport(*vector, *version)...)
 	report.Cells = append(report.Cells, runGossip(*vector, *version))
 	report.Cells = append(report.Cells, runPQ(*pq, *version)...)
@@ -54,6 +55,17 @@ func runPQ(bin, version string) []runner.Cell {
 		return setupCells(scenarios, version, err.Error())
 	}
 	return runner.RunPQMatrix(bin, version, digest)
+}
+
+func runQAD(bin, version string) runner.Cell {
+	if bin == "" {
+		return setupCells([]string{"discovery/qad-report"}, version, "set the pinned iroh-doctor binary path")[0]
+	}
+	digest, err := runner.FileDigest(bin)
+	if err != nil {
+		return setupCells([]string{"discovery/qad-report"}, version, err.Error())[0]
+	}
+	return runner.RunQADReport(bin, version, digest)
 }
 
 func runGossip(rustClient, version string) runner.Cell {
