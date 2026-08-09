@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "discovery/go-publish-rust-dns",
+      "tier": "A",
+      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+    },
+    {
+      "name": "discovery/rust-publish-go-dns",
+      "tier": "A",
+      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+    },
+    {
+      "name": "discovery/qad-report",
+      "tier": "A",
+      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+    },
+    {
+      "name": "discovery/relay-urls",
+      "tier": "A",
+      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+    }
+  ]
+}
