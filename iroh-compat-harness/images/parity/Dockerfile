@@ -9,7 +9,9 @@ RUN cargo build --release --locked
 FROM golang:1.26-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates make && rm -rf /var/lib/apt/lists/*
 COPY --from=rust-peer /usr/local/bin/iroh-doctor /usr/local/bin/iroh-doctor
+COPY --from=rust-peer /usr/local/bin/iroh-relay /usr/local/bin/iroh-relay
 COPY --from=vector-build /src/target/release/go-iroh-compat-rust-driver /usr/local/bin/rust-driver
 WORKDIR /work/iroh-compat-harness
 ENV RUST_DOCTOR_BIN=/usr/local/bin/iroh-doctor
+ENV RUST_RELAY_BIN=/usr/local/bin/iroh-relay
 ENV RUST_VECTOR_BIN=/usr/local/bin/rust-driver
