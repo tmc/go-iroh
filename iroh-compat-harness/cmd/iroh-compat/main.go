@@ -20,6 +20,7 @@ func main() {
 	goDNS := flag.String("go-dns", "", "path to the go-iroh DNS server binary")
 	rustDNS := flag.String("rust-dns", "", "path to the pinned upstream iroh-dns-server binary")
 	vector := flag.String("rust-vector", "", "path to the pinned Rust vector driver")
+	pq := flag.String("rust-pq", "", "path to the pinned Rust PQ peer")
 	flag.Parse()
 
 	root, err := repoRoot()
@@ -33,6 +34,7 @@ func main() {
 	report.Cells = append(report.Cells, runDiscovery(*goDNS, *rustDNS, *rustRelay, *vector, *version)...)
 	report.Cells = append(report.Cells, runTransport(*vector, *version)...)
 	report.Cells = append(report.Cells, runGossip(*vector, *version))
+	report.Cells = append(report.Cells, runPQ(*pq, *version)...)
 	report.Cells = append(report.Cells, runner.ExtendedCells(*version)...)
 	if err := runner.ApplyExpected(filepath.Join(root, "iroh-compat-harness", "scenarios"), *version, report.Cells); err != nil {
 		fatal(err)
@@ -40,6 +42,18 @@ func main() {
 	if err := report.Write(filepath.Join(root, "iroh-compat-harness", "results"), root); err != nil {
 		fatal(err)
 	}
+}
+
+func runPQ(bin, version string) []runner.Cell {
+	scenarios := []string{"handshake/pq-only", "handshake/prefer-pq"}
+	if bin == "" {
+		return setupCells(scenarios, version, "set the pinned Rust PQ peer binary path")
+	}
+	digest, err := runner.FileDigest(bin)
+	if err != nil {
+		return setupCells(scenarios, version, err.Error())
+	}
+	return runner.RunPQMatrix(bin, version, digest)
 }
 
 func runGossip(rustClient, version string) runner.Cell {

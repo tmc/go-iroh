@@ -60,19 +60,17 @@
       "name": "handshake/pq-only",
       "tier": "A",
       "expected": {
-        "1.0.0": "unsupported",
-        "1.0.3": "unsupported"
-      },
-      "unsupported_reason": "go-iroh does not expose a pq-only TLS key-exchange policy."
+        "1.0.0": "pass",
+        "1.0.3": "pass"
+      }
     },
     {
       "name": "handshake/prefer-pq",
       "tier": "A",
       "expected": {
-        "1.0.0": "unsupported",
-        "1.0.3": "unsupported"
-      },
-      "unsupported_reason": "go-iroh does not expose a prefer-pq TLS key-exchange policy."
+        "1.0.0": "pass",
+        "1.0.3": "pass"
+      }
     },
     {
       "name": "handshake/remote-info",

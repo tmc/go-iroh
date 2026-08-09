@@ -221,6 +221,10 @@ type transportPeer struct {
 
 func startTransportPeer(ctx context.Context, bin, mode string) (*transportPeer, error) {
 	cmd := exec.CommandContext(ctx, bin, "transport-server", mode)
+	return startTransportPeerProcess(cmd)
+}
+
+func startTransportPeerProcess(cmd *exec.Cmd) (*transportPeer, error) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
