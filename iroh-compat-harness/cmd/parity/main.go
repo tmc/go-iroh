@@ -23,24 +23,38 @@ func main() {
 	}
 	report := runner.Report{Schema: runner.Schema, Generated: time.Now().UTC(), GoIroh: runner.GoIroh{Version: "main", Commit: gitCommit(root)}}
 	report.Cells = runEcho(*doctor, *version)
+	if err := runner.ApplyExpected(filepath.Join(root, "iroh-compat-harness", "scenarios"), *version, report.Cells); err != nil {
+		fatal(err)
+	}
 	if err := report.Write(filepath.Join(root, "iroh-compat-harness", "results"), root); err != nil {
 		fatal(err)
 	}
 }
 
 func runEcho(doctor, version string) []runner.Cell {
+	scenarios := []string{
+		"handshake/go-client-rust-server",
+		"handshake/rust-client-go-server",
+		"handshake/alpn-mismatch",
+		"handshake/wrong-endpoint-id",
+	}
 	const detail = "set RUST_DOCTOR_BIN to an unmodified iroh-doctor 0.101.0 binary built against the pinned iroh release"
 	if doctor == "" {
-		return []runner.Cell{
-			{Scenario: "handshake/go-client-rust-server", Iroh: version, Tier: "A", Result: runner.SetupError, Expected: runner.Pass, Detail: detail},
-			{Scenario: "handshake/rust-client-go-server", Iroh: version, Tier: "A", Result: runner.SetupError, Expected: runner.Pass, Detail: detail},
-		}
+		return setupCells(scenarios, version, detail)
 	}
 	digest, err := runner.FileDigest(doctor)
 	if err != nil {
-		return []runner.Cell{{Scenario: "handshake/doctor", Iroh: version, Tier: "A", Result: runner.SetupError, Expected: runner.Pass, Detail: err.Error()}}
+		return setupCells(scenarios, version, err.Error())
 	}
 	return runner.RunDoctorEcho(doctor, version, digest)
+}
+
+func setupCells(scenarios []string, version, detail string) []runner.Cell {
+	cells := make([]runner.Cell, len(scenarios))
+	for i, scenario := range scenarios {
+		cells[i] = runner.Cell{Scenario: scenario, Iroh: version, Tier: "A", Result: runner.SetupError, Expected: runner.Pass, Detail: detail}
+	}
+	return cells
 }
 
 func repoRoot() (string, error) {
