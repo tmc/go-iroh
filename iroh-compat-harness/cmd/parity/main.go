@@ -17,6 +17,8 @@ func main() {
 	doctor := flag.String("rust-doctor", "", "path to the pinned iroh-doctor binary")
 	goRelay := flag.String("go-relay", "", "path to the go-iroh relay binary")
 	rustRelay := flag.String("rust-relay", "", "path to the pinned upstream iroh-relay binary")
+	goDNS := flag.String("go-dns", "", "path to the go-iroh DNS server binary")
+	rustDNS := flag.String("rust-dns", "", "path to the pinned upstream iroh-dns-server binary")
 	vector := flag.String("rust-vector", "", "path to the pinned Rust vector driver")
 	flag.Parse()
 
@@ -28,6 +30,7 @@ func main() {
 	report.Cells = runner.RunVectorCorpus(*vector, filepath.Join(root, "iroh-compat-harness", "vectors", "corpus.json"), *version)
 	report.Cells = append(report.Cells, runEcho(*doctor, *version)...)
 	report.Cells = append(report.Cells, runRelay(*goRelay, *rustRelay, *vector, *version)...)
+	report.Cells = append(report.Cells, runDiscovery(*goDNS, *rustDNS, *rustRelay, *vector, *version)...)
 	report.Cells = append(report.Cells, runner.ExtendedCells(*version)...)
 	if err := runner.ApplyExpected(filepath.Join(root, "iroh-compat-harness", "scenarios"), *version, report.Cells); err != nil {
 		fatal(err)
@@ -35,6 +38,26 @@ func main() {
 	if err := report.Write(filepath.Join(root, "iroh-compat-harness", "results"), root); err != nil {
 		fatal(err)
 	}
+}
+
+func runDiscovery(goDNS, rustDNS, rustRelay, rustClient, version string) []runner.Cell {
+	scenarios := []string{"discovery/go-publish-rust-dns", "discovery/rust-publish-go-dns", "discovery/relay-urls"}
+	if goDNS == "" || rustDNS == "" || rustRelay == "" || rustClient == "" {
+		return setupCells(scenarios, version, "set the Go DNS, pinned upstream DNS and relay, and pinned Rust driver binary paths")
+	}
+	dnsDigest, err := runner.FileDigest(rustDNS)
+	if err != nil {
+		return setupCells(scenarios, version, err.Error())
+	}
+	relayDigest, err := runner.FileDigest(rustRelay)
+	if err != nil {
+		return setupCells(scenarios, version, err.Error())
+	}
+	clientDigest, err := runner.FileDigest(rustClient)
+	if err != nil {
+		return setupCells(scenarios, version, err.Error())
+	}
+	return runner.RunDiscovery(goDNS, rustDNS, rustRelay, rustClient, version, dnsDigest, relayDigest, clientDigest)
 }
 
 func runRelay(goRelay, rustRelay, rustClient, version string) []runner.Cell {
