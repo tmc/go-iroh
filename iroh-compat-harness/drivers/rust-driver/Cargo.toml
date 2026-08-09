@@ -10,6 +10,7 @@ data-encoding = "2"
 iroh = { version = "=1.0.3", default-features = false, features = ["tls-ring"] }
 iroh-base = { version = "=1.0.3", default-features = false, features = ["key", "relay"] }
 iroh-dns = "=1.0.3"
+iroh-gossip = "=0.101.0"
 iroh-relay = { version = "=1.0.3", features = ["tls-ring"] }
 iroh-tickets = "=1.0.0"
 n0-future = "0.3"
