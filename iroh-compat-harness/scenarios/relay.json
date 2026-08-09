@@ -1,12 +1,6 @@
 {
   "scenarios": [
     {
-      "name": "relay/go-client-go-relay",
-      "tier": "A",
-      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"},
-      "unsupported_reason": "A Go-only quadrant has no real Rust peer from which to record mandatory PID and digest evidence."
-    },
-    {
       "name": "relay/go-client-rust-relay",
       "tier": "A",
       "expected": {"1.0.0": "pass", "1.0.3": "pass"}
