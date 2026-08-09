@@ -58,7 +58,7 @@ func RunVectorCorpus(bin, corpus, version string) []Cell {
 }
 
 func vectorCells(version string, result Verdict, detail, digest string, pid int, peer string) []Cell {
-	cells := make([]Cell, len(vectorScenarios)+1)
+	cells := make([]Cell, len(vectorScenarios))
 	for i, scenario := range vectorScenarios {
 		expected := Pass
 		if version != "1.0.3" {
@@ -68,11 +68,6 @@ func vectorCells(version string, result Verdict, detail, digest string, pid int,
 			Scenario: scenario, Iroh: version, Tier: "B", Result: result, Expected: expected,
 			Detail: detail, Peer: peer, PeerPID: pid, PeerDigest: digest,
 		}
-	}
-	cells[len(cells)-1] = Cell{
-		Scenario: "vectors/gossip-frame", Iroh: version, Tier: "B",
-		Result: Unsupported, Expected: Unsupported,
-		Detail: "the existing live gossip helper has no stable public Rust frame codec to generate an offline fixture",
 	}
 	return cells
 }
