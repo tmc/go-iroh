@@ -14,10 +14,7 @@ func ExtendedCells(version string) []Cell {
 		{"handshake/prefer-pq", "the pinned upstream prefer-pq example is not yet adapted to the driver ABI"},
 		{"handshake/remote-info", "cross-implementation remote-info and connection-type agreement is not yet recorded"},
 		{"relay/go-client-go-relay", "a Go-only quadrant cannot satisfy the real-Rust-peer pass invariant"},
-		{"discovery/go-publish-rust-dns", "upstream iroh-dns-server publication observation is not yet implemented"},
-		{"discovery/rust-publish-go-dns", "the pinned Rust pkarr publisher adapter is not yet implemented"},
-		{"discovery/qad-report", "field-by-field iroh-doctor report comparison is not yet implemented"},
-		{"discovery/relay-urls", "iroh-doctor relay-urls latency comparison is not yet implemented"},
+		{"discovery/qad-report", "go-iroh does not expose the upstream report schema needed for a field-by-field QAD assertion"},
 	}
 	cells := make([]Cell, len(scenarios))
 	for i, s := range scenarios {
