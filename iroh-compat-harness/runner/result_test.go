@@ -3,6 +3,7 @@ package runner
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPassRequiresRustPeerEvidence(t *testing.T) {
@@ -38,5 +39,26 @@ func TestUnexpectedVerdictFailsEitherDirection(t *testing.T) {
 		if err := r.Unexpected(); err == nil {
 			t.Fatalf("result %s, expected %s: mismatch accepted", tt.result, tt.want)
 		}
+	}
+}
+
+func TestMarkdownNamesRustCounterpart(t *testing.T) {
+	r := Report{
+		Generated: time.Unix(0, 0).UTC(),
+		GoIroh:    GoIroh{Commit: "abc123"},
+		Cells: []Cell{
+			{Scenario: "echo", Iroh: "1.0.3", Tier: "A", Result: Pass, Peer: "iroh-doctor@sha256:abc"},
+			{Scenario: "datagrams", Iroh: "1.0.3", Tier: "B", Result: Pass, Peer: "rust-driver@sha256:def"},
+			{Scenario: "relay/go-client-go-relay", Iroh: "1.0.3", Tier: "A", Result: Unsupported},
+		},
+	}
+	got := string(r.Markdown())
+	for _, want := range []string{"| Rust counterpart |", "| upstream CLI |", "| Rust test driver |", "| none (Go-only) |"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Markdown() does not contain %q", want)
+		}
+	}
+	if strings.Contains(got, "| Tier |") {
+		t.Error("Markdown() still presents counterpart provenance as a tier")
 	}
 }
