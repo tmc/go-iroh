@@ -87,6 +87,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             return transport_server(&mode).await;
         }
+        if command == "pq-server" {
+            let policy = args.next().ok_or("pq-server requires a policy")?;
+            if args.next().is_some() {
+                return Err("pq-server accepts one policy".into());
+            }
+            return pq_server(&policy).await;
+        }
+        if command == "pq-client" {
+            let policy = args.next().ok_or("pq-client requires a policy")?;
+            let id = args.next().ok_or("pq-client requires an endpoint id")?;
+            let addr = args.next().ok_or("pq-client requires an endpoint address")?;
+            if args.next().is_some() {
+                return Err("pq-client accepts a policy, endpoint id, and address".into());
+            }
+            return pq_client(&policy, &id, &addr).await;
+        }
         if command == "gossip-server" {
             if args.next().is_some() {
                 return Err("gossip-server accepts no arguments".into());
@@ -96,6 +112,92 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("unknown command {command}").into());
     }
     write_corpus()
+}
+
+const PQ_ALPN: &[u8] = b"go-iroh-compat/pq/1";
+
+fn pq_provider(policy: &str) -> Result<std::sync::Arc<rustls::crypto::CryptoProvider>, Box<dyn std::error::Error>> {
+    use rustls::crypto::aws_lc_rs::{self, kx_group};
+
+    let mut provider = aws_lc_rs::default_provider();
+    provider.kx_groups = match policy {
+        "only" => vec![kx_group::X25519MLKEM768],
+        "prefer" => vec![
+            kx_group::X25519MLKEM768,
+            kx_group::X25519,
+            kx_group::SECP256R1,
+            kx_group::SECP384R1,
+        ],
+        "classical" => vec![kx_group::X25519, kx_group::SECP256R1, kx_group::SECP384R1],
+        _ => return Err(format!("unknown PQ policy {policy}").into()),
+    };
+    Ok(std::sync::Arc::new(provider))
+}
+
+fn negotiated_group(conn: &iroh::endpoint::Connection) -> Result<String, Box<dyn std::error::Error>> {
+    let data = conn.handshake_data().ok_or("Rust handshake data unavailable")?;
+    let data = data
+        .downcast::<noq::crypto::rustls::HandshakeData>()
+        .map_err(|_| "Rust handshake data has unexpected type")?;
+    Ok(format!("{:?}", data.negotiated_key_exchange_group.ok_or("Rust negotiated group unavailable")?))
+}
+
+async fn pq_server(policy: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use iroh::{Endpoint, RelayMode, endpoint::presets};
+
+    let endpoint = Endpoint::builder(presets::Empty)
+        .crypto_provider(pq_provider(policy)?)
+        .alpns(vec![PQ_ALPN.to_vec()])
+        .secret_key(iroh::SecretKey::from_bytes(&[0x46; 32]))
+        .relay_mode(RelayMode::Disabled)
+        .bind_addr(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))?
+        .bind()
+        .await?;
+    let addr = endpoint
+        .addr()
+        .ip_addrs()
+        .next()
+        .copied()
+        .ok_or("Rust PQ endpoint has no direct address")?;
+    println!("{{\"id\":\"{}\",\"addr\":\"{}\"}}", endpoint.id(), addr);
+    std::io::stdout().flush()?;
+    let incoming = endpoint.accept().await.ok_or("endpoint closed")?;
+    let conn = incoming.accept()?.await?;
+    let group = negotiated_group(&conn)?;
+    let (mut send, mut recv) = conn.accept_bi().await?;
+    let data = recv.read_to_end(64).await?;
+    send.write_all(&data).await?;
+    send.finish()?;
+    println!("pq-ok group={group}");
+    std::io::stdout().flush()?;
+    conn.closed().await;
+    endpoint.close().await;
+    Ok(())
+}
+
+async fn pq_client(policy: &str, id: &str, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use iroh::{Endpoint, RelayMode, endpoint::presets};
+
+    let endpoint = Endpoint::builder(presets::Empty)
+        .crypto_provider(pq_provider(policy)?)
+        .relay_mode(RelayMode::Disabled)
+        .bind_addr(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))?
+        .bind()
+        .await?;
+    let remote = EndpointAddr::new(id.parse()?).with_ip_addr(addr.parse()?);
+    let conn = endpoint.connect(remote, PQ_ALPN).await?;
+    let group = negotiated_group(&conn)?;
+    let (mut send, mut recv) = conn.open_bi().await?;
+    send.write_all(b"pq-ping").await?;
+    send.finish()?;
+    let echo = recv.read_to_end(64).await?;
+    if echo != b"pq-ping" {
+        return Err("Go PQ peer returned the wrong echo".into());
+    }
+    println!("pq-ok group={group}");
+    conn.close(0u32.into(), b"done");
+    endpoint.close().await;
+    Ok(())
 }
 
 async fn gossip_server() -> Result<(), Box<dyn std::error::Error>> {
