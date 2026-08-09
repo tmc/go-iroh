@@ -2,6 +2,7 @@
 
 IROH_VERSION ?= 1.0.3
 RUST_DOCTOR_BIN ?=
+RUST_RELAY_BIN ?=
 RUST_VECTOR_BIN ?=
 DOCTOR_OUTPUT ?= $(HOME)/tmp/go-iroh-compat/iroh-doctor-$(IROH_VERSION)
 
@@ -10,7 +11,10 @@ parity: doctor-image-build
 
 parity-native:
 	go test ./vectors
-	go run ./cmd/parity -iroh-version $(IROH_VERSION) -rust-doctor "$(RUST_DOCTOR_BIN)" -rust-vector "$(RUST_VECTOR_BIN)"
+	@work=$$(mktemp -d "$$HOME/tmp/go-iroh-parity.XXXXXX"); \
+	trap 'rm -rf "$$work"' EXIT; \
+	go build -o "$$work/iroh-relay" ../cmd/iroh-relay; \
+	go run ./cmd/parity -iroh-version $(IROH_VERSION) -go-relay "$$work/iroh-relay" -rust-doctor "$(RUST_DOCTOR_BIN)" -rust-relay "$(RUST_RELAY_BIN)" -rust-vector "$(RUST_VECTOR_BIN)"
 
 test:
 	go test ./...

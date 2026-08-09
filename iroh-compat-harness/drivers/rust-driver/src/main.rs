@@ -1,8 +1,9 @@
-use std::{net::SocketAddr, str::FromStr};
+use std::{net::SocketAddr, str::FromStr, time::Duration};
 
 use data_encoding::HEXLOWER;
 use iroh_base::{EndpointAddr, SecretKey};
 use iroh_tickets::{Ticket, endpoint::EndpointTicket};
+use n0_future::{SinkExt, StreamExt};
 use serde::Serialize;
 use simple_dns::{
     CLASS, Name, Packet, ResourceRecord,
@@ -50,7 +51,23 @@ struct PkarrVector {
     ttl: u32,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = std::env::args().skip(1);
+    if let Some(command) = args.next() {
+        if command == "relay-ping" {
+            let url = args.next().ok_or("relay-ping requires a relay URL")?;
+            if args.next().is_some() {
+                return Err("relay-ping accepts one relay URL".into());
+            }
+            return relay_ping(&url).await;
+        }
+        return Err(format!("unknown command {command}").into());
+    }
+    write_corpus()
+}
+
+fn write_corpus() -> Result<(), Box<dyn std::error::Error>> {
     let seeds = vec![
         "00".repeat(32),
         "2a".repeat(32),
@@ -116,6 +133,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     serde_json::to_writer_pretty(std::io::stdout(), &corpus)?;
     println!();
+    Ok(())
+}
+
+async fn relay_ping(url: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use iroh_relay::protos::relay::{ClientToRelayMsg, RelayToClientMsg};
+
+    let url: iroh_base::RelayUrl = url.parse()?;
+    let key = SecretKey::from_bytes(&[0x42; 32]);
+    let resolver = iroh_dns::dns::DnsResolver::new();
+    let tls = iroh_relay::tls::CaTlsConfig::default()
+        .client_config(iroh_relay::tls::default_provider())?;
+    let client = iroh_relay::client::ClientBuilder::new(url, key, resolver)
+        .tls_client_config(tls)
+        .connect()
+        .await?;
+    let (mut stream, mut sink) = client.split();
+    let ping = *b"parity42";
+    sink.send(ClientToRelayMsg::Ping(ping)).await?;
+    let pong = tokio::time::timeout(Duration::from_secs(3), async move {
+        while let Some(message) = stream.next().await {
+            if let RelayToClientMsg::Pong(value) = message? {
+                return Ok::<_, Box<dyn std::error::Error>>(value);
+            }
+        }
+        Err("relay closed without a pong".into())
+    })
+    .await??;
+    if pong != ping {
+        return Err("relay returned the wrong pong".into());
+    }
+    println!("relay pong");
     Ok(())
 }
 
