@@ -9,6 +9,7 @@ services:
       IROH_VERSION: ${IROH_VERSION:-1.0.3}
       RUST_DOCTOR_BIN: /usr/local/bin/iroh-doctor
       RUST_VECTOR_BIN: /usr/local/bin/rust-driver
+      RUST_DNS_BIN: /usr/local/bin/iroh-dns-server
     volumes:
       - ..:/work
     command: ["make", "parity-native"]

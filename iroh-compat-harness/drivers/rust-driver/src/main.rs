@@ -1,4 +1,9 @@
-use std::{net::SocketAddr, str::FromStr, time::Duration};
+use std::{
+    io::{Read, Write},
+    net::{SocketAddr, TcpStream},
+    str::FromStr,
+    time::Duration,
+};
 
 use data_encoding::HEXLOWER;
 use iroh_base::{EndpointAddr, SecretKey};
@@ -51,6 +56,12 @@ struct PkarrVector {
     ttl: u32,
 }
 
+#[derive(Serialize)]
+struct PublishedPacket {
+    key: String,
+    payload: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -62,9 +73,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             return relay_ping(&url).await;
         }
+        if command == "dns-publish" {
+            let addr = args.next().ok_or("dns-publish requires an HTTP address")?;
+            if args.next().is_some() {
+                return Err("dns-publish accepts one HTTP address".into());
+            }
+            return dns_publish(&addr);
+        }
         return Err(format!("unknown command {command}").into());
     }
     write_corpus()
+}
+
+fn dns_publish(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let key = SecretKey::from_bytes(&[0x43; 32]);
+    let packet = signed_packet(
+        &key,
+        "_iroh",
+        ["relay=https://relay.example/", "addr=127.0.0.1:4433"],
+        30,
+        1_700_000_000_000_001,
+    )?;
+    let public = key.public().to_z32();
+    let payload = &packet[32..];
+    let mut stream = TcpStream::connect(addr)?;
+    write!(
+        stream,
+        "PUT /pkarr/{public} HTTP/1.1\r\nHost: {addr}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        payload.len()
+    )?;
+    stream.write_all(payload)?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    let status = response.lines().next().unwrap_or_default();
+    if !status.contains(" 204 ") {
+        return Err(format!("pkarr PUT returned {status}").into());
+    }
+    serde_json::to_writer(
+        std::io::stdout(),
+        &PublishedPacket {
+            key: public,
+            payload: HEXLOWER.encode(payload),
+        },
+    )?;
+    println!();
+    Ok(())
 }
 
 fn write_corpus() -> Result<(), Box<dyn std::error::Error>> {

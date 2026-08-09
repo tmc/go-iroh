@@ -3,22 +3,23 @@
     {
       "name": "discovery/go-publish-rust-dns",
       "tier": "A",
-      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
     },
     {
       "name": "discovery/rust-publish-go-dns",
-      "tier": "A",
-      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+      "tier": "B",
+      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
     },
     {
       "name": "discovery/qad-report",
       "tier": "A",
-      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"},
+      "unsupported_reason": "go-iroh does not expose the upstream report schema needed for a field-by-field QAD assertion."
     },
     {
       "name": "discovery/relay-urls",
       "tier": "A",
-      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
     }
   ]
 }

@@ -36,12 +36,14 @@ jobs:
           trap 'docker rm -f "$cid" >/dev/null' EXIT
           docker cp "$cid:/usr/local/bin/iroh-doctor" "$RUNNER_TEMP/iroh-doctor"
           docker cp "$cid:/usr/local/bin/iroh-relay" "$RUNNER_TEMP/iroh-relay"
-          chmod +x "$RUNNER_TEMP/iroh-doctor" "$RUNNER_TEMP/iroh-relay"
+          docker cp "$cid:/usr/local/bin/iroh-dns-server" "$RUNNER_TEMP/iroh-dns-server"
+          chmod +x "$RUNNER_TEMP/iroh-doctor" "$RUNNER_TEMP/iroh-relay" "$RUNNER_TEMP/iroh-dns-server"
       - name: Run full declared matrix
         working-directory: iroh-compat-harness
         env:
           RUST_DOCTOR_BIN: ${{ runner.temp }}/iroh-doctor
           RUST_RELAY_BIN: ${{ runner.temp }}/iroh-relay
+          RUST_DNS_BIN: ${{ runner.temp }}/iroh-dns-server
           RUST_VECTOR_BIN: ${{ github.workspace }}/iroh-compat-harness/drivers/rust-driver/target/release/go-iroh-compat-rust-driver
         run: |
           cargo build --quiet --release --locked --manifest-path drivers/rust-driver/Cargo.toml
