@@ -18,7 +18,7 @@ var vectorScenarios = []string{
 
 func RunVectorCorpus(bin, corpus, version string) []Cell {
 	if version != "1.0.3" {
-		return vectorCells(version, Unsupported, "the Tier B vector generator is pinned to iroh 1.0.3", "", 0, "")
+		return vectorCells(version, Unsupported, "the Rust test driver is pinned to iroh 1.0.3", "", 0, "")
 	}
 	if bin == "" {
 		return vectorCells(version, SetupError, "RUST_VECTOR_BIN is not set", "", 0, "")

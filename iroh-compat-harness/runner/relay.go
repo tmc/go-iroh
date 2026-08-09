@@ -102,7 +102,7 @@ func runRustRelayClient(relayBin string, rustRelay bool, rustClient, version, di
 	if !strings.Contains(out.String(), "relay pong") {
 		return finishCell(cell, Fail, "Rust driver did not report a successful relay ping: "+out.String())
 	}
-	return finishCell(cell, Pass, "Tier B Rust client negotiated the upstream relay protocol and received a pong")
+	return finishCell(cell, Pass, "Rust test driver negotiated the upstream relay protocol and received a pong")
 }
 
 func runRelayEstablishTimeout(bin, version, digest string) (cell Cell) {

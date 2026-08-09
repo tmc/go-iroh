@@ -148,9 +148,23 @@ func (r *Report) Markdown() []byte {
 	b.WriteString("# Iroh wire compatibility\n\n")
 	b.WriteString("go-iroh is an independent Go implementation of iroh wire v1. This matrix records observed interoperability with real, pinned Rust iroh peers; unsupported cells are not compatibility claims.\n\n")
 	fmt.Fprintf(&b, "Generated from commit `%s` at %s. A pass requires a recorded Rust process and binary digest; setup errors and unsupported cells never count as passes.\n\n", r.GoIroh.Commit, r.Generated.Format(time.RFC3339))
-	b.WriteString("| Scenario | Rust iroh | Tier | Result | Peer |\n|---|---:|:---:|:---:|---|\n")
+	b.WriteString("| Scenario | Rust iroh | Rust counterpart | Result | Peer |\n|---|---:|---|:---:|---|\n")
 	for _, c := range cells {
-		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", c.Scenario, c.Iroh, c.Tier, c.Result, c.Peer)
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", c.Scenario, c.Iroh, rustCounterpart(c), c.Result, c.Peer)
 	}
 	return []byte(b.String())
+}
+
+func rustCounterpart(c Cell) string {
+	if c.Scenario == "relay/go-client-go-relay" {
+		return "none (Go-only)"
+	}
+	switch c.Tier {
+	case "A":
+		return "upstream CLI"
+	case "B":
+		return "Rust test driver"
+	default:
+		return c.Tier
+	}
 }
