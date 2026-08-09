@@ -70,6 +70,22 @@ func (r *Report) Validate() error {
 		if err := c.Validate(); err != nil {
 			return err
 		}
+		if c.Expected == "" {
+			return fmt.Errorf("cell %s: expected verdict is missing", c.Scenario)
+		}
+	}
+	return nil
+}
+
+func (r *Report) Unexpected() error {
+	var mismatches []string
+	for _, c := range r.Cells {
+		if c.Result != c.Expected {
+			mismatches = append(mismatches, fmt.Sprintf("%s@%s=%s, want %s", c.Scenario, c.Iroh, c.Result, c.Expected))
+		}
+	}
+	if len(mismatches) != 0 {
+		return fmt.Errorf("unexpected parity verdicts: %s", strings.Join(mismatches, "; "))
 	}
 	return nil
 }
@@ -95,7 +111,7 @@ func (r *Report) Write(dir, root string) error {
 	if err := os.WriteFile(filepath.Join(root, "COMPATIBILITY.md"), r.Markdown(), 0o644); err != nil {
 		return fmt.Errorf("write compatibility: %w", err)
 	}
-	return nil
+	return r.Unexpected()
 }
 
 func (r *Report) Badge() []byte {

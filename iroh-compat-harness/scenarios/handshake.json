@@ -15,6 +15,22 @@
         "1.0.0": "pass",
         "1.0.3": "pass"
       }
+    },
+    {
+      "name": "handshake/alpn-mismatch",
+      "tier": "A",
+      "expected": {
+        "1.0.0": "pass",
+        "1.0.3": "pass"
+      }
+    },
+    {
+      "name": "handshake/wrong-endpoint-id",
+      "tier": "A",
+      "expected": {
+        "1.0.0": "pass",
+        "1.0.3": "pass"
+      }
     }
   ]
 }
