@@ -1,0 +1,39 @@
+{
+  "scenarios": [
+    {
+      "name": "relay/go-client-go-relay",
+      "tier": "A",
+      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+    },
+    {
+      "name": "relay/go-client-rust-relay",
+      "tier": "A",
+      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+    },
+    {
+      "name": "relay/rust-client-go-relay",
+      "tier": "A",
+      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+    },
+    {
+      "name": "relay/rust-client-rust-relay",
+      "tier": "A",
+      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+    },
+    {
+      "name": "relay/websocket-upgrade",
+      "tier": "A",
+      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+    },
+    {
+      "name": "relay/ping-pong",
+      "tier": "A",
+      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+    },
+    {
+      "name": "relay/idle-timeout",
+      "tier": "A",
+      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+    }
+  ]
+}
