@@ -42,29 +42,36 @@ func runGoRelayClient(bin string, rust bool, version, digest, scenario string) (
 	defer server.close()
 	cell.PeerPID = server.cmd.Process.Pid
 
-	u, err := netaddr.ParseRelayURL("http://" + server.addr)
+	if err := runGoRelayClientAgainst(ctx, server.addr); err != nil {
+		return finishCell(cell, Fail, err.Error()+": "+server.output.String())
+	}
+	return finishCell(cell, Pass, "Go client negotiated relay protocol 2 and received the Rust pong")
+}
+
+func runGoRelayClientAgainst(ctx context.Context, addr string) error {
+	u, err := netaddr.ParseRelayURL("http://" + addr)
 	if err != nil {
-		return finishCell(cell, SetupError, fmt.Sprintf("parse relay URL: %v", err))
+		return fmt.Errorf("parse relay URL: %w", err)
 	}
 	sk := key.NewSecretKey([key.SeedSize]byte{0x31})
 	client, err := relayclient.Connect(ctx, u, relayclient.Options{SecretKey: sk})
 	if err != nil {
-		return finishCell(cell, Fail, fmt.Sprintf("Go client WebSocket/auth: %v: %s", err, server.output.String()))
+		return fmt.Errorf("Go client WebSocket/auth: %w", err)
 	}
 	defer client.Close()
 	var ping [8]byte
 	copy(ping[:], "parity42")
 	if err := client.Send(ctx, relayproto.ClientToRelayMsg{Type: relayproto.FramePing, Ping: ping}); err != nil {
-		return finishCell(cell, Fail, fmt.Sprintf("send ping: %v", err))
+		return fmt.Errorf("send ping: %w", err)
 	}
 	msg, err := client.Recv(ctx)
 	if err != nil {
-		return finishCell(cell, Fail, fmt.Sprintf("receive pong: %v", err))
+		return fmt.Errorf("receive pong: %w", err)
 	}
 	if msg.Type != relayproto.FramePong || msg.Ping != ping {
-		return finishCell(cell, Fail, fmt.Sprintf("pong = %#v", msg))
+		return fmt.Errorf("pong = %#v", msg)
 	}
-	return finishCell(cell, Pass, fmt.Sprintf("Go client negotiated relay protocol %d and received the Rust pong", client.Version()))
+	return nil
 }
 
 func runRustRelayClient(relayBin string, rustRelay bool, rustClient, version, digest, scenario string) (cell Cell) {
