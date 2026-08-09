@@ -12,7 +12,7 @@ parity: doctor-image-build
 
 parity-native:
 	go test ./vectors
-	@set -eu; work=$$(mktemp -d "$$HOME/tmp/go-iroh-parity.XXXXXX"); \
+	@set -eu; mkdir -p "$$HOME/tmp"; work=$$(mktemp -d "$$HOME/tmp/go-iroh-parity.XXXXXX"); \
 	trap 'rm -rf "$$work"' EXIT; \
 	go build -o "$$work/iroh-relay" ../cmd/iroh-relay; \
 	go build -o "$$work/iroh-dns-server" ../cmd/iroh-dns-server; \
