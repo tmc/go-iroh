@@ -85,6 +85,7 @@ func TestPostcardUintVectors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		_, got = mutate("postcard-varint", "", got)
 		if want := mustHex(t, v.Postcard); !slices.Equal(got, want) {
 			t.Errorf("postcard(%d) = %x, want %x", v.Value, got, want)
 		}
@@ -93,7 +94,8 @@ func TestPostcardUintVectors(t *testing.T) {
 
 func TestEndpointTicketVector(t *testing.T) {
 	v := load(t).EndpointTicket
-	ticket, err := endpointticket.Parse(v.Encoded)
+	encoded, _ := mutate("ticket-prefix", v.Encoded, nil)
+	ticket, err := endpointticket.Parse(encoded)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,12 +109,28 @@ func TestEndpointTicketVector(t *testing.T) {
 
 func TestPkarrVector(t *testing.T) {
 	v := load(t).Pkarr
-	packet, err := pkarr.FromBytes(mustHex(t, v.Bytes))
+	_, packetBytes := mutate("pkarr-signer", "", mustHex(t, v.Bytes))
+	packet, err := pkarr.FromBytes(packetBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := packet.TxtRecords(v.Name); !slices.Equal(got, v.Values) {
 		t.Fatalf("TXT records = %q, want %q", got, v.Values)
+	}
+}
+
+func TestTamperedTicketRejected(t *testing.T) {
+	s := load(t).EndpointTicket.Encoded
+	if _, err := endpointticket.Parse(s[:len(s)-1]); err == nil {
+		t.Fatal("tampered ticket was accepted")
+	}
+}
+
+func TestBadPkarrSignatureRejected(t *testing.T) {
+	b := mustHex(t, load(t).Pkarr.Bytes)
+	b[32] ^= 1
+	if _, err := pkarr.FromBytes(b); err == nil {
+		t.Fatal("bad pkarr signature was accepted")
 	}
 }
 

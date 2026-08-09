@@ -25,3 +25,18 @@ func TestDoctorConnectLineUsesFirstDirectAddress(t *testing.T) {
 		t.Fatalf("match = %q, want first IPv4 address", m)
 	}
 }
+
+func TestUnexpectedVerdictFailsEitherDirection(t *testing.T) {
+	for _, tt := range []struct {
+		result Verdict
+		want   Verdict
+	}{
+		{result: Fail, want: Pass},
+		{result: Pass, want: Fail},
+	} {
+		r := Report{Cells: []Cell{{Scenario: "x", Iroh: "1", Result: tt.result, Expected: tt.want}}}
+		if err := r.Unexpected(); err == nil {
+			t.Fatalf("result %s, expected %s: mismatch accepted", tt.result, tt.want)
+		}
+	}
+}
