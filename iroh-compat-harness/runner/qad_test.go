@@ -49,4 +49,7 @@ func TestQADReportLive(t *testing.T) {
 	if cell.Result != Pass {
 		t.Fatalf("qad-report = %s: %s", cell.Result, cell.Detail)
 	}
+	if cell.Evidence["compared_field_count"] != len(qadReportFields) {
+		t.Fatalf("qad-report evidence = %#v", cell.Evidence)
+	}
 }
