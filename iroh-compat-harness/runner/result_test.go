@@ -7,7 +7,7 @@ import (
 )
 
 func TestPassRequiresRustPeerEvidence(t *testing.T) {
-	c := Cell{Scenario: "echo", Iroh: "1.0.3", Tier: "A", Result: Pass}
+	c := Cell{Scenario: "echo", Description: "A pass proves echo.", Iroh: "1.0.3", Tier: "A", Result: Pass}
 	if err := c.Validate(); err == nil {
 		t.Fatal("pass without Rust peer evidence was accepted")
 	}
@@ -16,6 +16,13 @@ func TestPassRequiresRustPeerEvidence(t *testing.T) {
 	c.PeerDigest = "sha256:abc"
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCellRequiresDescription(t *testing.T) {
+	c := Cell{Scenario: "echo", Iroh: "1.0.3", Tier: "A", Result: Fail}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "description is missing") {
+		t.Fatalf("Validate() error = %v, want missing description", err)
 	}
 }
 
@@ -47,12 +54,26 @@ func TestMarkdownNamesRustCounterpart(t *testing.T) {
 		Generated: time.Unix(0, 0).UTC(),
 		GoIroh:    GoIroh{Commit: "abc123"},
 		Cells: []Cell{
-			{Scenario: "echo", Iroh: "1.0.3", Tier: "A", Result: Pass, Peer: "iroh-doctor@sha256:abc"},
-			{Scenario: "datagrams", Iroh: "1.0.3", Tier: "B", Result: Pass, Peer: "rust-driver@sha256:def"},
+			{Scenario: "echo", Description: "Go and Rust exchange an echo, and a pass proves compatible streams.", Iroh: "1.0.3", Tier: "A", Result: Pass, Peer: "iroh-doctor@sha256:abc"},
+			{Scenario: "datagrams", Description: "Go and Rust exchange datagrams, and a pass proves compatible datagrams.", Iroh: "1.0.3", Tier: "B", Result: Pass, Peer: "rust-driver@sha256:def"},
 		},
 	}
 	got := string(r.Markdown())
-	for _, want := range []string{"| Rust counterpart |", "| upstream CLI |", "| Rust test driver |", "Go-client↔Go-relay pairings contain no Rust peer"} {
+	for _, want := range []string{
+		"## How to read this table",
+		"unsupported` means go-iroh lacks the feature, not that the feature is broken",
+		"| Rust counterpart |",
+		"| upstream CLI |",
+		"| Rust test driver |",
+		"SHA-256 digest",
+		"## Scenario definitions",
+		"Go and Rust exchange an echo",
+		"## Reproduce",
+		"make parity",
+		"[harness README](iroh-compat-harness/README.md)",
+		"[results.json](iroh-compat-harness/results/results.json)",
+		"Go-client↔Go-relay pairings contain no Rust peer",
+	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Markdown() does not contain %q", want)
 		}

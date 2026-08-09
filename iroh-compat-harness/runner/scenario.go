@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type scenarioFile struct {
@@ -12,8 +13,9 @@ type scenarioFile struct {
 }
 
 type scenario struct {
-	Name     string             `json:"name"`
-	Expected map[string]Verdict `json:"expected"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Expected    map[string]Verdict `json:"expected"`
 }
 
 func ApplyExpected(dir, version string, cells []Cell) error {
@@ -21,7 +23,7 @@ func ApplyExpected(dir, version string, cells []Cell) error {
 	if err != nil {
 		return fmt.Errorf("find scenarios: %w", err)
 	}
-	want := make(map[string]Verdict)
+	want := make(map[string]scenario)
 	for _, path := range matches {
 		b, err := os.ReadFile(path)
 		if err != nil {
@@ -32,22 +34,26 @@ func ApplyExpected(dir, version string, cells []Cell) error {
 			return fmt.Errorf("decode %s: %w", path, err)
 		}
 		for _, s := range file.Scenarios {
-			v, ok := s.Expected[version]
+			if strings.TrimSpace(s.Description) == "" {
+				return fmt.Errorf("scenario %s lacks description", s.Name)
+			}
+			_, ok := s.Expected[version]
 			if !ok {
 				return fmt.Errorf("scenario %s lacks expected verdict for iroh %s", s.Name, version)
 			}
 			if _, dup := want[s.Name]; dup {
 				return fmt.Errorf("duplicate scenario %s", s.Name)
 			}
-			want[s.Name] = v
+			want[s.Name] = s
 		}
 	}
 	for i := range cells {
-		v, ok := want[cells[i].Scenario]
+		s, ok := want[cells[i].Scenario]
 		if !ok {
 			return fmt.Errorf("cell %s has no scenario declaration", cells[i].Scenario)
 		}
-		cells[i].Expected = v
+		cells[i].Expected = s.Expected[version]
+		cells[i].Description = s.Description
 		delete(want, cells[i].Scenario)
 	}
 	if len(want) != 0 {

@@ -36,22 +36,27 @@ type GoIroh struct {
 }
 
 type Cell struct {
-	Scenario   string   `json:"scenario"`
-	Iroh       string   `json:"iroh"`
-	Tier       string   `json:"tier"`
-	Peer       string   `json:"peer,omitempty"`
-	PeerPID    int      `json:"peer_pid,omitempty"`
-	PeerDigest string   `json:"peer_digest,omitempty"`
-	Result     Verdict  `json:"result"`
-	Expected   Verdict  `json:"expected"`
-	DurationMS int64    `json:"duration_ms"`
-	Artifacts  []string `json:"artifacts,omitempty"`
-	Detail     string   `json:"detail,omitempty"`
+	Scenario    string         `json:"scenario"`
+	Description string         `json:"description"`
+	Iroh        string         `json:"iroh"`
+	Tier        string         `json:"tier"`
+	Peer        string         `json:"peer,omitempty"`
+	PeerPID     int            `json:"peer_pid,omitempty"`
+	PeerDigest  string         `json:"peer_digest,omitempty"`
+	Result      Verdict        `json:"result"`
+	Expected    Verdict        `json:"expected"`
+	DurationMS  int64          `json:"duration_ms"`
+	Evidence    map[string]any `json:"evidence,omitempty"`
+	Artifacts   []string       `json:"artifacts,omitempty"`
+	Detail      string         `json:"detail,omitempty"`
 }
 
 func (c Cell) Validate() error {
 	if c.Scenario == "" || c.Iroh == "" {
 		return errors.New("cell is missing scenario or iroh version")
+	}
+	if strings.TrimSpace(c.Description) == "" {
+		return fmt.Errorf("cell %s: description is missing", c.Scenario)
 	}
 	if c.Tier != "A" && c.Tier != "B" {
 		return fmt.Errorf("cell %s: invalid tier %q", c.Scenario, c.Tier)
@@ -149,10 +154,31 @@ func (r *Report) Markdown() []byte {
 	b.WriteString("go-iroh is an independent Go implementation of iroh wire v1. This matrix records observed interoperability with real, pinned Rust iroh peers; unsupported cells are not compatibility claims.\n\n")
 	b.WriteString("Go-client↔Go-relay pairings contain no Rust peer, so they are outside this matrix's scope; that path is covered by the standard test suite.\n\n")
 	fmt.Fprintf(&b, "Generated from commit `%s` at %s. A pass requires a recorded Rust process and binary digest; setup errors and unsupported cells never count as passes.\n\n", r.GoIroh.Commit, r.Generated.Format(time.RFC3339))
+	b.WriteString("## How to read this table\n\n")
+	b.WriteString("- `pass` means the observed result matched the predicted interoperable behavior.\n")
+	b.WriteString("- `fail` means the scenario ran but did not produce the predicted behavior.\n")
+	b.WriteString("- `unsupported` means go-iroh lacks the feature, not that the feature is broken.\n")
+	b.WriteString("- `setup-error` means the environment could not run the scenario, so it makes no compatibility claim.\n\n")
+	b.WriteString("The Rust counterpart is either an **upstream CLI**, an unmodified program shipped by upstream iroh, or a **Rust test driver**, a purpose-built peer linked to the pinned upstream libraries. CLI results have the strongest black-box provenance; test-driver results cover protocol behavior that upstream CLIs do not expose.\n\n")
+	b.WriteString("The **Peer** value names the Rust executable and its SHA-256 digest. The full machine-readable result also records the peer process ID, so a pass cannot be emitted without evidence of a real Rust process.\n\n")
+	b.WriteString("## Compatibility matrix\n\n")
 	b.WriteString("| Scenario | Rust iroh | Rust counterpart | Result | Peer |\n|---|---:|---|:---:|---|\n")
 	for _, c := range cells {
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", c.Scenario, c.Iroh, rustCounterpart(c), c.Result, c.Peer)
 	}
+	b.WriteString("\n## Scenario definitions\n\n")
+	b.WriteString("| Scenario | What a pass proves |\n|---|---|\n")
+	last := ""
+	for _, c := range cells {
+		if c.Scenario == last {
+			continue
+		}
+		fmt.Fprintf(&b, "| %s | %s |\n", c.Scenario, c.Description)
+		last = c.Scenario
+	}
+	b.WriteString("\n## Reproduce\n\n")
+	b.WriteString("```sh\ncd iroh-compat-harness\nmake parity\n```\n\n")
+	b.WriteString("See the [harness README](iroh-compat-harness/README.md) for prerequisites, the [scenario declarations](iroh-compat-harness/scenarios/) for predicted verdicts and definitions, and [results.json](iroh-compat-harness/results/results.json) for the machine-readable report.\n")
 	return []byte(b.String())
 }
 

@@ -44,10 +44,21 @@ func runPQPolicy(bin, version, digest, scenario, rustPolicy string, goPolicy iro
 		return finishCell(cell, Fail, err.Error())
 	}
 	if refusal {
-		output, err = runPQRefusal(ctx, bin)
+		var refusalError string
+		refusalError, output, err = runPQRefusal(ctx, bin)
 		fmt.Fprintf(&evidence, "pq-only refusal:\n%s\n", output)
 		if err != nil {
 			return finishCell(cell, Fail, err.Error())
+		}
+		cell.Evidence = map[string]any{
+			"directions":       []string{"go-client-rust-server", "rust-client-go-server"},
+			"negotiated_group": "X25519MLKEM768",
+			"refusal_error":    refusalError,
+		}
+	} else {
+		cell.Evidence = map[string]any{
+			"directions":       []string{"go-client-rust-server", "rust-client-go-server"},
+			"negotiated_group": "X25519MLKEM768",
 		}
 	}
 	artifact, err := writePQArtifact(version, scenario, evidence.String())
@@ -125,26 +136,26 @@ func runRustClientGoPQServer(ctx context.Context, bin, rustPolicy string, goPoli
 	return group, out.String(), nil
 }
 
-func runPQRefusal(ctx context.Context, bin string) (string, error) {
+func runPQRefusal(ctx context.Context, bin string) (string, string, error) {
 	peer, err := startTransportPeerCommand(ctx, bin, "pq-server", "only")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	ep, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.MustParseAddrPort("127.0.0.1:0")), irohRelayDisabled(), iroh.WithKeyExchangePolicy(iroh.KeyExchangeClassical))
 	if err != nil {
 		peer.close()
-		return "", err
+		return "", "", err
 	}
 	_, goErr := ep.Connect(ctx, peer.endpointAddr(), pqALPN)
 	_ = ep.Shutdown(context.Background())
 	peer.close()
 	if goErr == nil {
-		return "", fmt.Errorf("classical Go unexpectedly connected to PQ-only Rust")
+		return "", "", fmt.Errorf("classical Go unexpectedly connected to PQ-only Rust")
 	}
 
 	peer, err = startTransportPeerCommand(ctx, bin, "pq-server", "only")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	cmd := exec.CommandContext(ctx, bin, "pq-client", "classical", peer.id.String(), peer.addr.String())
 	var rustOut bytes.Buffer
@@ -152,9 +163,13 @@ func runPQRefusal(ctx context.Context, bin string) (string, error) {
 	rustErr := cmd.Run()
 	peer.close()
 	if rustErr == nil {
-		return rustOut.String(), fmt.Errorf("classical Rust unexpectedly connected to PQ-only Rust")
+		return "", rustOut.String(), fmt.Errorf("classical Rust unexpectedly connected to PQ-only Rust")
 	}
-	return fmt.Sprintf("go-classical error: %v\nrust-classical error: %v\n%s", goErr, rustErr, rustOut.String()), nil
+	const refusalError = "NoKxGroupsInCommon"
+	if !strings.Contains(goErr.Error(), refusalError) || !strings.Contains(rustOut.String(), refusalError) {
+		return "", rustOut.String(), fmt.Errorf("PQ-only refusal did not report %s in both directions", refusalError)
+	}
+	return refusalError, fmt.Sprintf("go-classical error: %v\nrust-classical error: %v\n%s", goErr, rustErr, rustOut.String()), nil
 }
 
 func pqEcho(ctx context.Context, conn *iroh.Conn) error {
