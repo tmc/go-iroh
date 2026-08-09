@@ -80,6 +80,10 @@ func RunQADReport(bin, version, digest string) (cell Cell) {
 	if err := compareQADReportShape(rust.String(), goReport); err != nil {
 		return finishCell(cell, Fail, err.Error())
 	}
+	cell.Evidence = map[string]any{
+		"compared_field_count": len(qadReportFields),
+		"compared_fields":      qadReportFields,
+	}
 	evidence := fmt.Sprintf("upstream iroh-doctor report:\n%s\nGo report:\n%+v\n", rust.String(), goReport)
 	artifact, err := writeQADArtifact(version, evidence)
 	if err != nil {
@@ -89,16 +93,17 @@ func RunQADReport(bin, version, digest string) (cell Cell) {
 	return finishCell(cell, Pass, "upstream and Go reports expose the same fields; optional values and latencies satisfy honest-subset invariants")
 }
 
+var qadReportFields = []string{
+	"udp_v4", "udp_v6",
+	"mapping_varies_by_dest_ipv4", "mapping_varies_by_dest_ipv6",
+	"preferred_relay", "relay_latency",
+	"global_v4", "global_v6", "captive_portal",
+}
+
 func compareQADReportShape(rust string, report iroh.NetReport) error {
-	fields := []string{
-		"udp_v4:", "udp_v6:",
-		"mapping_varies_by_dest_ipv4:", "mapping_varies_by_dest_ipv6:",
-		"preferred_relay:", "relay_latency:",
-		"global_v4:", "global_v6:", "captive_portal:",
-	}
-	for _, field := range fields {
-		if !strings.Contains(rust, field) {
-			return fmt.Errorf("upstream report lacks field %s", strings.TrimSuffix(field, ":"))
+	for _, field := range qadReportFields {
+		if !strings.Contains(rust, field+":") {
+			return fmt.Errorf("upstream report lacks field %s", field)
 		}
 	}
 	for _, field := range []struct {

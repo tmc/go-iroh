@@ -18,5 +18,8 @@ func TestPQMatrixLive(t *testing.T) {
 		if cell.Result != Pass {
 			t.Errorf("%s = %s: %s", cell.Scenario, cell.Result, cell.Detail)
 		}
+		if cell.Evidence["negotiated_group"] != "X25519MLKEM768" {
+			t.Errorf("%s evidence = %#v", cell.Scenario, cell.Evidence)
+		}
 	}
 }

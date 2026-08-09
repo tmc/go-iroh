@@ -2,6 +2,7 @@
   "scenarios": [
     {
       "name": "handshake/go-client-rust-server",
+      "description": "A Go client runs the doctor send, receive, and echo exchange against an upstream Rust server, and a pass proves compatible identity, ALPN, QUIC, and stream behavior.",
       "tier": "A",
       "expected": {
         "1.0.0": "pass",
@@ -10,6 +11,7 @@
     },
     {
       "name": "handshake/rust-client-go-server",
+      "description": "An upstream Rust client runs the doctor send, receive, and echo exchange against a Go server, and a pass proves compatible identity, ALPN, QUIC, and stream behavior.",
       "tier": "A",
       "expected": {
         "1.0.0": "pass",
@@ -18,6 +20,7 @@
     },
     {
       "name": "handshake/alpn-mismatch",
+      "description": "A Go client offers the wrong ALPN to an upstream Rust server, and a pass proves that the incompatible handshake is rejected instead of silently connecting.",
       "tier": "A",
       "expected": {
         "1.0.0": "pass",
@@ -26,6 +29,7 @@
     },
     {
       "name": "handshake/wrong-endpoint-id",
+      "description": "A Go client dials an upstream Rust server using the wrong endpoint ID, and a pass proves that peer authentication rejects the connection.",
       "tier": "A",
       "expected": {
         "1.0.0": "pass",
@@ -34,6 +38,7 @@
     },
     {
       "name": "handshake/datagrams",
+      "description": "Go and the Rust test driver exchange QUIC datagrams in both directions, and a pass proves compatible datagram framing and acknowledgement behavior.",
       "tier": "B",
       "expected": {
         "1.0.0": "pass",
@@ -42,6 +47,7 @@
     },
     {
       "name": "handshake/zero-rtt",
+      "description": "A Go client resumes a Rust-issued TLS session and sends an early stream, and a pass proves that the Rust peer accepts the data as QUIC 0-RTT.",
       "tier": "B",
       "expected": {
         "1.0.0": "pass",
@@ -50,6 +56,7 @@
     },
     {
       "name": "handshake/close-semantics",
+      "description": "Go closes a connection to the Rust test driver with application code 42 and reason bye, and a pass proves that the Rust peer observes both values.",
       "tier": "B",
       "expected": {
         "1.0.0": "pass",
@@ -58,6 +65,7 @@
     },
     {
       "name": "handshake/pq-only",
+      "description": "Go and Rust peers exchange data in both directions under a PQ-only policy, and a pass proves X25519MLKEM768 negotiation plus NoKxGroupsInCommon refusal of classical-only peers.",
       "tier": "A",
       "expected": {
         "1.0.0": "pass",
@@ -66,6 +74,7 @@
     },
     {
       "name": "handshake/prefer-pq",
+      "description": "Go and Rust peers exchange data in both directions while preferring post-quantum key exchange, and a pass proves that both negotiate X25519MLKEM768.",
       "tier": "A",
       "expected": {
         "1.0.0": "pass",
@@ -74,6 +83,7 @@
     },
     {
       "name": "handshake/remote-info",
+      "description": "Go and the Rust test driver exchange an authenticated stream and record peer addressing, and a pass proves that Go reports the Rust endpoint ID and a direct address.",
       "tier": "B",
       "expected": {
         "1.0.0": "pass",
