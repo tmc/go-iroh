@@ -1,0 +1,34 @@
+#!/bin/sh
+# Adapt unmodified upstream Rust binaries to the parity driver ABI.
+set -eu
+
+if [ "$#" -ne 2 ]; then
+	echo "usage: driver <role> <scenario>" >&2
+	exit 65
+fi
+if [ -z "${PARITY_RESULT:-}" ]; then
+	echo "rust-native driver: PARITY_RESULT is not set" >&2
+	exit 65
+fi
+
+role=$1
+scenario=$2
+case "$role/$scenario" in
+client/doctor-echo)
+	exec iroh-doctor connect "$PARITY_ENDPOINT_ID" \
+		--remote-endpoint "$PARITY_DIRECT_ADDR" \
+		--disable-address-lookup
+	;;
+server/doctor-echo)
+	exec iroh-doctor accept \
+		--secret-key "$PARITY_SECRET_KEY" \
+		--size "${PARITY_SIZE:-1024}" \
+		--iterations 1 \
+		--disable-address-lookup \
+		--socket-addr "${PARITY_BIND_ADDR:-127.0.0.1:0}"
+	;;
+*)
+	printf '{"role":"%s","scenario":"%s","result":"unsupported"}\n' "$role" "$scenario" >"$PARITY_RESULT"
+	exit 64
+	;;
+esac

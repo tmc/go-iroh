@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "handshake/go-client-rust-server",
+      "tier": "A",
+      "expected": {
+        "1.0.0": "pass",
+        "1.0.3": "pass"
+      }
+    },
+    {
+      "name": "handshake/rust-client-go-server",
+      "tier": "A",
+      "expected": {
+        "1.0.0": "pass",
+        "1.0.3": "pass"
+      }
+    }
+  ]
+}
