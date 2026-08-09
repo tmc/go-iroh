@@ -15,6 +15,7 @@ import (
 func main() {
 	version := flag.String("iroh-version", "1.0.3", "Rust iroh version")
 	doctor := flag.String("rust-doctor", "", "path to the pinned iroh-doctor binary")
+	vector := flag.String("rust-vector", "", "path to the pinned Rust vector driver")
 	flag.Parse()
 
 	root, err := repoRoot()
@@ -22,7 +23,8 @@ func main() {
 		fatal(err)
 	}
 	report := runner.Report{Schema: runner.Schema, Generated: time.Now().UTC(), GoIroh: runner.GoIroh{Version: "main", Commit: gitCommit(root)}}
-	report.Cells = runEcho(*doctor, *version)
+	report.Cells = runner.RunVectorCorpus(*vector, filepath.Join(root, "iroh-compat-harness", "vectors", "corpus.json"), *version)
+	report.Cells = append(report.Cells, runEcho(*doctor, *version)...)
 	report.Cells = append(report.Cells, runner.ExtendedCells(*version)...)
 	if err := runner.ApplyExpected(filepath.Join(root, "iroh-compat-harness", "scenarios"), *version, report.Cells); err != nil {
 		fatal(err)
@@ -79,7 +81,7 @@ func repoRoot() (string, error) {
 }
 
 func gitCommit(root string) string {
-	out, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	out, err := exec.Command("git", "-C", root, "describe", "--always", "--dirty").Output()
 	if err != nil {
 		return "unknown"
 	}

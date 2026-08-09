@@ -1,0 +1,29 @@
+{
+  "scenarios": [
+    {
+      "name": "vectors/keys-z32-sign",
+      "tier": "B",
+      "expected": {"1.0.0": "unsupported", "1.0.3": "pass"}
+    },
+    {
+      "name": "vectors/postcard-varints",
+      "tier": "B",
+      "expected": {"1.0.0": "unsupported", "1.0.3": "pass"}
+    },
+    {
+      "name": "vectors/endpoint-ticket-roundtrip",
+      "tier": "B",
+      "expected": {"1.0.0": "unsupported", "1.0.3": "pass"}
+    },
+    {
+      "name": "vectors/pkarr-txt",
+      "tier": "B",
+      "expected": {"1.0.0": "unsupported", "1.0.3": "pass"}
+    },
+    {
+      "name": "vectors/gossip-frame",
+      "tier": "B",
+      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+    }
+  ]
+}
