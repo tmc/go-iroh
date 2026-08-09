@@ -166,6 +166,6 @@ func gitCommit(root string) string {
 }
 
 func fatal(err error) {
-	fmt.Fprintln(os.Stderr, "parity:", err)
+	fmt.Fprintln(os.Stderr, "iroh-compat:", err)
 	os.Exit(1)
 }
