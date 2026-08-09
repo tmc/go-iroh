@@ -23,7 +23,7 @@
     {
       "name": "vectors/gossip-frame",
       "tier": "B",
-      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+      "expected": {"1.0.0": "unsupported", "1.0.3": "pass"}
     }
   ]
 }

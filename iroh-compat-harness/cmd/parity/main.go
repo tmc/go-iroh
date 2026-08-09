@@ -32,6 +32,7 @@ func main() {
 	report.Cells = append(report.Cells, runRelay(*goRelay, *rustRelay, *vector, *version)...)
 	report.Cells = append(report.Cells, runDiscovery(*goDNS, *rustDNS, *rustRelay, *vector, *version)...)
 	report.Cells = append(report.Cells, runTransport(*vector, *version)...)
+	report.Cells = append(report.Cells, runGossip(*vector, *version))
 	report.Cells = append(report.Cells, runner.ExtendedCells(*version)...)
 	if err := runner.ApplyExpected(filepath.Join(root, "iroh-compat-harness", "scenarios"), *version, report.Cells); err != nil {
 		fatal(err)
@@ -39,6 +40,20 @@ func main() {
 	if err := report.Write(filepath.Join(root, "iroh-compat-harness", "results"), root); err != nil {
 		fatal(err)
 	}
+}
+
+func runGossip(rustClient, version string) runner.Cell {
+	if version != "1.0.3" {
+		return runner.Cell{Scenario: "vectors/gossip-frame", Iroh: version, Tier: "B", Result: runner.Unsupported, Expected: runner.Unsupported, Detail: "the Tier B gossip driver is pinned to iroh 1.0.3"}
+	}
+	if rustClient == "" {
+		return runner.Cell{Scenario: "vectors/gossip-frame", Iroh: version, Tier: "B", Result: runner.SetupError, Expected: runner.Pass, Detail: "set the pinned Rust driver binary path"}
+	}
+	digest, err := runner.FileDigest(rustClient)
+	if err != nil {
+		return runner.Cell{Scenario: "vectors/gossip-frame", Iroh: version, Tier: "B", Result: runner.SetupError, Expected: runner.Pass, Detail: err.Error()}
+	}
+	return runner.RunGossip(rustClient, version, digest)
 }
 
 func runTransport(rustClient, version string) []runner.Cell {
