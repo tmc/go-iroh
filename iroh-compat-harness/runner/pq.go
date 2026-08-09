@@ -191,7 +191,7 @@ func writePQArtifact(version, scenario, evidence string) (string, error) {
 	}
 	name := strings.ReplaceAll(scenario, "/", "-") + "-" + version + ".log"
 	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(evidence), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(strings.TrimSpace(evidence)+"\n"), 0o644); err != nil {
 		return "", fmt.Errorf("write PQ artifact: %w", err)
 	}
 	return filepath.ToSlash(filepath.Join("results", "artifacts", name)), nil
