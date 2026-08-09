@@ -1,0 +1,81 @@
+{
+  "schema": "go-iroh-l0/1",
+  "iroh": "1.0.3",
+  "keys": [
+    {
+      "seed": "0000000000000000000000000000000000000000000000000000000000000000",
+      "public": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+      "z32": "8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo",
+      "message": "parity check",
+      "signature": "18e58e39128d5f3a2ac20de8b6ac3f4b58badf82eb2fc5116dea4fa919d0fabb3db2786a20d91bd83aa72b336bffcb390507a6faae671fd73cef60cb65513a00"
+    },
+    {
+      "seed": "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+      "public": "197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d61",
+      "z32": "df9sse9bp1nuftim3yhxiuk6w6r5hddsskjygpydux7esxjstioo",
+      "message": "parity check",
+      "signature": "cd0e9b1666abee50f4879417d3a8411aeaaafe2f49f5f0f2e1caff974515b94716efe6489e5547aa866af95a82e21e52a500b5994e9fabc50546e9a98dcee40c"
+    },
+    {
+      "seed": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "public": "76a1592044a6e4f511265bca73a604d90b0529d1df602be30a19a9257660d1f5",
+      "z32": "q4oi1enrw51xkrjgmxf88jor5rfokkqt57onzaakdgw1k7uy484o",
+      "message": "parity check",
+      "signature": "8c8f7fa07405c50437ff73a0ef0c9778837c49f7e6c453715fa9c2baf3776ebfdad9b10e550326f29703ab3af3f3121c8ca0a6eebe9ffdc9adfd54c549c25505"
+    },
+    {
+      "seed": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "public": "207a067892821e25d770f1fba0c47c11ff4b813e54162ece9eb839e076231ab6",
+      "z32": "rb7yc6r1oexnmi5o6874btdhn89wzyj6komn7uw6zyh6y7tddk5y",
+      "message": "parity check",
+      "signature": "7371c07c0bfb4ed20c71810fed97c86917a069f4e3c8644d08739e42afe00f4d70eea2a48a4213f9650d10bd2ff0fd1827715b66cfaf69004cb56f29652c1607"
+    }
+  ],
+  "postcard_uint": [
+    {
+      "value": 0,
+      "postcard": "00"
+    },
+    {
+      "value": 1,
+      "postcard": "01"
+    },
+    {
+      "value": 127,
+      "postcard": "7f"
+    },
+    {
+      "value": 128,
+      "postcard": "8001"
+    },
+    {
+      "value": 16383,
+      "postcard": "ff7f"
+    },
+    {
+      "value": 16384,
+      "postcard": "808001"
+    },
+    {
+      "value": 4294967295,
+      "postcard": "ffffffff0f"
+    },
+    {
+      "value": 18446744073709551615,
+      "postcard": "ffffffffffffffffff01"
+    }
+  ],
+  "endpoint_ticket": {
+    "encoded": "endpointaamx62zd4fwikmwgvpedr6wnl2tytpqmo2zjeazuaon7vcz5g2gwcaqaczuhi5dqom5c6l3smvwgc6jomv4gc3lqnrss6aiap4aaaaorei",
+    "bytes": "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6102001668747470733a2f2f72656c61792e6578616d706c652f01007f000001d122"
+  },
+  "pkarr": {
+    "bytes": "197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d61bdd84f368f9ddf1ca610aa5bf7eebaab444edd96072d154599d8bdaf2bf04474ffaf0a9dedd477783123c7aff2fa1c612b7489f2af6b54b8a2086014a3e43e0900060a24181e4000000080000000000200000000055f69726f6834646639737365396270316e756674696d3379687869756b367736723568646473736b6a79677079647578376573786a7374696f6f00001000010000001e001d1c72656c61793d68747470733a2f2f72656c61792e6578616d706c652fc00c001000010000001e001413616464723d3132372e302e302e313a34343333",
+    "name": "_iroh",
+    "values": [
+      "relay=https://relay.example/",
+      "addr=127.0.0.1:4433"
+    ],
+    "ttl": 30
+  }
+}
