@@ -87,9 +87,65 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             return transport_server(&mode).await;
         }
+        if command == "gossip-server" {
+            if args.next().is_some() {
+                return Err("gossip-server accepts no arguments".into());
+            }
+            return gossip_server().await;
+        }
         return Err(format!("unknown command {command}").into());
     }
     write_corpus()
+}
+
+async fn gossip_server() -> Result<(), Box<dyn std::error::Error>> {
+    use iroh::{Endpoint, endpoint::presets, protocol::Router};
+    use iroh_gossip::{ALPN, TopicId, api::Event, net::Gossip};
+
+    let topic = TopicId::from_bytes(*b"go-iroh rust gossip interop 001!");
+    let endpoint = Endpoint::builder(presets::Minimal)
+        .bind_addr(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))?
+        .alpns(vec![ALPN.to_vec()])
+        .bind()
+        .await?;
+    let gossip = Gossip::builder().spawn(endpoint.clone());
+    let router = Router::builder(endpoint.clone())
+        .accept(ALPN, gossip.clone())
+        .spawn();
+    let addrs = endpoint
+        .bound_sockets()
+        .into_iter()
+        .filter(|addr| addr.is_ipv4())
+        .map(|addr| format!("\"{addr}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    println!("{{\"id\":\"{}\",\"addrs\":[{}]}}", endpoint.id(), addrs);
+    std::io::stdout().flush()?;
+    let topic = gossip.subscribe(topic, Vec::new()).await?;
+    let (sender, mut receiver) = topic.split();
+    let mut neighbor = false;
+    let mut received = false;
+    while let Some(event) = receiver.next().await {
+        match event? {
+            Event::NeighborUp(_) if !neighbor => {
+                neighbor = true;
+                sender
+                    .broadcast(bytes::Bytes::from_static(b"hello from rust"))
+                    .await?;
+            }
+            Event::Received(message) if message.content.as_ref() == b"hello from go" => {
+                received = true;
+            }
+            Event::NeighborDown(_) | Event::Lagged | Event::NeighborUp(_) | Event::Received(_) => {}
+        }
+        if neighbor && received {
+            println!("gossip-ok");
+            std::io::stdout().flush()?;
+            break;
+        }
+    }
+    router.shutdown().await?;
+    Ok(())
 }
 
 async fn transport_server(mode: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -174,6 +230,7 @@ async fn transport_server(mode: &str) -> Result<(), Box<dyn std::error::Error>> 
             let data = recv.read_to_end(64).await?;
             send.write_all(&data).await?;
             send.finish()?;
+            conn.closed().await;
             println!("remote-info-ok");
         }
         _ => return Err(format!("unknown transport mode {mode}").into()),
