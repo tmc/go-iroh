@@ -1,0 +1,14 @@
+services:
+  parity:
+    build:
+      context: .
+      dockerfile: images/parity/Dockerfile
+      args:
+        RUST_IMAGE: go-iroh-compat:iroh-${IROH_VERSION:-1.0.3}
+    environment:
+      IROH_VERSION: ${IROH_VERSION:-1.0.3}
+      RUST_DOCTOR_BIN: /usr/local/bin/iroh-doctor
+      RUST_VECTOR_BIN: /usr/local/bin/rust-driver
+    volumes:
+      - ..:/work
+    command: ["make", "parity-native"]

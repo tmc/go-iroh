@@ -1,11 +1,16 @@
-.PHONY: parity test regen-vectors vectors canaries doctor-image
+.PHONY: parity parity-native test regen-vectors vectors canaries doctor-image doctor-image-build release-check
 
 IROH_VERSION ?= 1.0.3
 RUST_DOCTOR_BIN ?=
+RUST_VECTOR_BIN ?=
 DOCTOR_OUTPUT ?= $(HOME)/tmp/go-iroh-compat/iroh-doctor-$(IROH_VERSION)
 
-parity:
-	go run ./cmd/parity -iroh-version $(IROH_VERSION) -rust-doctor "$(RUST_DOCTOR_BIN)"
+parity: doctor-image-build
+	IROH_VERSION=$(IROH_VERSION) docker compose run --build --rm parity
+
+parity-native:
+	go test ./vectors
+	go run ./cmd/parity -iroh-version $(IROH_VERSION) -rust-doctor "$(RUST_DOCTOR_BIN)" -rust-vector "$(RUST_VECTOR_BIN)"
 
 test:
 	go test ./...
@@ -33,10 +38,16 @@ canaries:
 		echo "mutation $$1: failed as expected"; \
 	done
 
-doctor-image:
+doctor-image-build:
 	docker build -f images/iroh-$(IROH_VERSION)/Dockerfile -t go-iroh-compat:iroh-$(IROH_VERSION) .
+
+doctor-image: doctor-image-build
 	@mkdir -p "$(dir $(DOCTOR_OUTPUT))"; \
 	cid=$$(docker create go-iroh-compat:iroh-$(IROH_VERSION)); \
 	trap 'docker rm -f "$$cid" >/dev/null 2>&1 || true' EXIT; \
 	docker cp "$$cid:/usr/local/bin/iroh-doctor" "$(DOCTOR_OUTPUT)"; \
 	chmod +x "$(DOCTOR_OUTPUT)"
+
+release-check:
+	$(MAKE) parity IROH_VERSION=1.0.0
+	$(MAKE) parity IROH_VERSION=1.0.3
