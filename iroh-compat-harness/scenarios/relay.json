@@ -3,37 +3,38 @@
     {
       "name": "relay/go-client-go-relay",
       "tier": "A",
-      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"},
+      "unsupported_reason": "A Go-only quadrant has no real Rust peer from which to record mandatory PID and digest evidence."
     },
     {
       "name": "relay/go-client-rust-relay",
       "tier": "A",
-      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
     },
     {
       "name": "relay/rust-client-go-relay",
-      "tier": "A",
-      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+      "tier": "B",
+      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
     },
     {
       "name": "relay/rust-client-rust-relay",
-      "tier": "A",
-      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+      "tier": "B",
+      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
     },
     {
       "name": "relay/websocket-upgrade",
       "tier": "A",
-      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
     },
     {
       "name": "relay/ping-pong",
       "tier": "A",
-      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
     },
     {
       "name": "relay/idle-timeout",
       "tier": "A",
-      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"}
+      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
     }
   ]
 }
