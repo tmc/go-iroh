@@ -1,0 +1,10 @@
+go-client-rust-server: group=X25519MLKEM768
+pq-ok group=X25519MLKEM768
+
+rust-client-go-server: group=X25519MLKEM768
+pq-ok group=X25519MLKEM768
+
+pq-only refusal:
+go-classical error: iroh: connect to ee93a4f66f8d16b819bb9beb9ffccdfcdc1412e87fee6a324c2a99a1e0e67148: CRYPTO_ERROR 0x128 (remote): peer is incompatible: NoKxGroupsInCommon
+rust-classical error: exit status 1
+Error: aborted by peer: the cryptographic handshake failed: error 40: peer is incompatible: NoKxGroupsInCommon

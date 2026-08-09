@@ -4,6 +4,8 @@ FROM ${RUST_IMAGE} AS rust-peer
 FROM rust:1.96-bookworm AS vector-build
 WORKDIR /src
 COPY drivers/rust-driver/ ./
+# The PQ peer enables upstream iroh's documented tls-aws-lc-rs feature. The
+# iroh source is not patched; this small command adapter remains Tier B.
 RUN cargo build --release --locked
 
 FROM golang:1.26-bookworm
