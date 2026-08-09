@@ -1,0 +1,15 @@
+ARG RUST_IMAGE=go-iroh-compat:iroh-1.0.3
+FROM ${RUST_IMAGE} AS rust-peer
+
+FROM rust:1.96-bookworm AS vector-build
+WORKDIR /src
+COPY drivers/rust-driver/ ./
+RUN cargo build --release --locked
+
+FROM golang:1.26-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates make && rm -rf /var/lib/apt/lists/*
+COPY --from=rust-peer /usr/local/bin/iroh-doctor /usr/local/bin/iroh-doctor
+COPY --from=vector-build /src/target/release/go-iroh-compat-rust-driver /usr/local/bin/rust-driver
+WORKDIR /work/iroh-compat-harness
+ENV RUST_DOCTOR_BIN=/usr/local/bin/iroh-doctor
+ENV RUST_VECTOR_BIN=/usr/local/bin/rust-driver

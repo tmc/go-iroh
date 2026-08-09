@@ -2,11 +2,13 @@
 
 This nested module runs wire-compatibility scenarios between go-iroh and pinned Rust iroh releases. A passing cell requires a real Rust process and records its PID and binary SHA-256.
 
-Run the stage-1 loopback matrix with an unmodified `iroh-doctor` 0.101.0 binary built against iroh 1.0.3:
+Run the matrix from a clean checkout with Docker:
 
 ```sh
-make parity IROH_VERSION=1.0.3 RUST_DOCTOR_BIN=/path/to/iroh-doctor
+make parity
 ```
+
+This builds the pinned Rust image and runs the Go runner plus Rust peers together through Docker Compose. Developers with native pinned binaries can use `make parity-native` and set `RUST_DOCTOR_BIN` and `RUST_VECTOR_BIN` explicitly.
 
 The command writes `results/results.json`, `results/badge.json`, and the repository-root `COMPATIBILITY.md`.
 

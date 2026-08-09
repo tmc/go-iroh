@@ -4,8 +4,8 @@ import "testing"
 
 func TestExtendedCellsFailClosed(t *testing.T) {
 	cells := ExtendedCells("1.0.3")
-	if len(cells) != 11 {
-		t.Fatalf("extended cells = %d, want 11", len(cells))
+	if len(cells) != 17 {
+		t.Fatalf("extended cells = %d, want 17", len(cells))
 	}
 	for _, c := range cells {
 		if c.Result != Unsupported || c.Expected != Unsupported {

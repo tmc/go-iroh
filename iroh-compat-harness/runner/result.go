@@ -147,6 +147,7 @@ func (r *Report) Markdown() []byte {
 	var b strings.Builder
 	b.WriteString("# Iroh wire compatibility\n\n")
 	b.WriteString("go-iroh is an independent Go implementation of iroh wire v1. This matrix records observed interoperability with real, pinned Rust iroh peers; unsupported cells are not compatibility claims.\n\n")
+	fmt.Fprintf(&b, "Generated from commit `%s` at %s. A pass requires a recorded Rust process and binary digest; setup errors and unsupported cells never count as passes.\n\n", r.GoIroh.Commit, r.Generated.Format(time.RFC3339))
 	b.WriteString("| Scenario | Rust iroh | Tier | Result | Peer |\n|---|---:|:---:|:---:|---|\n")
 	for _, c := range cells {
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", c.Scenario, c.Iroh, c.Tier, c.Result, c.Peer)

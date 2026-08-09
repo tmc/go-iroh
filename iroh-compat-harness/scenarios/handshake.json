@@ -31,6 +31,54 @@
         "1.0.0": "pass",
         "1.0.3": "pass"
       }
+    },
+    {
+      "name": "handshake/datagrams",
+      "tier": "A",
+      "expected": {
+        "1.0.0": "unsupported",
+        "1.0.3": "unsupported"
+      }
+    },
+    {
+      "name": "handshake/zero-rtt",
+      "tier": "A",
+      "expected": {
+        "1.0.0": "unsupported",
+        "1.0.3": "unsupported"
+      }
+    },
+    {
+      "name": "handshake/close-semantics",
+      "tier": "A",
+      "expected": {
+        "1.0.0": "unsupported",
+        "1.0.3": "unsupported"
+      }
+    },
+    {
+      "name": "handshake/pq-only",
+      "tier": "A",
+      "expected": {
+        "1.0.0": "unsupported",
+        "1.0.3": "unsupported"
+      }
+    },
+    {
+      "name": "handshake/prefer-pq",
+      "tier": "A",
+      "expected": {
+        "1.0.0": "unsupported",
+        "1.0.3": "unsupported"
+      }
+    },
+    {
+      "name": "handshake/remote-info",
+      "tier": "A",
+      "expected": {
+        "1.0.0": "unsupported",
+        "1.0.3": "unsupported"
+      }
     }
   ]
 }
