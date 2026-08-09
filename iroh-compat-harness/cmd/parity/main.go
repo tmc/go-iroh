@@ -44,7 +44,7 @@ func main() {
 
 func runGossip(rustClient, version string) runner.Cell {
 	if version != "1.0.3" {
-		return runner.Cell{Scenario: "vectors/gossip-frame", Iroh: version, Tier: "B", Result: runner.Unsupported, Expected: runner.Unsupported, Detail: "the Tier B gossip driver is pinned to iroh 1.0.3"}
+		return runner.Cell{Scenario: "vectors/gossip-frame", Iroh: version, Tier: "B", Result: runner.Unsupported, Expected: runner.Unsupported, Detail: "the Rust gossip test driver is pinned to iroh 1.0.3"}
 	}
 	if rustClient == "" {
 		return runner.Cell{Scenario: "vectors/gossip-frame", Iroh: version, Tier: "B", Result: runner.SetupError, Expected: runner.Pass, Detail: "set the pinned Rust driver binary path"}

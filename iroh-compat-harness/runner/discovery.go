@@ -89,7 +89,7 @@ func runRustPublishGoDNS(goDNS, rustClient, version, digest string) (cell Cell) 
 	if err != nil || !bytes.Equal(got, want) {
 		return finishCell(cell, Fail, fmt.Sprintf("observe Rust packet from Go server: %v", err))
 	}
-	return finishCell(cell, Pass, "Go DNS server stored and returned a Tier B Rust-signed pkarr packet")
+	return finishCell(cell, Pass, "Go DNS server stored and returned a Rust-test-driver-signed pkarr packet")
 }
 
 func runRelayURLAgreement(relayBin, rustClient, version, relayDigest, clientDigest string) (cell Cell) {
@@ -112,9 +112,9 @@ func runRelayURLAgreement(relayBin, rustClient, version, relayDigest, clientDige
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Run(); err != nil || !strings.Contains(out.String(), "relay pong") {
-		return finishCell(cell, Fail, fmt.Sprintf("Tier B Rust relay URL probe (%s): %v: %s", clientDigest, err, out.String()))
+		return finishCell(cell, Fail, fmt.Sprintf("Rust test driver relay URL probe (%s): %v: %s", clientDigest, err, out.String()))
 	}
-	return finishCell(cell, Pass, "Go and Tier B Rust clients both resolved and reached the same upstream relay URL")
+	return finishCell(cell, Pass, "Go and the Rust test driver both resolved and reached the same upstream relay URL")
 }
 
 func putPacket(ctx context.Context, addr, key string, payload []byte) error {

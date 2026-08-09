@@ -64,7 +64,7 @@ func runTransportDatagrams(bin, version, digest string) (cell Cell) {
 	if err := peer.waitFor("datagrams-ok"); err != nil {
 		return finishCell(cell, Fail, err.Error())
 	}
-	return finishCell(cell, Pass, "Go and Tier B Rust peers exchanged QUIC datagrams in both directions")
+	return finishCell(cell, Pass, "Go and the Rust test driver exchanged QUIC datagrams in both directions")
 }
 
 func runTransportClose(bin, version, digest string) (cell Cell) {
@@ -124,7 +124,7 @@ func runTransportRemoteInfo(bin, version, digest string) (cell Cell) {
 	if err := peer.waitFor("remote-info-ok"); err != nil {
 		return finishCell(cell, Fail, err.Error())
 	}
-	return finishCell(cell, Pass, "Go and Tier B Rust endpoints both recorded the authenticated peer and direct address")
+	return finishCell(cell, Pass, "Go and the Rust test driver both recorded the authenticated peer and direct address")
 }
 
 func runTransportZeroRTT(bin, version, digest string) (cell Cell) {
