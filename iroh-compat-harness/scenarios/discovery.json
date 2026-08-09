@@ -13,8 +13,7 @@
     {
       "name": "discovery/qad-report",
       "tier": "A",
-      "expected": {"1.0.0": "unsupported", "1.0.3": "unsupported"},
-      "unsupported_reason": "go-iroh does not expose the upstream report schema needed for a field-by-field QAD assertion."
+      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
     },
     {
       "name": "discovery/relay-urls",
