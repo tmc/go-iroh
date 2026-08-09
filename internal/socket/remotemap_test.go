@@ -467,6 +467,36 @@ func TestActorHolepunchGated(t *testing.T) {
 	}
 }
 
+func TestActorTriggerHolepunchConnUsesRequestedConnection(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+		id := testEndpointID(t)
+
+		first := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
+		first.multipathNegotiated = true
+		defer first.Close()
+		_, actor := m.AddConnectionActor(id, first)
+
+		second := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 10)), time.Millisecond)
+		second.multipathNegotiated = true
+		defer second.Close()
+		m.AddConnection(id, second)
+		synctest.Wait()
+
+		if err := actor.TriggerHolepunchConn(second); err != nil {
+			t.Fatal(err)
+		}
+		if got := first.initiateRoundCalls.Load(); got != 0 {
+			t.Fatalf("first connection InitiateNATTraversalRound calls = %d, want 0", got)
+		}
+		if got := second.initiateRoundCalls.Load(); got != 1 {
+			t.Fatalf("second connection InitiateNATTraversalRound calls = %d, want 1", got)
+		}
+	})
+}
+
 // TestActorSendDatagramBlackhole asserts the blackhole invariant: SendDatagram
 // never returns an error, even when no path is reachable (send returns false).
 func TestActorSendDatagramBlackhole(t *testing.T) {

@@ -861,6 +861,32 @@ func (a *RemoteStateActor) TriggerHolepunch() error {
 	if target == nil {
 		return ErrExtensionNotNegotiated
 	}
+	return a.triggerHolepunch(target, candidates)
+}
+
+// TriggerHolepunchConn attempts NAT traversal on conn. It returns
+// [context.Canceled] if conn is no longer registered, or
+// [ErrExtensionNotNegotiated] if conn does not support QNT.
+func (a *RemoteStateActor) TriggerHolepunchConn(conn Connection) error {
+	a.mu.Lock()
+	_, registered := a.conns[conn]
+	candidates := append([]netip.AddrPort(nil), a.localNAT...)
+	a.mu.Unlock()
+	if !registered {
+		return context.Canceled
+	}
+	mp, ok := conn.(multipathConnection)
+	if !ok || !mp.MultipathNegotiated() {
+		return ErrExtensionNotNegotiated
+	}
+	target, ok := conn.(natTraversalRoundConnection)
+	if !ok {
+		return ErrExtensionNotNegotiated
+	}
+	return a.triggerHolepunch(target, candidates)
+}
+
+func (a *RemoteStateActor) triggerHolepunch(target natTraversalRoundConnection, candidates []netip.AddrPort) error {
 	if a.metrics != nil {
 		a.metrics.holepunchAttempts.Add(1)
 	}
