@@ -15,6 +15,8 @@ import (
 func main() {
 	version := flag.String("iroh-version", "1.0.3", "Rust iroh version")
 	doctor := flag.String("rust-doctor", "", "path to the pinned iroh-doctor binary")
+	goRelay := flag.String("go-relay", "", "path to the go-iroh relay binary")
+	rustRelay := flag.String("rust-relay", "", "path to the pinned upstream iroh-relay binary")
 	vector := flag.String("rust-vector", "", "path to the pinned Rust vector driver")
 	flag.Parse()
 
@@ -25,6 +27,7 @@ func main() {
 	report := runner.Report{Schema: runner.Schema, Generated: time.Now().UTC(), GoIroh: runner.GoIroh{Version: "main", Commit: gitCommit(root)}}
 	report.Cells = runner.RunVectorCorpus(*vector, filepath.Join(root, "iroh-compat-harness", "vectors", "corpus.json"), *version)
 	report.Cells = append(report.Cells, runEcho(*doctor, *version)...)
+	report.Cells = append(report.Cells, runRelay(*goRelay, *rustRelay, *vector, *version)...)
 	report.Cells = append(report.Cells, runner.ExtendedCells(*version)...)
 	if err := runner.ApplyExpected(filepath.Join(root, "iroh-compat-harness", "scenarios"), *version, report.Cells); err != nil {
 		fatal(err)
@@ -32,6 +35,29 @@ func main() {
 	if err := report.Write(filepath.Join(root, "iroh-compat-harness", "results"), root); err != nil {
 		fatal(err)
 	}
+}
+
+func runRelay(goRelay, rustRelay, rustClient, version string) []runner.Cell {
+	scenarios := []string{
+		"relay/go-client-rust-relay",
+		"relay/rust-client-go-relay",
+		"relay/rust-client-rust-relay",
+		"relay/websocket-upgrade",
+		"relay/ping-pong",
+		"relay/idle-timeout",
+	}
+	if goRelay == "" || rustRelay == "" || rustClient == "" {
+		return setupCells(scenarios, version, "set the Go relay, pinned upstream iroh-relay, and pinned Rust driver binary paths")
+	}
+	rustRelayDigest, err := runner.FileDigest(rustRelay)
+	if err != nil {
+		return setupCells(scenarios, version, err.Error())
+	}
+	rustClientDigest, err := runner.FileDigest(rustClient)
+	if err != nil {
+		return setupCells(scenarios, version, err.Error())
+	}
+	return runner.RunRelayMatrix(goRelay, rustRelay, rustClient, version, rustRelayDigest, rustClientDigest)
 }
 
 func runEcho(doctor, version string) []runner.Cell {
