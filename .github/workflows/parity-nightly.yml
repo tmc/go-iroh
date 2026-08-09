@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   parity:
@@ -20,6 +20,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      - uses: dtolnay/rust-toolchain@stable
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
@@ -39,7 +40,10 @@ jobs:
         working-directory: iroh-compat-harness
         env:
           RUST_DOCTOR_BIN: ${{ runner.temp }}/iroh-doctor
-        run: make parity IROH_VERSION=${{ matrix.iroh }}
+          RUST_VECTOR_BIN: ${{ github.workspace }}/iroh-compat-harness/drivers/rust-driver/target/release/go-iroh-compat-rust-driver
+        run: |
+          cargo build --quiet --release --locked --manifest-path drivers/rust-driver/Cargo.toml
+          make parity-native IROH_VERSION=${{ matrix.iroh }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -47,3 +51,24 @@ jobs:
           path: |
             iroh-compat-harness/results/
             COMPATIBILITY.md
+
+  publish:
+    needs: parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: parity-iroh-*
+          path: ${{ runner.temp }}/nightly
+      - name: Refresh compatibility page
+        run: |
+          cp "$RUNNER_TEMP/nightly/parity-iroh-1.0.3/COMPATIBILITY.md" COMPATIBILITY.md
+          cp "$RUNNER_TEMP/nightly/parity-iroh-1.0.3/iroh-compat-harness/results/badge.json" iroh-compat-harness/results/badge.json
+          cp "$RUNNER_TEMP/nightly/parity-iroh-1.0.3/iroh-compat-harness/results/results.json" iroh-compat-harness/results/results.json
+          if git diff --quiet; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add COMPATIBILITY.md iroh-compat-harness/results
+          git commit -m 'compat: refresh parity results'
+          git push
