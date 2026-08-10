@@ -67,6 +67,9 @@ func RunGossip(bin, version, digest string) (cell Cell) {
 		select {
 		case ev := <-events:
 			if ev.Kind == gossip.Received && string(ev.Content) == "hello from rust" && ev.DeliveredFrom.Equal(peer.id) {
+				if err := sub.Broadcast(ctx, []byte("gossip-ack")); err != nil {
+					return finishCell(cell, Fail, fmt.Sprintf("acknowledge Rust gossip frame: %v", err))
+				}
 				if err := peer.waitFor("gossip-ok"); err != nil {
 					return finishCell(cell, Fail, err.Error())
 				}
