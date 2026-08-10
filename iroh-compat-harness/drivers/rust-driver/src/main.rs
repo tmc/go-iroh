@@ -225,25 +225,21 @@ async fn gossip_server() -> Result<(), Box<dyn std::error::Error>> {
     std::io::stdout().flush()?;
     let topic = gossip.subscribe(topic, Vec::new()).await?;
     let (sender, mut receiver) = topic.split();
-    let mut neighbor = false;
-    let mut received = false;
+    let mut sent = false;
     while let Some(event) = receiver.next().await {
         match event? {
-            Event::NeighborUp(_) if !neighbor => {
-                neighbor = true;
+            Event::Received(message) if message.content.as_ref() == b"hello from go" && !sent => {
                 sender
                     .broadcast(bytes::Bytes::from_static(b"hello from rust"))
                     .await?;
+                sent = true;
             }
-            Event::Received(message) if message.content.as_ref() == b"hello from go" => {
-                received = true;
+            Event::Received(message) if message.content.as_ref() == b"gossip-ack" && sent => {
+                println!("gossip-ok");
+                std::io::stdout().flush()?;
+                break;
             }
             Event::NeighborDown(_) | Event::Lagged | Event::NeighborUp(_) | Event::Received(_) => {}
-        }
-        if neighbor && received {
-            println!("gossip-ok");
-            std::io::stdout().flush()?;
-            break;
         }
     }
     router.shutdown().await?;
