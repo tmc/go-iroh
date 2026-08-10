@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const Schema = "go-iroh-parity/2"
+const Schema = "go-iroh-parity/3"
 
 type Verdict string
 
@@ -24,15 +24,23 @@ const (
 )
 
 type Report struct {
-	Schema    string    `json:"schema"`
-	Generated time.Time `json:"generated"`
-	GoIroh    GoIroh    `json:"go_iroh"`
-	Cells     []Cell    `json:"cells"`
+	Schema    string     `json:"schema"`
+	Generated time.Time  `json:"generated"`
+	GoIroh    GoIroh     `json:"go_iroh"`
+	Cells     []Cell     `json:"cells"`
+	Envelopes []Envelope `json:"envelopes"`
 }
 
 type GoIroh struct {
 	Version string `json:"version"`
 	Commit  string `json:"commit"`
+}
+
+type Envelope struct {
+	Surface         string `json:"surface"`
+	UpstreamVersion string `json:"upstream_version"`
+	Status          string `json:"status"`
+	Detail          string `json:"detail"`
 }
 
 type Cell struct {
@@ -77,6 +85,16 @@ func (r *Report) Validate() error {
 		}
 		if c.Expected == "" {
 			return fmt.Errorf("cell %s: expected verdict is missing", c.Scenario)
+		}
+	}
+	for _, envelope := range r.Envelopes {
+		if envelope.Surface == "" || envelope.UpstreamVersion == "" || envelope.Detail == "" {
+			return errors.New("compatibility envelope is incomplete")
+		}
+		switch envelope.Status {
+		case "interop-verified", "predicted-incompatible", "untested":
+		default:
+			return fmt.Errorf("compatibility envelope %s has invalid status %q", envelope.Surface, envelope.Status)
 		}
 	}
 	return nil
@@ -155,12 +173,18 @@ func (r *Report) Markdown() []byte {
 	b.WriteString("Go-client↔Go-relay pairings contain no Rust peer, so they are outside this matrix's scope; that path is covered by the standard test suite.\n\n")
 	fmt.Fprintf(&b, "Generated from commit `%s` at %s. A pass requires a recorded Rust process and binary digest; setup errors and unsupported cells never count as passes.\n\n", r.GoIroh.Commit, r.Generated.Format(time.RFC3339))
 	b.WriteString("## How to read this table\n\n")
-	b.WriteString("- `pass` means the observed result matched the predicted interoperable behavior.\n")
-	b.WriteString("- `fail` means the scenario ran but did not produce the predicted behavior.\n")
+	b.WriteString("- `pass` means the implementations interoperated in the observed scenario.\n")
+	b.WriteString("- `fail` means the scenario ran and observed a wire incompatibility. A predicted failure is a successful harness result.\n")
 	b.WriteString("- `unsupported` means go-iroh lacks the feature, not that the feature is broken.\n")
 	b.WriteString("- `setup-error` means the environment could not run the scenario, so it makes no compatibility claim.\n\n")
 	b.WriteString("The Rust counterpart is either an **upstream CLI**, an unmodified program shipped by upstream iroh, or a **Rust test driver**, a purpose-built peer linked to the pinned upstream libraries. CLI results have the strongest black-box provenance; test-driver results cover protocol behavior that upstream CLIs do not expose.\n\n")
 	b.WriteString("The **Peer** value names the Rust executable and its SHA-256 digest. The full machine-readable result also records the peer process ID, so a pass cannot be emitted without evidence of a real Rust process.\n\n")
+	b.WriteString("## Compatibility envelope\n\n")
+	b.WriteString("| Surface | Upstream version range | Status | Detail |\n|---|---|---|---|\n")
+	for _, envelope := range r.Envelopes {
+		fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", envelope.Surface, envelope.UpstreamVersion, envelope.Status, envelope.Detail)
+	}
+	b.WriteString("\n")
 	b.WriteString("## Compatibility matrix\n\n")
 	b.WriteString("| Scenario | Rust iroh | Rust counterpart | Result | Peer |\n|---|---:|---|:---:|---|\n")
 	for _, c := range cells {

@@ -53,6 +53,7 @@ func TestMarkdownNamesRustCounterpart(t *testing.T) {
 	r := Report{
 		Generated: time.Unix(0, 0).UTC(),
 		GoIroh:    GoIroh{Commit: "abc123"},
+		Envelopes: []Envelope{{Surface: "CustomAddr endpoint tickets", UpstreamVersion: "1.0.3-era releases", Status: "predicted-incompatible", Detail: "Observed in both directions."}},
 		Cells: []Cell{
 			{Scenario: "echo", Description: "Go and Rust exchange an echo, and a pass proves compatible streams.", Counterpart: "upstream CLI", Iroh: "1.0.3", Result: Pass, Peer: "iroh-doctor@sha256:abc"},
 			{Scenario: "datagrams", Description: "Go and Rust exchange datagrams, and a pass proves compatible datagrams.", Counterpart: "Rust test driver", Iroh: "1.0.3", Result: Pass, Peer: "rust-driver@sha256:def"},
@@ -66,6 +67,9 @@ func TestMarkdownNamesRustCounterpart(t *testing.T) {
 		"| upstream CLI |",
 		"| Rust test driver |",
 		"SHA-256 digest",
+		"## Compatibility envelope",
+		"CustomAddr endpoint tickets",
+		"predicted-incompatible",
 		"## Scenario definitions",
 		"Go and Rust exchange an echo",
 		"## Reproduce",

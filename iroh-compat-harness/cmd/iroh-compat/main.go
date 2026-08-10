@@ -37,7 +37,12 @@ func main() {
 	report.Cells = append(report.Cells, runTransport(*vector, *version)...)
 	report.Cells = append(report.Cells, runGossip(*vector, *version))
 	report.Cells = append(report.Cells, runPQ(*pq, *version)...)
-	if err := runner.ApplyExpected(filepath.Join(root, "iroh-compat-harness", "scenarios"), *version, report.Cells); err != nil {
+	scenarioDir := filepath.Join(root, "iroh-compat-harness", "scenarios")
+	report.Envelopes, err = runner.LoadEnvelopes(scenarioDir)
+	if err != nil {
+		fatal(err)
+	}
+	if err := runner.ApplyExpected(scenarioDir, *version, report.Cells); err != nil {
 		fatal(err)
 	}
 	if err := report.Write(filepath.Join(root, "iroh-compat-harness", "results"), root); err != nil {

@@ -10,6 +10,7 @@ import (
 
 type scenarioFile struct {
 	Scenarios []scenario `json:"scenarios"`
+	Envelopes []Envelope `json:"envelopes"`
 }
 
 type scenario struct {
@@ -19,7 +20,37 @@ type scenario struct {
 	Expected    map[string]Verdict `json:"expected"`
 }
 
+func LoadEnvelopes(dir string) ([]Envelope, error) {
+	matches, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil {
+		return nil, fmt.Errorf("find compatibility envelopes: %w", err)
+	}
+	var envelopes []Envelope
+	for _, path := range matches {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read compatibility envelopes: %w", err)
+		}
+		var file scenarioFile
+		if err := json.Unmarshal(b, &file); err != nil {
+			return nil, fmt.Errorf("decode %s: %w", path, err)
+		}
+		envelopes = append(envelopes, file.Envelopes...)
+	}
+	return envelopes, nil
+}
+
 func ApplyExpected(dir, version string, cells []Cell) error {
+	return applyExpected(dir, version, cells, true)
+}
+
+// ApplyExpectedSubset applies predictions to a deliberately partial scenario
+// run, such as the upstream-main wire drift canary.
+func ApplyExpectedSubset(dir, version string, cells []Cell) error {
+	return applyExpected(dir, version, cells, false)
+}
+
+func applyExpected(dir, version string, cells []Cell, requireAll bool) error {
 	matches, err := filepath.Glob(filepath.Join(dir, "*.json"))
 	if err != nil {
 		return fmt.Errorf("find scenarios: %w", err)
@@ -42,7 +73,7 @@ func ApplyExpected(dir, version string, cells []Cell) error {
 				return fmt.Errorf("scenario %s has invalid counterpart %q", s.Name, s.Counterpart)
 			}
 			_, ok := s.Expected[version]
-			if !ok {
+			if requireAll && !ok {
 				return fmt.Errorf("scenario %s lacks expected verdict for iroh %s", s.Name, version)
 			}
 			if _, dup := want[s.Name]; dup {
@@ -56,12 +87,16 @@ func ApplyExpected(dir, version string, cells []Cell) error {
 		if !ok {
 			return fmt.Errorf("cell %s has no scenario declaration", cells[i].Scenario)
 		}
-		cells[i].Expected = s.Expected[version]
+		expected, ok := s.Expected[version]
+		if !ok {
+			return fmt.Errorf("scenario %s lacks expected verdict for iroh %s", s.Name, version)
+		}
+		cells[i].Expected = expected
 		cells[i].Description = s.Description
 		cells[i].Counterpart = s.Counterpart
 		delete(want, cells[i].Scenario)
 	}
-	if len(want) != 0 {
+	if requireAll && len(want) != 0 {
 		return fmt.Errorf("declared scenarios were not executed: %v", want)
 	}
 	return nil
