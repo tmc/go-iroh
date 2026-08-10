@@ -1,0 +1,1 @@
+agent: claude-code coordinator session 28D6308F (model claude-fable-5; pid 45205) date 2026-08-10T18:09Z — cherry-pick of 15CE perfbench fix onto compat-harness; relay-wedge diagnosis by perflab 59AF56EC (data-volume MAX_DATA starvation)
