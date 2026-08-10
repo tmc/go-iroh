@@ -1,7 +1,7 @@
 commit: 1d47b5f251bcaa831fb9b5ab3d04e0024d477ffe
 date: 2026-08-10T09:08:20Z
 claude-code: not-applicable (Codex)
-model: GPT-5.4
+model: Codex (GPT-5)
 tty: not a tty
 pid: 13487
 ITERM_SESSION_ID: w1t8p10:15CEF169-448C-4B70-AD13-CCD5A16BD46D
