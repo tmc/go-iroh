@@ -9,6 +9,7 @@ import (
 
 	"github.com/tmc/go-iroh/endpointticket"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 	"github.com/tmc/go-iroh/pkarr"
 	"github.com/tmc/go-iroh/postcard"
 )
@@ -25,7 +26,8 @@ type corpus struct {
 		Encoded string `json:"encoded"`
 		Bytes   string `json:"bytes"`
 	} `json:"endpoint_ticket"`
-	Pkarr struct {
+	CustomAddrTickets []customAddrTicketVector `json:"custom_addr_tickets"`
+	Pkarr             struct {
 		Bytes  string   `json:"bytes"`
 		Name   string   `json:"name"`
 		Values []string `json:"values"`
@@ -44,6 +46,12 @@ type keyVector struct {
 type uintVector struct {
 	Value    uint64 `json:"value"`
 	Postcard string `json:"postcard"`
+}
+
+type customAddrTicketVector struct {
+	Length  int    `json:"length"`
+	Encoded string `json:"encoded"`
+	Bytes   string `json:"bytes"`
 }
 
 func load(t *testing.T) corpus {
@@ -104,6 +112,35 @@ func TestEndpointTicketVector(t *testing.T) {
 	}
 	if got := ticket.String(); got != v.Encoded {
 		t.Fatalf("ticket re-encode = %s, want %s", got, v.Encoded)
+	}
+}
+
+func TestCustomAddrTicketVectorsDocumentIroh103Incompatibility(t *testing.T) {
+	wantLengths := []int{0, 1, 29, 30, 31, 255}
+	vectors := load(t).CustomAddrTickets
+	if len(vectors) != len(wantLengths) {
+		t.Fatalf("custom ticket count = %d, want %d", len(vectors), len(wantLengths))
+	}
+	var seed [key.SeedSize]byte
+	for i := range seed {
+		seed[i] = 0x2a
+	}
+	id := key.NewSecretKey(seed).Public().EndpointID()
+	for i, v := range vectors {
+		if v.Length != wantLengths[i] {
+			t.Fatalf("vector %d length = %d, want %d", i, v.Length, wantLengths[i])
+		}
+		if _, err := endpointticket.Parse(v.Encoded); err == nil {
+			t.Errorf("Rust 1.0.3 CustomAddr ticket length %d unexpectedly decoded", v.Length)
+		}
+		data := make([]byte, v.Length)
+		for i := range data {
+			data[i] = byte(i)
+		}
+		goTicket := endpointticket.New(netaddr.NewEndpointAddr(id, netaddr.NewCustomAddr(42, data)))
+		if slices.Equal(goTicket.EncodeBytes(), mustHex(t, v.Bytes)) {
+			t.Errorf("Rust 1.0.3 and Go CustomAddr ticket length %d unexpectedly matched", v.Length)
+		}
 	}
 }
 

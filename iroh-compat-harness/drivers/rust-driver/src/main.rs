@@ -2,14 +2,14 @@ use std::{
     io::{Read, Write},
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
     str::FromStr,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use data_encoding::HEXLOWER;
-use iroh_base::{EndpointAddr, SecretKey};
+use iroh_base::{CustomAddr, EndpointAddr, SecretKey, TransportAddr};
 use iroh_tickets::{Ticket, endpoint::EndpointTicket};
 use n0_future::{SinkExt, StreamExt};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use simple_dns::{
     CLASS, Name, Packet, ResourceRecord,
     rdata::{RData, TXT},
@@ -24,6 +24,7 @@ struct Corpus {
     keys: Vec<KeyVector>,
     postcard_uint: Vec<UintVector>,
     endpoint_ticket: TicketVector,
+    custom_addr_tickets: Vec<CustomAddrTicketVector>,
     pkarr: PkarrVector,
 }
 
@@ -46,6 +47,24 @@ struct UintVector {
 struct TicketVector {
     encoded: String,
     bytes: String,
+}
+
+#[derive(Serialize)]
+struct CustomAddrTicketVector {
+    length: usize,
+    encoded: String,
+    bytes: String,
+}
+
+#[derive(Serialize)]
+struct CustomAddrCorpus {
+    custom_addr_tickets: Vec<CustomAddrTicketVector>,
+}
+
+#[derive(Deserialize)]
+struct CustomAddrDecodeRequest {
+    length: usize,
+    encoded: String,
 }
 
 #[derive(Serialize)]
@@ -97,7 +116,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if command == "pq-client" {
             let policy = args.next().ok_or("pq-client requires a policy")?;
             let id = args.next().ok_or("pq-client requires an endpoint id")?;
-            let addr = args.next().ok_or("pq-client requires an endpoint address")?;
+            let addr = args
+                .next()
+                .ok_or("pq-client requires an endpoint address")?;
             if args.next().is_some() {
                 return Err("pq-client accepts a policy, endpoint id, and address".into());
             }
@@ -109,6 +130,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             return gossip_server().await;
         }
+        if command == "custom-addr-decode" {
+            if args.next().is_some() {
+                return Err("custom-addr-decode accepts no arguments".into());
+            }
+            return custom_addr_decode();
+        }
+        if command == "custom-addr-vectors" {
+            if args.next().is_some() {
+                return Err("custom-addr-vectors accepts no arguments".into());
+            }
+            let key = SecretKey::from_bytes(&[0x2a; 32]);
+            serde_json::to_writer(
+                std::io::stdout(),
+                &CustomAddrCorpus {
+                    custom_addr_tickets: custom_addr_ticket_vectors(&key),
+                },
+            )?;
+            println!();
+            return Ok(());
+        }
         return Err(format!("unknown command {command}").into());
     }
     write_corpus()
@@ -116,7 +157,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 const PQ_ALPN: &[u8] = b"go-iroh-compat/pq/1";
 
-fn pq_provider(policy: &str) -> Result<std::sync::Arc<rustls::crypto::CryptoProvider>, Box<dyn std::error::Error>> {
+fn pq_provider(
+    policy: &str,
+) -> Result<std::sync::Arc<rustls::crypto::CryptoProvider>, Box<dyn std::error::Error>> {
     use rustls::crypto::aws_lc_rs::{self, kx_group};
 
     let mut provider = aws_lc_rs::default_provider();
@@ -134,12 +177,20 @@ fn pq_provider(policy: &str) -> Result<std::sync::Arc<rustls::crypto::CryptoProv
     Ok(std::sync::Arc::new(provider))
 }
 
-fn negotiated_group(conn: &iroh::endpoint::Connection) -> Result<String, Box<dyn std::error::Error>> {
-    let data = conn.handshake_data().ok_or("Rust handshake data unavailable")?;
+fn negotiated_group(
+    conn: &iroh::endpoint::Connection,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let data = conn
+        .handshake_data()
+        .ok_or("Rust handshake data unavailable")?;
     let data = data
         .downcast::<noq::crypto::rustls::HandshakeData>()
         .map_err(|_| "Rust handshake data has unexpected type")?;
-    Ok(format!("{:?}", data.negotiated_key_exchange_group.ok_or("Rust negotiated group unavailable")?))
+    Ok(format!(
+        "{:?}",
+        data.negotiated_key_exchange_group
+            .ok_or("Rust negotiated group unavailable")?
+    ))
 }
 
 async fn pq_server(policy: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -339,12 +390,13 @@ async fn transport_server(mode: &str) -> Result<(), Box<dyn std::error::Error>> 
 
 fn dns_publish(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
     let key = SecretKey::from_bytes(&[0x43; 32]);
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros() as u64;
     let packet = signed_packet(
         &key,
         "_iroh",
         ["relay=https://relay.example/", "addr=127.0.0.1:4433"],
         30,
-        1_700_000_000_000_001,
+        timestamp,
     )?;
     let public = key.public().to_z32();
     let payload = &packet[32..];
@@ -413,6 +465,8 @@ fn write_corpus() -> Result<(), Box<dyn std::error::Error>> {
         bytes: HEXLOWER.encode(&ticket.encode_bytes()),
     };
 
+    let custom_addr_tickets = custom_addr_ticket_vectors(&ticket_key);
+
     let pkarr_bytes = signed_packet(
         &ticket_key,
         "_iroh",
@@ -434,9 +488,52 @@ fn write_corpus() -> Result<(), Box<dyn std::error::Error>> {
         keys,
         postcard_uint,
         endpoint_ticket,
+        custom_addr_tickets,
         pkarr,
     };
     serde_json::to_writer_pretty(std::io::stdout(), &corpus)?;
+    println!();
+    Ok(())
+}
+
+fn custom_addr_ticket_vectors(ticket_key: &SecretKey) -> Vec<CustomAddrTicketVector> {
+    [0usize, 1, 29, 30, 31, 255]
+        .into_iter()
+        .map(|length| {
+            let data: Vec<u8> = (0..length).map(|i| i as u8).collect();
+            let addr = EndpointAddr::from_parts(
+                ticket_key.public(),
+                [TransportAddr::Custom(CustomAddr::from_parts(42, &data))],
+            );
+            let ticket = EndpointTicket::new(addr);
+            CustomAddrTicketVector {
+                length,
+                encoded: ticket.encode_string(),
+                bytes: HEXLOWER.encode(&ticket.encode_bytes()),
+            }
+        })
+        .collect()
+}
+
+fn custom_addr_decode() -> Result<(), Box<dyn std::error::Error>> {
+    let requests: Vec<CustomAddrDecodeRequest> = serde_json::from_reader(std::io::stdin())?;
+    let accepted: Vec<bool> = requests
+        .into_iter()
+        .map(|request| {
+            let Ok(ticket) = EndpointTicket::decode_string(&request.encoded) else {
+                return false;
+            };
+            let expected: Vec<u8> = (0..request.length).map(|i| i as u8).collect();
+            ticket.endpoint_addr().addrs.iter().any(|addr| {
+                matches!(
+                    addr,
+                    TransportAddr::Custom(addr)
+                        if addr.id() == 42 && addr.data() == expected
+                )
+            })
+        })
+        .collect();
+    serde_json::to_writer(std::io::stdout(), &accepted)?;
     println!();
     Ok(())
 }

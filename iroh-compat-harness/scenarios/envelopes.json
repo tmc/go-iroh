@@ -1,0 +1,16 @@
+{
+  "envelopes": [
+    {
+      "surface": "CustomAddr endpoint tickets",
+      "upstream_version": "1.0.3-era releases",
+      "status": "predicted-incompatible",
+      "detail": "Observed with iroh-base 1.0.3 in both directions: upstream uses the legacy enum encoding."
+    },
+    {
+      "surface": "CustomAddr endpoint tickets",
+      "upstream_version": ">=NEXT (first release containing PR #4465)",
+      "status": "untested",
+      "detail": "Convergence target: upstream moved to go-iroh's length-prefixed byte format; no go-iroh codec change is required."
+    }
+  ]
+}
