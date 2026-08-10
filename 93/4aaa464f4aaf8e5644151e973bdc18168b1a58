@@ -1,0 +1,1 @@
+agent: claude-code coordinator session 28D6308F (model claude-fable-5; pid 48179) date 2026-08-10T18:12Z — cherry-pick 15CE stage-1 fix to main; root cause of perflab relay-forced ~1 GiB receiver wedge (59AF56EC)
