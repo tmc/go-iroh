@@ -1,0 +1,1 @@
+claude-code fable-5 coordinator session 28D6308F date 2026-08-10T12:57:02-0700 — H3 frame sorter fix, found by sorter-fuzz agent differential fuzzing (fuzztape follow-on); root cause of >1GiB relay wedge
