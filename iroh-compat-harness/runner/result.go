@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const Schema = "go-iroh-parity/1"
+const Schema = "go-iroh-parity/2"
 
 type Verdict string
 
@@ -38,8 +38,8 @@ type GoIroh struct {
 type Cell struct {
 	Scenario    string         `json:"scenario"`
 	Description string         `json:"description"`
+	Counterpart string         `json:"counterpart"`
 	Iroh        string         `json:"iroh"`
-	Tier        string         `json:"tier"`
 	Peer        string         `json:"peer,omitempty"`
 	PeerPID     int            `json:"peer_pid,omitempty"`
 	PeerDigest  string         `json:"peer_digest,omitempty"`
@@ -58,8 +58,8 @@ func (c Cell) Validate() error {
 	if strings.TrimSpace(c.Description) == "" {
 		return fmt.Errorf("cell %s: description is missing", c.Scenario)
 	}
-	if c.Tier != "A" && c.Tier != "B" {
-		return fmt.Errorf("cell %s: invalid tier %q", c.Scenario, c.Tier)
+	if c.Counterpart != "upstream CLI" && c.Counterpart != "Rust test driver" {
+		return fmt.Errorf("cell %s: invalid counterpart %q", c.Scenario, c.Counterpart)
 	}
 	if c.Result == Pass && (c.Peer == "" || c.PeerPID <= 0 || c.PeerDigest == "") {
 		return fmt.Errorf("cell %s: pass lacks real Rust peer evidence", c.Scenario)
@@ -164,7 +164,7 @@ func (r *Report) Markdown() []byte {
 	b.WriteString("## Compatibility matrix\n\n")
 	b.WriteString("| Scenario | Rust iroh | Rust counterpart | Result | Peer |\n|---|---:|---|:---:|---|\n")
 	for _, c := range cells {
-		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", c.Scenario, c.Iroh, rustCounterpart(c), c.Result, c.Peer)
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", c.Scenario, c.Iroh, c.Counterpart, c.Result, c.Peer)
 	}
 	b.WriteString("\n## Scenario definitions\n\n")
 	b.WriteString("| Scenario | What a pass proves |\n|---|---|\n")
@@ -180,15 +180,4 @@ func (r *Report) Markdown() []byte {
 	b.WriteString("```sh\ncd iroh-compat-harness\nmake parity\n```\n\n")
 	b.WriteString("See the [harness README](iroh-compat-harness/README.md) for prerequisites, the [scenario declarations](iroh-compat-harness/scenarios/) for predicted verdicts and definitions, and [results.json](iroh-compat-harness/results/results.json) for the machine-readable report.\n")
 	return []byte(b.String())
-}
-
-func rustCounterpart(c Cell) string {
-	switch c.Tier {
-	case "A":
-		return "upstream CLI"
-	case "B":
-		return "Rust test driver"
-	default:
-		return c.Tier
-	}
 }

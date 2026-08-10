@@ -3,9 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -15,7 +13,7 @@ import (
 )
 
 func RunQADReport(bin, version, digest string) (cell Cell) {
-	cell = Cell{Scenario: "discovery/qad-report", Iroh: version, Tier: "A", Expected: Pass, Peer: "iroh-doctor@" + digest, PeerDigest: digest}
+	cell = Cell{Scenario: "discovery/qad-report", Iroh: version, Peer: "iroh-doctor@" + digest, PeerDigest: digest}
 	start := time.Now()
 	defer func() { cell.DurationMS = time.Since(start).Milliseconds() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -85,7 +83,7 @@ func RunQADReport(bin, version, digest string) (cell Cell) {
 		"compared_fields":      qadReportFields,
 	}
 	evidence := fmt.Sprintf("upstream iroh-doctor report:\n%s\nGo report:\n%+v\n", rust.String(), goReport)
-	artifact, err := writeQADArtifact(version, evidence)
+	artifact, err := writeArtifact("discovery-qad-report-"+version+".log", evidence)
 	if err != nil {
 		return finishCell(cell, SetupError, err.Error())
 	}
@@ -153,20 +151,4 @@ func rustBoolField(report, field string) (bool, bool) {
 		return false, false
 	}
 	return match[1] == "true", true
-}
-
-func writeQADArtifact(version, evidence string) (string, error) {
-	root, err := harnessRoot()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(root, "results", "artifacts")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("create QAD artifact directory: %w", err)
-	}
-	path := filepath.Join(dir, "discovery-qad-report-"+version+".log")
-	if err := os.WriteFile(path, []byte(strings.TrimSpace(evidence)+"\n"), 0o644); err != nil {
-		return "", fmt.Errorf("write QAD artifact: %w", err)
-	}
-	return filepath.ToSlash(filepath.Join("results", "artifacts", filepath.Base(path))), nil
 }
