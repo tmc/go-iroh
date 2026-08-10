@@ -19,7 +19,7 @@ import (
 )
 
 func RunGossip(bin, version, digest string) (cell Cell) {
-	cell = Cell{Scenario: "vectors/gossip-frame", Iroh: version, Tier: "B", Expected: Pass, Peer: "rust-driver@" + digest, PeerDigest: digest}
+	cell = Cell{Scenario: "vectors/gossip-frame", Iroh: version, Peer: "rust-driver@" + digest, PeerDigest: digest}
 	start := time.Now()
 	defer func() { cell.DurationMS = time.Since(start).Milliseconds() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

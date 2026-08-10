@@ -7,7 +7,7 @@ import (
 )
 
 func TestPassRequiresRustPeerEvidence(t *testing.T) {
-	c := Cell{Scenario: "echo", Description: "A pass proves echo.", Iroh: "1.0.3", Tier: "A", Result: Pass}
+	c := Cell{Scenario: "echo", Description: "A pass proves echo.", Counterpart: "upstream CLI", Iroh: "1.0.3", Result: Pass}
 	if err := c.Validate(); err == nil {
 		t.Fatal("pass without Rust peer evidence was accepted")
 	}
@@ -20,7 +20,7 @@ func TestPassRequiresRustPeerEvidence(t *testing.T) {
 }
 
 func TestCellRequiresDescription(t *testing.T) {
-	c := Cell{Scenario: "echo", Iroh: "1.0.3", Tier: "A", Result: Fail}
+	c := Cell{Scenario: "echo", Iroh: "1.0.3", Counterpart: "upstream CLI", Result: Fail}
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "description is missing") {
 		t.Fatalf("Validate() error = %v, want missing description", err)
 	}
@@ -54,8 +54,8 @@ func TestMarkdownNamesRustCounterpart(t *testing.T) {
 		Generated: time.Unix(0, 0).UTC(),
 		GoIroh:    GoIroh{Commit: "abc123"},
 		Cells: []Cell{
-			{Scenario: "echo", Description: "Go and Rust exchange an echo, and a pass proves compatible streams.", Iroh: "1.0.3", Tier: "A", Result: Pass, Peer: "iroh-doctor@sha256:abc"},
-			{Scenario: "datagrams", Description: "Go and Rust exchange datagrams, and a pass proves compatible datagrams.", Iroh: "1.0.3", Tier: "B", Result: Pass, Peer: "rust-driver@sha256:def"},
+			{Scenario: "echo", Description: "Go and Rust exchange an echo, and a pass proves compatible streams.", Counterpart: "upstream CLI", Iroh: "1.0.3", Result: Pass, Peer: "iroh-doctor@sha256:abc"},
+			{Scenario: "datagrams", Description: "Go and Rust exchange datagrams, and a pass proves compatible datagrams.", Counterpart: "Rust test driver", Iroh: "1.0.3", Result: Pass, Peer: "rust-driver@sha256:def"},
 		},
 	}
 	got := string(r.Markdown())

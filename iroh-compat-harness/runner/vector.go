@@ -60,12 +60,8 @@ func RunVectorCorpus(bin, corpus, version string) []Cell {
 func vectorCells(version string, result Verdict, detail, digest string, pid int, peer string) []Cell {
 	cells := make([]Cell, len(vectorScenarios))
 	for i, scenario := range vectorScenarios {
-		expected := Pass
-		if version != "1.0.3" {
-			expected = Unsupported
-		}
 		cells[i] = Cell{
-			Scenario: scenario, Iroh: version, Tier: "B", Result: result, Expected: expected,
+			Scenario: scenario, Iroh: version, Result: result,
 			Detail: detail, Peer: peer, PeerPID: pid, PeerDigest: digest,
 		}
 	}

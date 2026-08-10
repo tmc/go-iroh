@@ -27,7 +27,7 @@ func RunDiscovery(goDNS, rustDNS, rustRelay, rustClient, version, dnsDigest, rel
 }
 
 func runGoPublishRustDNS(bin, version, digest string) (cell Cell) {
-	cell = Cell{Scenario: "discovery/go-publish-rust-dns", Iroh: version, Tier: "A", Expected: Pass, Peer: "iroh-dns-server@" + digest, PeerDigest: digest}
+	cell = Cell{Scenario: "discovery/go-publish-rust-dns", Iroh: version, Peer: "iroh-dns-server@" + digest, PeerDigest: digest}
 	start := time.Now()
 	defer func() { cell.DurationMS = time.Since(start).Milliseconds() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -54,7 +54,7 @@ func runGoPublishRustDNS(bin, version, digest string) (cell Cell) {
 }
 
 func runRustPublishGoDNS(goDNS, rustClient, version, digest string) (cell Cell) {
-	cell = Cell{Scenario: "discovery/rust-publish-go-dns", Iroh: version, Tier: "B", Expected: Pass, Peer: "rust-driver@" + digest, PeerDigest: digest}
+	cell = Cell{Scenario: "discovery/rust-publish-go-dns", Iroh: version, Peer: "rust-driver@" + digest, PeerDigest: digest}
 	start := time.Now()
 	defer func() { cell.DurationMS = time.Since(start).Milliseconds() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -93,7 +93,7 @@ func runRustPublishGoDNS(goDNS, rustClient, version, digest string) (cell Cell) 
 }
 
 func runRelayURLAgreement(relayBin, rustClient, version, relayDigest, clientDigest string) (cell Cell) {
-	cell = Cell{Scenario: "discovery/relay-urls", Iroh: version, Tier: "A", Expected: Pass, Peer: "iroh-relay@" + relayDigest, PeerDigest: relayDigest}
+	cell = Cell{Scenario: "discovery/relay-urls", Iroh: version, Peer: "iroh-relay@" + relayDigest, PeerDigest: relayDigest}
 	start := time.Now()
 	defer func() { cell.DurationMS = time.Since(start).Milliseconds() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

@@ -76,7 +76,6 @@ func runGoRelayClientAgainst(ctx context.Context, addr string) error {
 
 func runRustRelayClient(relayBin string, rustRelay bool, rustClient, version, digest, scenario string) (cell Cell) {
 	cell = relayCell(scenario, version, digest)
-	cell.Tier = "B"
 	cell.Peer = "rust-driver@" + digest
 	start := time.Now()
 	defer func() { cell.DurationMS = time.Since(start).Milliseconds() }()
@@ -143,7 +142,7 @@ func runRelayEstablishTimeout(bin, version, digest string) (cell Cell) {
 }
 
 func relayCell(scenario, version, digest string) Cell {
-	return Cell{Scenario: scenario, Iroh: version, Tier: "A", Expected: Pass, Peer: "iroh-relay@" + digest, PeerDigest: digest}
+	return Cell{Scenario: scenario, Iroh: version, Peer: "iroh-relay@" + digest, PeerDigest: digest}
 }
 
 type relayProcess struct {

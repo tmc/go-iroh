@@ -9,7 +9,7 @@ import (
 
 func TestApplyExpectedRequiresDescription(t *testing.T) {
 	dir := t.TempDir()
-	data := []byte(`{"scenarios":[{"name":"x","expected":{"1.0.3":"pass"}}]}`)
+	data := []byte(`{"scenarios":[{"name":"x","counterpart":"upstream CLI","expected":{"1.0.3":"pass"}}]}`)
 	if err := os.WriteFile(filepath.Join(dir, "test.json"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +22,7 @@ func TestApplyExpectedRequiresDescription(t *testing.T) {
 
 func TestApplyExpectedCopiesDescription(t *testing.T) {
 	dir := t.TempDir()
-	data := []byte(`{"scenarios":[{"name":"x","description":"A pass proves x.","expected":{"1.0.3":"pass"}}]}`)
+	data := []byte(`{"scenarios":[{"name":"x","description":"A pass proves x.","counterpart":"upstream CLI","expected":{"1.0.3":"pass"}}]}`)
 	if err := os.WriteFile(filepath.Join(dir, "test.json"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -32,5 +32,21 @@ func TestApplyExpectedCopiesDescription(t *testing.T) {
 	}
 	if cells[0].Description != "A pass proves x." {
 		t.Fatalf("description = %q", cells[0].Description)
+	}
+	if cells[0].Counterpart != "upstream CLI" {
+		t.Fatalf("counterpart = %q", cells[0].Counterpart)
+	}
+}
+
+func TestApplyExpectedRequiresCounterpart(t *testing.T) {
+	dir := t.TempDir()
+	data := []byte(`{"scenarios":[{"name":"x","description":"A pass proves x.","expected":{"1.0.3":"pass"}}]}`)
+	if err := os.WriteFile(filepath.Join(dir, "test.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cells := []Cell{{Scenario: "x", Iroh: "1.0.3"}}
+	err := ApplyExpected(dir, "1.0.3", cells)
+	if err == nil || !strings.Contains(err.Error(), "invalid counterpart") {
+		t.Fatalf("ApplyExpected() error = %v, want invalid counterpart", err)
 	}
 }
