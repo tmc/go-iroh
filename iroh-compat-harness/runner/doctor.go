@@ -33,7 +33,7 @@ func RunDoctorEcho(bin, version, digest string) []Cell {
 }
 
 func runDoctorNegative(bin, version, digest, scenario string, wrongALPN bool) (cell Cell) {
-	cell = Cell{Scenario: scenario, Iroh: version, Tier: "A", Expected: Pass, Peer: "iroh-doctor@" + digest, PeerDigest: digest}
+	cell = Cell{Scenario: scenario, Iroh: version, Peer: "iroh-doctor@" + digest, PeerDigest: digest}
 	start := time.Now()
 	defer func() { cell.DurationMS = time.Since(start).Milliseconds() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -94,7 +94,7 @@ func runDoctorNegative(bin, version, digest, scenario string, wrongALPN bool) (c
 }
 
 func runRustClientGoServer(bin, version, digest string) (cell Cell) {
-	cell = Cell{Scenario: "handshake/rust-client-go-server", Iroh: version, Tier: "A", Expected: Pass, Peer: "iroh-doctor@" + digest, PeerDigest: digest}
+	cell = Cell{Scenario: "handshake/rust-client-go-server", Iroh: version, Peer: "iroh-doctor@" + digest, PeerDigest: digest}
 	start := time.Now()
 	defer func() { cell.DurationMS = time.Since(start).Milliseconds() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -129,7 +129,7 @@ func runRustClientGoServer(bin, version, digest string) (cell Cell) {
 }
 
 func runGoClientRustServer(bin, version, digest string) (cell Cell) {
-	cell = Cell{Scenario: "handshake/go-client-rust-server", Iroh: version, Tier: "A", Expected: Pass, Peer: "iroh-doctor@" + digest, PeerDigest: digest}
+	cell = Cell{Scenario: "handshake/go-client-rust-server", Iroh: version, Peer: "iroh-doctor@" + digest, PeerDigest: digest}
 	start := time.Now()
 	defer func() { cell.DurationMS = time.Since(start).Milliseconds() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)

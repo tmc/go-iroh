@@ -195,7 +195,7 @@ func transportEcho(ctx context.Context, conn *iroh.Conn, message string) error {
 }
 
 func startTransportCell(bin, version, digest, scenario, mode string) (Cell, context.Context, context.CancelFunc, *transportPeer, *iroh.Endpoint) {
-	cell := Cell{Scenario: scenario, Iroh: version, Tier: "B", Expected: Pass, Peer: "rust-driver@" + digest, PeerDigest: digest}
+	cell := Cell{Scenario: scenario, Iroh: version, Peer: "rust-driver@" + digest, PeerDigest: digest}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	peer, err := startTransportPeer(ctx, bin, mode)
 	if err != nil {

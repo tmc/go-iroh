@@ -15,6 +15,7 @@ type scenarioFile struct {
 type scenario struct {
 	Name        string             `json:"name"`
 	Description string             `json:"description"`
+	Counterpart string             `json:"counterpart"`
 	Expected    map[string]Verdict `json:"expected"`
 }
 
@@ -37,6 +38,9 @@ func ApplyExpected(dir, version string, cells []Cell) error {
 			if strings.TrimSpace(s.Description) == "" {
 				return fmt.Errorf("scenario %s lacks description", s.Name)
 			}
+			if s.Counterpart != "upstream CLI" && s.Counterpart != "Rust test driver" {
+				return fmt.Errorf("scenario %s has invalid counterpart %q", s.Name, s.Counterpart)
+			}
 			_, ok := s.Expected[version]
 			if !ok {
 				return fmt.Errorf("scenario %s lacks expected verdict for iroh %s", s.Name, version)
@@ -54,6 +58,7 @@ func ApplyExpected(dir, version string, cells []Cell) error {
 		}
 		cells[i].Expected = s.Expected[version]
 		cells[i].Description = s.Description
+		cells[i].Counterpart = s.Counterpart
 		delete(want, cells[i].Scenario)
 	}
 	if len(want) != 0 {

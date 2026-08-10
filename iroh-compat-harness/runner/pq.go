@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -25,7 +23,7 @@ func RunPQMatrix(bin, version, digest string) []Cell {
 }
 
 func runPQPolicy(bin, version, digest, scenario, rustPolicy string, goPolicy iroh.KeyExchangePolicy, refusal bool) (cell Cell) {
-	cell = Cell{Scenario: scenario, Iroh: version, Tier: "B", Expected: Pass, Peer: "rust-driver@" + digest, PeerDigest: digest}
+	cell = Cell{Scenario: scenario, Iroh: version, Peer: "rust-driver@" + digest, PeerDigest: digest}
 	start := time.Now()
 	defer func() { cell.DurationMS = time.Since(start).Milliseconds() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -61,7 +59,8 @@ func runPQPolicy(bin, version, digest, scenario, rustPolicy string, goPolicy iro
 			"negotiated_group": "X25519MLKEM768",
 		}
 	}
-	artifact, err := writePQArtifact(version, scenario, evidence.String())
+	name := strings.ReplaceAll(scenario, "/", "-") + "-" + version + ".log"
+	artifact, err := writeArtifact(name, evidence.String())
 	if err != nil {
 		return finishCell(cell, SetupError, err.Error())
 	}
@@ -193,38 +192,4 @@ func pqEcho(ctx context.Context, conn *iroh.Conn) error {
 func startTransportPeerCommand(ctx context.Context, bin string, args ...string) (*transportPeer, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	return startTransportPeerProcess(cmd)
-}
-
-func writePQArtifact(version, scenario, evidence string) (string, error) {
-	root, err := harnessRoot()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(root, "results", "artifacts")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("create PQ artifact directory: %w", err)
-	}
-	name := strings.ReplaceAll(scenario, "/", "-") + "-" + version + ".log"
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(strings.TrimSpace(evidence)+"\n"), 0o644); err != nil {
-		return "", fmt.Errorf("write PQ artifact: %w", err)
-	}
-	return filepath.ToSlash(filepath.Join("results", "artifacts", name)), nil
-}
-
-func harnessRoot() (string, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "scenarios", "handshake.json")); err == nil {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("compatibility harness root not found")
-		}
-		dir = parent
-	}
 }
