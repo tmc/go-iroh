@@ -50,3 +50,18 @@ func TestApplyExpectedRequiresCounterpart(t *testing.T) {
 		t.Fatalf("ApplyExpected() error = %v, want invalid counterpart", err)
 	}
 }
+
+func TestLoadEnvelopes(t *testing.T) {
+	dir := t.TempDir()
+	data := []byte(`{"envelopes":[{"surface":"CustomAddr endpoint tickets","upstream_version":"1.0.3-era releases","status":"predicted-incompatible","detail":"Observed in both directions."}]}`)
+	if err := os.WriteFile(filepath.Join(dir, "envelopes.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envelopes, err := LoadEnvelopes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(envelopes) != 1 || envelopes[0].Status != "predicted-incompatible" {
+		t.Fatalf("envelopes = %#v", envelopes)
+	}
+}

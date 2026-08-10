@@ -1,0 +1,43 @@
+name: wire drift
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  custom-addr:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+        with:
+          repository: n0-computer/iroh
+          ref: main
+          path: upstream-iroh
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check upstream-main wire vectors
+        id: drift
+        continue-on-error: true
+        working-directory: iroh-compat-harness
+        run: |
+          cargo build --release --manifest-path drivers/rust-driver/Cargo.toml \
+            --config "patch.crates-io.iroh-base.path='${GITHUB_WORKSPACE}/upstream-iroh/iroh-base'"
+          go run ./cmd/iroh-wire-drift \
+            -rust-vector drivers/rust-driver/target/release/go-iroh-compat-rust-driver
+      - name: Report drift
+        if: always()
+        run: |
+          if [ "${{ steps.drift.outcome }}" = success ]; then
+            echo "CustomAddr wire vectors match the >=NEXT prediction." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::CustomAddr wire vectors differ from the >=NEXT prediction"
+            echo "CustomAddr wire drift detected; inspect the vector step before changing a release prediction." >> "$GITHUB_STEP_SUMMARY"
+          fi
