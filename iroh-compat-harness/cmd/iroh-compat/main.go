@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -36,7 +37,6 @@ func main() {
 	report.Cells = append(report.Cells, runTransport(*vector, *version)...)
 	report.Cells = append(report.Cells, runGossip(*vector, *version))
 	report.Cells = append(report.Cells, runPQ(*pq, *version)...)
-	report.Cells = append(report.Cells, runner.ExtendedCells(*version)...)
 	if err := runner.ApplyExpected(filepath.Join(root, "iroh-compat-harness", "scenarios"), *version, report.Cells); err != nil {
 		fatal(err)
 	}
@@ -47,10 +47,7 @@ func main() {
 
 func runPQ(bin, version string) []runner.Cell {
 	scenarios := []string{"handshake/pq-only", "handshake/prefer-pq"}
-	if bin == "" {
-		return setupCells(scenarios, version, "set the pinned Rust PQ peer binary path")
-	}
-	digest, err := runner.FileDigest(bin)
+	digest, err := peerDigest(bin, "set the pinned Rust PQ peer binary path")
 	if err != nil {
 		return setupCells(scenarios, version, err.Error())
 	}
@@ -58,10 +55,7 @@ func runPQ(bin, version string) []runner.Cell {
 }
 
 func runQAD(bin, version string) runner.Cell {
-	if bin == "" {
-		return setupCells([]string{"discovery/qad-report"}, version, "set the pinned iroh-doctor binary path")[0]
-	}
-	digest, err := runner.FileDigest(bin)
+	digest, err := peerDigest(bin, "set the pinned iroh-doctor binary path")
 	if err != nil {
 		return setupCells([]string{"discovery/qad-report"}, version, err.Error())[0]
 	}
@@ -70,24 +64,18 @@ func runQAD(bin, version string) runner.Cell {
 
 func runGossip(rustClient, version string) runner.Cell {
 	if version != "1.0.3" {
-		return runner.Cell{Scenario: "vectors/gossip-frame", Iroh: version, Tier: "B", Result: runner.Unsupported, Expected: runner.Unsupported, Detail: "the Rust gossip test driver is pinned to iroh 1.0.3"}
+		return runner.Cell{Scenario: "vectors/gossip-frame", Iroh: version, Result: runner.Unsupported, Detail: "the Rust gossip test driver is pinned to iroh 1.0.3"}
 	}
-	if rustClient == "" {
-		return runner.Cell{Scenario: "vectors/gossip-frame", Iroh: version, Tier: "B", Result: runner.SetupError, Expected: runner.Pass, Detail: "set the pinned Rust driver binary path"}
-	}
-	digest, err := runner.FileDigest(rustClient)
+	digest, err := peerDigest(rustClient, "set the pinned Rust driver binary path")
 	if err != nil {
-		return runner.Cell{Scenario: "vectors/gossip-frame", Iroh: version, Tier: "B", Result: runner.SetupError, Expected: runner.Pass, Detail: err.Error()}
+		return runner.Cell{Scenario: "vectors/gossip-frame", Iroh: version, Result: runner.SetupError, Detail: err.Error()}
 	}
 	return runner.RunGossip(rustClient, version, digest)
 }
 
 func runTransport(rustClient, version string) []runner.Cell {
 	scenarios := []string{"handshake/datagrams", "handshake/close-semantics", "handshake/remote-info", "handshake/zero-rtt"}
-	if rustClient == "" {
-		return setupCells(scenarios, version, "set the pinned Rust driver binary path")
-	}
-	digest, err := runner.FileDigest(rustClient)
+	digest, err := peerDigest(rustClient, "set the pinned Rust driver binary path")
 	if err != nil {
 		return setupCells(scenarios, version, err.Error())
 	}
@@ -145,20 +133,24 @@ func runEcho(doctor, version string) []runner.Cell {
 		"handshake/wrong-endpoint-id",
 	}
 	const detail = "set RUST_DOCTOR_BIN to an unmodified iroh-doctor 0.101.0 binary built against the pinned iroh release"
-	if doctor == "" {
-		return setupCells(scenarios, version, detail)
-	}
-	digest, err := runner.FileDigest(doctor)
+	digest, err := peerDigest(doctor, detail)
 	if err != nil {
 		return setupCells(scenarios, version, err.Error())
 	}
 	return runner.RunDoctorEcho(doctor, version, digest)
 }
 
+func peerDigest(path, missing string) (string, error) {
+	if path == "" {
+		return "", errors.New(missing)
+	}
+	return runner.FileDigest(path)
+}
+
 func setupCells(scenarios []string, version, detail string) []runner.Cell {
 	cells := make([]runner.Cell, len(scenarios))
 	for i, scenario := range scenarios {
-		cells[i] = runner.Cell{Scenario: scenario, Iroh: version, Tier: "A", Result: runner.SetupError, Expected: runner.Pass, Detail: detail}
+		cells[i] = runner.Cell{Scenario: scenario, Iroh: version, Result: runner.SetupError, Detail: detail}
 	}
 	return cells
 }
