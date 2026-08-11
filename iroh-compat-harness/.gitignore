@@ -1,2 +1,3 @@
 /drivers/rust-driver/target/
 /results/artifacts/
+/results/tip.json

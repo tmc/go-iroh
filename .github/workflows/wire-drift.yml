@@ -18,6 +18,7 @@ jobs:
         with:
           repository: n0-computer/iroh
           ref: main
+          fetch-depth: 0
           path: upstream-iroh
       - uses: actions/setup-go@v6
         with:
@@ -28,16 +29,33 @@ jobs:
         continue-on-error: true
         working-directory: iroh-compat-harness
         run: |
-          cargo build --release --manifest-path drivers/rust-driver/Cargo.toml \
+          upstream_commit=$(git -C "$GITHUB_WORKSPACE/upstream-iroh" rev-parse HEAD)
+          upstream_describe=$(git -C "$GITHUB_WORKSPACE/upstream-iroh" describe --tags --long --always)
+          cp -R drivers/rust-driver "$RUNNER_TEMP/rust-driver-tip"
+          cargo build --release --manifest-path "$RUNNER_TEMP/rust-driver-tip/Cargo.toml" \
+            --target-dir "$RUNNER_TEMP/rust-driver-tip-target" \
             --config "patch.crates-io.iroh-base.path='${GITHUB_WORKSPACE}/upstream-iroh/iroh-base'"
           go run ./cmd/iroh-wire-drift \
-            -rust-vector drivers/rust-driver/target/release/go-iroh-compat-rust-driver
+            -rust-vector "$RUNNER_TEMP/rust-driver-tip-target/release/go-iroh-compat-rust-driver" \
+            -upstream-commit "$upstream_commit" \
+            -upstream-describe "$upstream_describe"
       - name: Report drift
         if: always()
         run: |
+          if [ -f COMPATIBILITY-tip.md ]; then
+            cat COMPATIBILITY-tip.md >> "$GITHUB_STEP_SUMMARY"
+          fi
           if [ "${{ steps.drift.outcome }}" = success ]; then
-            echo "CustomAddr wire vectors match the >=NEXT prediction." >> "$GITHUB_STEP_SUMMARY"
+            echo "CustomAddr wire vectors match the pinned 1.1-pre prediction." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "::warning::CustomAddr wire vectors differ from the >=NEXT prediction"
+            echo "::warning::CustomAddr wire vectors differ from the pinned 1.1-pre prediction"
             echo "CustomAddr wire drift detected; inspect the vector step before changing a release prediction." >> "$GITHUB_STEP_SUMMARY"
           fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: wire-drift-tip
+          path: |
+            COMPATIBILITY-tip.md
+            iroh-compat-harness/results/tip.json
+          if-no-files-found: warn
