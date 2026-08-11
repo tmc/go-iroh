@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -14,13 +13,20 @@ import (
 )
 
 func main() {
-	version := flag.String("iroh-version", "1.0.3", "Rust iroh version")
+	releaseKey := flag.String("release-key", "1.0", "released-train scenario key")
+	releaseTrain := flag.String("release-train", "1.0", "released upstream minor train")
+	releaseVersion := flag.String("release-version", "", "pinned upstream release")
+	preKey := flag.String("pre-key", "1.1-pre", "pre-release scenario key")
+	preTrain := flag.String("pre-train", "1.1", "target upstream minor train")
+	preCommit := flag.String("pre-commit", "", "pinned upstream pre-release commit")
+	commitOverride := flag.String("commit", "", "go-iroh source commit override")
 	doctor := flag.String("rust-doctor", "", "path to the pinned iroh-doctor binary")
 	goRelay := flag.String("go-relay", "", "path to the go-iroh relay binary")
 	rustRelay := flag.String("rust-relay", "", "path to the pinned upstream iroh-relay binary")
 	goDNS := flag.String("go-dns", "", "path to the go-iroh DNS server binary")
 	rustDNS := flag.String("rust-dns", "", "path to the pinned upstream iroh-dns-server binary")
 	vector := flag.String("rust-vector", "", "path to the pinned Rust vector driver")
+	preVector := flag.String("rust-pre-vector", "", "path to the pre-release Rust vector driver")
 	pq := flag.String("rust-pq", "", "path to the pinned Rust PQ peer")
 	flag.Parse()
 
@@ -28,23 +34,38 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	report := runner.Report{Schema: runner.Schema, Generated: time.Now().UTC(), GoIroh: runner.GoIroh{Version: "main", Commit: gitCommit(root)}}
-	report.Cells = runner.RunVectorCorpus(*vector, filepath.Join(root, "iroh-compat-harness", "vectors", "corpus.json"), *version)
-	report.Cells = append(report.Cells, runEcho(*doctor, *version)...)
-	report.Cells = append(report.Cells, runRelay(*goRelay, *rustRelay, *vector, *version)...)
-	report.Cells = append(report.Cells, runDiscovery(*goDNS, *rustDNS, *rustRelay, *vector, *version)...)
-	report.Cells = append(report.Cells, runQAD(*doctor, *version))
-	report.Cells = append(report.Cells, runTransport(*vector, *version)...)
-	report.Cells = append(report.Cells, runGossip(*vector, *version))
-	report.Cells = append(report.Cells, runPQ(*pq, *version)...)
+	commit, err := gitCommit(root, *commitOverride)
+	if err != nil {
+		fatal(err)
+	}
+	report := runner.Report{
+		Schema: runner.Schema, Generated: time.Now().UTC(), GoIroh: runner.GoIroh{Version: "main", Commit: commit},
+		Pins: []runner.Pin{
+			{Key: *releaseKey, Train: *releaseTrain, Version: *releaseVersion, Kind: "release"},
+			{Key: *preKey, Train: *preTrain, Commit: *preCommit, Kind: "pre-release"},
+		},
+	}
+	report.Cells = runner.RunVectorCorpus(*vector, filepath.Join(root, "iroh-compat-harness", "vectors", "corpus.json"), *releaseKey)
+	report.Cells = append(report.Cells, runEcho(*doctor, *releaseKey)...)
+	report.Cells = append(report.Cells, runRelay(*goRelay, *rustRelay, *vector, *releaseKey)...)
+	report.Cells = append(report.Cells, runDiscovery(*goDNS, *rustDNS, *rustRelay, *vector, *releaseKey)...)
+	report.Cells = append(report.Cells, runQAD(*doctor, *releaseKey))
+	report.Cells = append(report.Cells, runTransport(*vector, *releaseKey)...)
+	report.Cells = append(report.Cells, runGossip(*vector, *releaseKey))
+	report.Cells = append(report.Cells, runPQ(*pq, *releaseKey)...)
 	scenarioDir := filepath.Join(root, "iroh-compat-harness", "scenarios")
 	report.Envelopes, err = runner.LoadEnvelopes(scenarioDir)
 	if err != nil {
 		fatal(err)
 	}
-	if err := runner.ApplyExpected(scenarioDir, *version, report.Cells); err != nil {
+	if err := runner.ApplyExpected(scenarioDir, *releaseKey, report.Cells); err != nil {
 		fatal(err)
 	}
+	preCells := runner.RunCustomAddrLive(*preVector, *preKey)
+	if err := runner.ApplyExpectedSubset(scenarioDir, *preKey, preCells); err != nil {
+		fatal(err)
+	}
+	report.Cells = append(report.Cells, preCells...)
 	if err := report.Write(filepath.Join(root, "iroh-compat-harness", "results"), root); err != nil {
 		fatal(err)
 	}
@@ -68,9 +89,6 @@ func runQAD(bin, version string) runner.Cell {
 }
 
 func runGossip(rustClient, version string) runner.Cell {
-	if version != "1.0.3" {
-		return runner.Cell{Scenario: "vectors/gossip-frame", Iroh: version, Result: runner.Unsupported, Detail: "the Rust gossip test driver is pinned to iroh 1.0.3"}
-	}
 	digest, err := peerDigest(rustClient, "set the pinned Rust driver binary path")
 	if err != nil {
 		return runner.Cell{Scenario: "vectors/gossip-frame", Iroh: version, Result: runner.SetupError, Detail: err.Error()}
@@ -180,12 +198,8 @@ func repoRoot() (string, error) {
 	}
 }
 
-func gitCommit(root string) string {
-	out, err := exec.Command("git", "-C", root, "describe", "--always", "--dirty").Output()
-	if err != nil {
-		return "unknown"
-	}
-	return string(out[:len(out)-1])
+func gitCommit(root, override string) (string, error) {
+	return runner.SourceCommit(root, override)
 }
 
 func fatal(err error) {

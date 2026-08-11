@@ -4,11 +4,14 @@ services:
       context: .
       dockerfile: images/parity/Dockerfile
       args:
-        RUST_IMAGE: go-iroh-compat:iroh-${IROH_VERSION:-1.0.3}
+        RUST_IMAGE: go-iroh-compat:iroh-${IROH_VERSION:?set IROH_VERSION}
+        IROH_PRE_COMMIT: ${IROH_PRE_COMMIT}
     environment:
       IROH_VERSION: ${IROH_VERSION:-1.0.3}
       RUST_DOCTOR_BIN: /usr/local/bin/iroh-doctor
       RUST_VECTOR_BIN: /usr/local/bin/rust-driver
+      RUST_PRE_VECTOR_BIN: /usr/local/bin/rust-driver-pre
+      GO_IROH_COMMIT: ${GO_IROH_COMMIT}
       RUST_DNS_BIN: /usr/local/bin/iroh-dns-server
     volumes:
       - ..:/work
