@@ -1,14 +1,18 @@
 .PHONY: parity parity-native test regen-vectors vectors canaries doctor-image doctor-image-build release-check
 
-IROH_VERSION ?= 1.0.3
+include pins.env
+
+IROH_VERSION ?= $(IROH_RELEASE_VERSION)
 RUST_DOCTOR_BIN ?=
 RUST_RELAY_BIN ?=
 RUST_DNS_BIN ?=
 RUST_VECTOR_BIN ?=
+RUST_PRE_VECTOR_BIN ?=
+GO_IROH_COMMIT ?=
 DOCTOR_OUTPUT ?= $(HOME)/tmp/go-iroh-compat/iroh-doctor-$(IROH_VERSION)
 
 parity: doctor-image-build
-	IROH_VERSION=$(IROH_VERSION) docker compose run --build --rm parity
+	GO_IROH_COMMIT=$$(git -C .. describe --always --dirty) IROH_VERSION=$(IROH_VERSION) IROH_PRE_COMMIT=$(IROH_PRE_COMMIT) docker compose run --build --rm parity
 
 parity-native:
 	go test ./vectors
@@ -16,7 +20,7 @@ parity-native:
 	trap 'rm -rf "$$work"' EXIT; \
 	go build -o "$$work/iroh-relay" ../cmd/iroh-relay; \
 	go build -o "$$work/iroh-dns-server" ../cmd/iroh-dns-server; \
-	go run ./cmd/iroh-compat -iroh-version $(IROH_VERSION) -go-relay "$$work/iroh-relay" -go-dns "$$work/iroh-dns-server" -rust-doctor "$(RUST_DOCTOR_BIN)" -rust-relay "$(RUST_RELAY_BIN)" -rust-dns "$(RUST_DNS_BIN)" -rust-vector "$(RUST_VECTOR_BIN)" -rust-pq "$(RUST_VECTOR_BIN)"
+	go run ./cmd/iroh-compat -commit "$(GO_IROH_COMMIT)" -release-train $(IROH_RELEASE_TRAIN) -release-version $(IROH_RELEASE_VERSION) -pre-train $(IROH_PRE_TRAIN) -pre-commit $(IROH_PRE_COMMIT) -go-relay "$$work/iroh-relay" -go-dns "$$work/iroh-dns-server" -rust-doctor "$(RUST_DOCTOR_BIN)" -rust-relay "$(RUST_RELAY_BIN)" -rust-dns "$(RUST_DNS_BIN)" -rust-vector "$(RUST_VECTOR_BIN)" -rust-pre-vector "$(RUST_PRE_VECTOR_BIN)" -rust-pq "$(RUST_VECTOR_BIN)"
 
 test:
 	go test ./...
@@ -55,5 +59,4 @@ doctor-image: doctor-image-build
 	chmod +x "$(DOCTOR_OUTPUT)"
 
 release-check:
-	$(MAKE) parity IROH_VERSION=1.0.0
-	$(MAKE) parity IROH_VERSION=1.0.3
+	$(MAKE) parity

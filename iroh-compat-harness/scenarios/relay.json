@@ -3,38 +3,44 @@
     {
       "name": "relay/go-client-rust-relay",
       "description": "A Go client authenticates to an upstream Rust relay and exchanges ping and pong frames, and a pass proves compatible relay protocol negotiation and framing.",
+      "tier": "stable",
       "counterpart": "upstream CLI",
-      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
+      "expected": {"1.0": "pass"}
     },
     {
       "name": "relay/rust-client-go-relay",
       "description": "The Rust test driver authenticates to a Go relay and exchanges ping and pong frames, and a pass proves that the Go relay accepts the upstream wire protocol.",
+      "tier": "stable",
       "counterpart": "Rust test driver",
-      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
+      "expected": {"1.0": "pass"}
     },
     {
       "name": "relay/rust-client-rust-relay",
       "description": "The Rust test driver authenticates to an upstream Rust relay and exchanges ping and pong frames, and a pass proves that the pinned control path is operational.",
+      "tier": "stable",
       "counterpart": "Rust test driver",
-      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
+      "expected": {"1.0": "pass"}
     },
     {
       "name": "relay/websocket-upgrade",
       "description": "A Go client performs the authenticated WebSocket upgrade against an upstream Rust relay, and a pass proves compatible HTTP upgrade and relay session setup.",
+      "tier": "stable",
       "counterpart": "upstream CLI",
-      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
+      "expected": {"1.0": "pass"}
     },
     {
       "name": "relay/ping-pong",
       "description": "A Go client sends an eight-byte relay ping to an upstream Rust relay, and a pass proves that the corresponding pong preserves the payload.",
+      "tier": "stable",
       "counterpart": "upstream CLI",
-      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
+      "expected": {"1.0": "pass"}
     },
     {
       "name": "relay/idle-timeout",
       "description": "A client leaves a TCP connection idle before WebSocket establishment on an upstream Rust relay, and a pass proves that the relay closes it after the expected timeout.",
+      "tier": "stable",
       "counterpart": "upstream CLI",
-      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
+      "expected": {"1.0": "pass"}
     }
   ]
 }

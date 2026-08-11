@@ -3,26 +3,30 @@
     {
       "name": "discovery/go-publish-rust-dns",
       "description": "A Go client publishes a signed pkarr packet to the upstream Rust DNS server, and a pass proves that the server stores and returns the packet byte for byte.",
+      "tier": "stable",
       "counterpart": "upstream CLI",
-      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
+      "expected": {"1.0": "pass"}
     },
     {
       "name": "discovery/rust-publish-go-dns",
       "description": "The Rust test driver publishes a signed pkarr packet to the Go DNS server, and a pass proves that the server stores and returns the packet byte for byte.",
+      "tier": "stable",
       "counterpart": "Rust test driver",
-      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
+      "expected": {"1.0": "pass"}
     },
     {
       "name": "discovery/qad-report",
       "description": "Go and upstream iroh-doctor probe the same network, and a pass proves that their QAD reports agree on shared reachability fields and satisfy address and latency invariants.",
+      "tier": "stable",
       "counterpart": "upstream CLI",
-      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
+      "expected": {"1.0": "pass"}
     },
     {
       "name": "discovery/relay-urls",
       "description": "Go and the Rust test driver contact the same upstream relay URL, and a pass proves that both implementations resolve it, negotiate the relay protocol, and receive a pong.",
+      "tier": "stable",
       "counterpart": "upstream CLI",
-      "expected": {"1.0.0": "pass", "1.0.3": "pass"}
+      "expected": {"1.0": "pass"}
     }
   ]
 }
