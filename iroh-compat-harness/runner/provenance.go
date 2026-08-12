@@ -7,13 +7,16 @@ import (
 	"strings"
 )
 
-// SourceCommit returns a git description of dir. Override is for hermetic
-// builds that make the repository metadata unavailable.
-func SourceCommit(dir, override string) (string, error) {
-	if override != "" {
-		return override + "-override", nil
+// SourceCommit returns a git description of a clean checkout at dir.
+func SourceCommit(dir string) (string, error) {
+	status, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
+	if err != nil {
+		return "", fmt.Errorf("resolve go-iroh source commit: inspect working tree: %w", err)
 	}
-	out, err := exec.Command("git", "-C", dir, "describe", "--always", "--dirty").Output()
+	if len(status) != 0 {
+		return "", errors.New("resolve go-iroh source commit: working tree is dirty")
+	}
+	out, err := exec.Command("git", "-C", dir, "describe", "--always").Output()
 	if err != nil {
 		return "", fmt.Errorf("resolve go-iroh source commit: %w", err)
 	}

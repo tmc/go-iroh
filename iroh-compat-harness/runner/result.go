@@ -314,7 +314,7 @@ func (r *Report) Markdown() []byte {
 		}
 		b.WriteString(" — |\n")
 	}
-	b.WriteString("\nThe pinned 1.1-pre column currently exercises the bidirectional CustomAddr wire-vector suite in blocking CI; the full pinned matrix runs when the train is re-pinned to a release. The `tip` column is populated only in the nightly [advisory report](COMPATIBILITY-tip.md).\n")
+	b.WriteString("\nThe pinned 1.1-pre column currently exercises the bidirectional CustomAddr wire-vector suite in blocking CI. Other scenarios remain untested for that train until blocking coverage is explicitly expanded at its release re-pin. The `tip` column is populated only in the nightly advisory report.\n")
 	b.WriteString("\n### Peers\n\n| Ref | Rust peer | Pin | SHA-256 digest |\n|---:|---|---|---|\n")
 	for i, peer := range peers {
 		fmt.Fprintf(&b, "| [%d] | %s | %s | `%s` |\n", i+1, peer.name, peer.pin, peer.digest)

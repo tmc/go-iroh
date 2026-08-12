@@ -17,14 +17,13 @@ func main() {
 	vector := flag.String("rust-vector", "", "path to the Rust vector driver")
 	scenarios := flag.String("scenarios", "scenarios", "scenario declaration directory")
 	repo := flag.String("repo", "..", "go-iroh repository root")
-	commitOverride := flag.String("commit", "", "go-iroh source commit override")
 	upstreamCommit := flag.String("upstream-commit", "", "upstream main commit")
 	upstreamDescribe := flag.String("upstream-describe", "", "git describe of upstream main")
 	jsonOutput := flag.String("json", "results/tip.json", "tip evidence output")
 	markdownOutput := flag.String("markdown", "../COMPATIBILITY-tip.md", "tip Markdown output")
 	flag.Parse()
 
-	goCommit, err := runner.SourceCommit(filepath.Clean(*repo), *commitOverride)
+	goCommit, err := runner.SourceCommit(filepath.Clean(*repo))
 	if err != nil {
 		fatal(err)
 	}
