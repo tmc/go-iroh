@@ -14,12 +14,6 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/checkout@v6
-        with:
-          repository: n0-computer/iroh
-          ref: main
-          fetch-depth: 0
-          path: upstream-iroh
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -29,12 +23,13 @@ jobs:
         continue-on-error: true
         working-directory: iroh-compat-harness
         run: |
-          upstream_commit=$(git -C "$GITHUB_WORKSPACE/upstream-iroh" rev-parse HEAD)
-          upstream_describe=$(git -C "$GITHUB_WORKSPACE/upstream-iroh" describe --tags --long --always)
+          git clone https://github.com/n0-computer/iroh.git "$RUNNER_TEMP/upstream-iroh"
+          upstream_commit=$(git -C "$RUNNER_TEMP/upstream-iroh" rev-parse HEAD)
+          upstream_describe=$(git -C "$RUNNER_TEMP/upstream-iroh" describe --tags --long --always)
           cp -R drivers/rust-driver "$RUNNER_TEMP/rust-driver-tip"
           cargo build --release --manifest-path "$RUNNER_TEMP/rust-driver-tip/Cargo.toml" \
             --target-dir "$RUNNER_TEMP/rust-driver-tip-target" \
-            --config "patch.crates-io.iroh-base.path='${GITHUB_WORKSPACE}/upstream-iroh/iroh-base'"
+            --config "patch.crates-io.iroh-base.path='$RUNNER_TEMP/upstream-iroh/iroh-base'"
           go run ./cmd/iroh-wire-drift \
             -rust-vector "$RUNNER_TEMP/rust-driver-tip-target/release/go-iroh-compat-rust-driver" \
             -upstream-commit "$upstream_commit" \
