@@ -11,8 +11,10 @@ services:
       RUST_DOCTOR_BIN: /usr/local/bin/iroh-doctor
       RUST_VECTOR_BIN: /usr/local/bin/rust-driver
       RUST_PRE_VECTOR_BIN: /usr/local/bin/rust-driver-pre
-      GO_IROH_COMMIT: ${GO_IROH_COMMIT}
       RUST_DNS_BIN: /usr/local/bin/iroh-dns-server
     volumes:
       - ..:/work
+      # A linked worktree's .git file points outside /work. Mount the common
+      # directory at its original path so provenance resolves inside Docker.
+      - ${GO_IROH_GIT_COMMON_DIR:?set GO_IROH_GIT_COMMON_DIR}:${GO_IROH_GIT_COMMON_DIR}:ro
     command: ["make", "parity-native"]
