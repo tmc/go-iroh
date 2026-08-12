@@ -115,6 +115,7 @@ func TestMarkdownNamesRustCounterpart(t *testing.T) {
 		"observed-incompatible",
 		"1.0 (1.0.3)",
 		"1.1-pre @ 4706ec9",
+		"Other scenarios remain untested for that train until blocking coverage is explicitly expanded at its release re-pin",
 		"| echo | stable | upstream CLI | pass [2] | pass [3] | — |",
 		"fail (expected)",
 		"Rust accepted 0/1 datagrams",

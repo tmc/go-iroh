@@ -19,7 +19,6 @@ func main() {
 	preKey := flag.String("pre-key", "1.1-pre", "pre-release scenario key")
 	preTrain := flag.String("pre-train", "1.1", "target upstream minor train")
 	preCommit := flag.String("pre-commit", "", "pinned upstream pre-release commit")
-	commitOverride := flag.String("commit", "", "go-iroh source commit override")
 	doctor := flag.String("rust-doctor", "", "path to the pinned iroh-doctor binary")
 	goRelay := flag.String("go-relay", "", "path to the go-iroh relay binary")
 	rustRelay := flag.String("rust-relay", "", "path to the pinned upstream iroh-relay binary")
@@ -34,7 +33,7 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	commit, err := gitCommit(root, *commitOverride)
+	commit, err := gitCommit(root)
 	if err != nil {
 		fatal(err)
 	}
@@ -198,8 +197,8 @@ func repoRoot() (string, error) {
 	}
 }
 
-func gitCommit(root, override string) (string, error) {
-	return runner.SourceCommit(root, override)
+func gitCommit(root string) (string, error) {
+	return runner.SourceCommit(root)
 }
 
 func fatal(err error) {
