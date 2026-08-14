@@ -1,0 +1,8 @@
+landed via go-iroh-coordinator
+claude-code: 2.1.220 (Claude Code)
+model: claude-opus-5
+tty: not a tty
+pid: 85396
+ITERM_SESSION_ID: w1t8p0:53826D0F-E8F2-43E8-91EA-3EC349AC07CB
+date: 2026-08-14T00:59:58Z
+note: fast-forward of main to aaf12f1, cherry-picked by 752EFF9F off cad3467 to avoid dragging landing3 onto main. User ruling: land c01d4b9, decline the cad3467 FF. Socket suite green under -race on the new base.
