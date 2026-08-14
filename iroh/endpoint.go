@@ -927,7 +927,14 @@ func equalAddrPorts(a, b []netip.AddrPort) bool {
 func (e *Endpoint) Addr() netaddr.EndpointAddr {
 	a := netaddr.NewEndpointAddr(e.ID())
 	if !e.disableIP {
-		a = a.WithIP(e.LocalAddr())
+		// The bind address is unspecified ([::]:port) unless the caller chose
+		// one, and that is not something a peer can dial: it means "every
+		// interface on that host". Advertising it gives peers a target that
+		// resolves to their own loopback, and it makes NAT traversal probes
+		// arrive from a source the connection does not recognize.
+		if addr, ok := canonicalNATTraversalCandidate(e.LocalAddr()); ok {
+			a = a.WithIP(addr)
+		}
 	}
 	e.mu.Lock()
 	external := e.externalNATLocked()
@@ -972,7 +979,9 @@ func endpointAddrEqual(a, b netaddr.EndpointAddr) bool {
 func (e *Endpoint) addrLocked() netaddr.EndpointAddr {
 	a := netaddr.NewEndpointAddr(e.ID())
 	if !e.disableIP {
-		a = a.WithIP(e.LocalAddr())
+		if addr, ok := canonicalNATTraversalCandidate(e.LocalAddr()); ok {
+			a = a.WithIP(addr)
+		}
 		for _, addr := range e.externalNATLocked() {
 			a = a.WithIP(addr)
 		}
