@@ -1,0 +1,7 @@
+coordinator session 53826D0F
+claude-code 2.1.220, model claude-opus-5
+date: 2026-08-15T03:55:50Z
+perf-landing4: perf-only extraction of perfbench-landing3 onto post-compat-extraction main (bfc1837).
+Excluded: 26 compat commits, netaddr doc (already db1c188), 4 harness-only commits.
+Mixed commits split by path: 61f3059 (ci.yml harness step dropped), c5d37ff (Go benchmark half only).
+Verified: build, vet, gofmt, full -race suite green. Local only.
