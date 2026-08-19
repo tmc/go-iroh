@@ -1,0 +1,40 @@
+name: compat provenance
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history: the check tests whether a recorded commit is an
+          # ancestor of HEAD, which a shallow clone cannot answer.
+          fetch-depth: 0
+      - name: Check compatibility provenance
+        run: |
+          commit=$(sed -n 's/^Generated from commit `\([0-9a-f]\{7,40\}\)`.*/\1/p' COMPATIBILITY.md | head -1)
+          test -n "$commit" || {
+            echo 'COMPATIBILITY.md does not name a generating commit' >&2
+            exit 1
+          }
+          # Resolving is not enough. A pre-rebase commit still resolves from a
+          # local object database and will not exist for anyone who clones the
+          # published history, so the evidence must name a commit reachable
+          # from what is being pushed.
+          git rev-parse --verify --quiet "$commit^{commit}" >/dev/null || {
+            echo "COMPATIBILITY.md cites $commit, which is not a commit in this repository" >&2
+            exit 1
+          }
+          git merge-base --is-ancestor "$commit" HEAD || {
+            echo "COMPATIBILITY.md cites $commit, which is not an ancestor of HEAD." >&2
+            echo 'Compatibility evidence was carried across a rewrite instead of' >&2
+            echo 'being regenerated; rerun the harness against the current tree.' >&2
+            exit 1
+          }
