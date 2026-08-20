@@ -1,6 +1,7 @@
 /go-list-doc.new
 *.test
 /cover.out
+/COMPATIBILITY-tip.md
 
 # Local Claude Code workflow/session artifacts
 /.claude/
