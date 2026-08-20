@@ -136,10 +136,10 @@ func (p *gossipPeer) endpointAddr() netaddr.EndpointAddr {
 
 func (p *gossipPeer) waitFor(marker string) error {
 	if err := <-p.done; err != nil {
-		return fmt.Errorf("Rust gossip peer: %w: %s", err, p.output.String())
+		return fmt.Errorf("rust gossip peer: %w: %s", err, p.output.String())
 	}
 	if !strings.Contains(p.output.String(), marker) {
-		return fmt.Errorf("Rust gossip peer omitted %q: %s", marker, p.output.String())
+		return fmt.Errorf("rust gossip peer omitted %q: %s", marker, p.output.String())
 	}
 	return nil
 }
