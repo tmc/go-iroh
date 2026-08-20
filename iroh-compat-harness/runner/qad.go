@@ -120,26 +120,26 @@ func compareQADReportShape(rust string, report iroh.NetReport) error {
 		}
 	}
 	if report.UDPv4 != report.GlobalV4.IsValid() {
-		return fmt.Errorf("Go udp_v4=%t global_v4=%v", report.UDPv4, report.GlobalV4)
+		return fmt.Errorf("go udp_v4=%t global_v4=%v", report.UDPv4, report.GlobalV4)
 	}
 	if report.UDPv6 != report.GlobalV6.IsValid() {
-		return fmt.Errorf("Go udp_v6=%t global_v6=%v", report.UDPv6, report.GlobalV6)
+		return fmt.Errorf("go udp_v6=%t global_v6=%v", report.UDPv6, report.GlobalV6)
 	}
 	if report.GlobalV4.IsValid() {
 		match := regexp.MustCompile(`global_v4:\s*Some\(\s*([0-9.]+):`).FindStringSubmatch(rust)
 		if len(match) != 2 || match[1] != report.GlobalV4.Addr().String() {
-			return fmt.Errorf("global_v4 address differs: Rust=%q Go=%s", match, report.GlobalV4.Addr())
+			return fmt.Errorf("global_v4 address differs: rust=%q go=%s", match, report.GlobalV4.Addr())
 		}
 	}
 	if report.GlobalV6.IsValid() {
 		match := regexp.MustCompile(`global_v6:\s*Some\(\s*\[([^]]+)\]:`).FindStringSubmatch(rust)
 		if len(match) != 2 || match[1] != report.GlobalV6.Addr().String() {
-			return fmt.Errorf("global_v6 address differs: Rust=%q Go=%s", match, report.GlobalV6.Addr())
+			return fmt.Errorf("global_v6 address differs: rust=%q go=%s", match, report.GlobalV6.Addr())
 		}
 	}
 	for relayURL, latency := range report.RelayLatencies {
 		if relayURL.IsZero() || latency <= 0 {
-			return fmt.Errorf("Go relay latency %v=%v is not plausible", relayURL, latency)
+			return fmt.Errorf("go relay latency %v=%v is not plausible", relayURL, latency)
 		}
 	}
 	return nil

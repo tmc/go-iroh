@@ -268,10 +268,10 @@ func (p *transportPeer) endpointAddr() netaddr.EndpointAddr {
 
 func (p *transportPeer) waitFor(marker string) error {
 	if err := <-p.done; err != nil {
-		return fmt.Errorf("Rust transport peer: %w: %s", err, p.output.String())
+		return fmt.Errorf("rust transport peer: %w: %s", err, p.output.String())
 	}
 	if !strings.Contains(p.output.String(), marker) {
-		return fmt.Errorf("Rust transport peer omitted %q: %s", marker, p.output.String())
+		return fmt.Errorf("rust transport peer omitted %q: %s", marker, p.output.String())
 	}
 	return nil
 }
