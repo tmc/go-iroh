@@ -56,7 +56,7 @@ func runGoRelayClientAgainst(ctx context.Context, addr string) error {
 	sk := key.NewSecretKey([key.SeedSize]byte{0x31})
 	client, err := relayclient.Connect(ctx, u, relayclient.Options{SecretKey: sk})
 	if err != nil {
-		return fmt.Errorf("Go client WebSocket/auth: %w", err)
+		return fmt.Errorf("go client websocket/auth: %w", err)
 	}
 	defer client.Close()
 	var ping [8]byte
