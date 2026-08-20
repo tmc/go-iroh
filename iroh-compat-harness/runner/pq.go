@@ -85,7 +85,7 @@ func runGoClientRustPQServer(ctx context.Context, bin, rustPolicy string, goPoli
 	}
 	group := conn.KeyExchangeGroup()
 	if group != "X25519MLKEM768" {
-		return peer.cmd.Process.Pid, group, peer.output.String(), fmt.Errorf("Go negotiated group %q", group)
+		return peer.cmd.Process.Pid, group, peer.output.String(), fmt.Errorf("go negotiated group %q", group)
 	}
 	if err := pqEcho(ctx, conn); err != nil {
 		return peer.cmd.Process.Pid, group, peer.output.String(), err
@@ -130,7 +130,7 @@ func runRustClientGoPQServer(ctx context.Context, bin, rustPolicy string, goPoli
 	waitErr := cmd.Wait()
 	_ = conn.Close()
 	if err != nil || waitErr != nil || group != "X25519MLKEM768" || !strings.Contains(out.String(), "pq-ok group=X25519MLKEM768") {
-		return group, out.String(), fmt.Errorf("Rust client exchange: group=%q serve=%v peer=%v: %s", group, err, waitErr, out.String())
+		return group, out.String(), fmt.Errorf("rust client exchange: group=%q serve=%v peer=%v: %s", group, err, waitErr, out.String())
 	}
 	return group, out.String(), nil
 }
