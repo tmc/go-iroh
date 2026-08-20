@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   parity:
@@ -60,6 +60,10 @@ jobs:
           path: ${{ runner.temp }}/release/
 
   release:
+    # Only this job creates the draft release; the matrix job above
+    # runs untrusted-adjacent build steps and stays read-only.
+    permissions:
+      contents: write
     if: startsWith(github.ref, 'refs/tags/')
     needs: parity
     runs-on: ubuntu-latest
@@ -75,5 +79,5 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
-          body: "Wire: iroh v1 (proven against iroh 1.0.0, 1.0.3 — full matrix attached)."
+          body: "Wire: iroh v1 (observed against iroh 1.0.0, 1.0.3 — full matrix attached)."
           files: proof/*
