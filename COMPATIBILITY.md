@@ -4,7 +4,7 @@ go-iroh is an independent Go implementation of iroh wire v1. This matrix records
 
 Go-client↔Go-relay pairings contain no Rust peer, so they are outside this matrix's scope; that path is covered by the standard test suite.
 
-Generated at 2026-08-19T22:36:17Z. A pass requires a recorded Rust process and binary digest; setup errors, unsupported cells, and untested cells never count as passes.
+Generated from commit `b85b663bcec7c3b2f932053f82343f7e7728b8e0` at 2026-08-20T02:28:57Z. A pass requires a recorded Rust process and binary digest; setup errors, unsupported cells, and untested cells never count as passes.
 
 ## How to read this table
 
@@ -111,12 +111,9 @@ The pinned 1.1-pre column currently exercises the bidirectional CustomAddr wire-
 
 ## Reproduce
 
-The harness lives on the [`compat-harness`](https://github.com/tmc/go-iroh/tree/compat-harness) branch, not on main:
-
 ```sh
-git checkout compat-harness
 cd iroh-compat-harness
 make parity
 ```
 
-See the [harness README](https://github.com/tmc/go-iroh/blob/compat-harness/iroh-compat-harness/README.md) for prerequisites, the [scenario declarations](https://github.com/tmc/go-iroh/tree/compat-harness/iroh-compat-harness/scenarios) for predicted verdicts and definitions, and [results.json](https://github.com/tmc/go-iroh/blob/compat-harness/iroh-compat-harness/results/results.json) for the machine-readable report.
+See the [harness README](iroh-compat-harness/README.md) for prerequisites, the [scenario declarations](iroh-compat-harness/scenarios/) for predicted verdicts and definitions, and [results.json](iroh-compat-harness/results/results.json) for the machine-readable report.
