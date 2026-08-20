@@ -1,0 +1,79 @@
+name: release proof
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  parity:
+    strategy:
+      fail-fast: false
+      matrix:
+        iroh: [1.0.0, 1.0.3]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Configure UDP buffers
+        run: |
+          sudo sysctl -w net.core.rmem_max=7500000
+          sudo sysctl -w net.core.wmem_max=7500000
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: iroh-compat-harness
+          file: iroh-compat-harness/images/iroh-${{ matrix.iroh }}/Dockerfile
+          load: true
+          tags: go-iroh-compat:iroh-${{ matrix.iroh }}
+          cache-from: type=gha,scope=iroh-${{ matrix.iroh }}
+      - name: Extract upstream binary
+        run: |
+          cid=$(docker create go-iroh-compat:iroh-${{ matrix.iroh }})
+          trap 'docker rm -f "$cid" >/dev/null' EXIT
+          docker cp "$cid:/usr/local/bin/iroh-doctor" "$RUNNER_TEMP/iroh-doctor"
+          docker cp "$cid:/usr/local/bin/iroh-relay" "$RUNNER_TEMP/iroh-relay"
+          docker cp "$cid:/usr/local/bin/iroh-dns-server" "$RUNNER_TEMP/iroh-dns-server"
+          chmod +x "$RUNNER_TEMP/iroh-doctor" "$RUNNER_TEMP/iroh-relay" "$RUNNER_TEMP/iroh-dns-server"
+      - name: Run tagged full matrix
+        working-directory: iroh-compat-harness
+        env:
+          RUST_DOCTOR_BIN: ${{ runner.temp }}/iroh-doctor
+          RUST_RELAY_BIN: ${{ runner.temp }}/iroh-relay
+          RUST_DNS_BIN: ${{ runner.temp }}/iroh-dns-server
+          RUST_VECTOR_BIN: ${{ github.workspace }}/iroh-compat-harness/drivers/rust-driver/target/release/go-iroh-compat-rust-driver
+        run: |
+          cargo build --quiet --release --locked --manifest-path drivers/rust-driver/Cargo.toml
+          make parity-native IROH_VERSION=${{ matrix.iroh }}
+          mkdir -p "$RUNNER_TEMP/release"
+          cp results/results.json "$RUNNER_TEMP/release/results-iroh-${{ matrix.iroh }}.json"
+          cp ../COMPATIBILITY.md "$RUNNER_TEMP/release/COMPATIBILITY-iroh-${{ matrix.iroh }}.md"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-proof-${{ matrix.iroh }}
+          path: ${{ runner.temp }}/release/
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: release-proof-*
+          path: proof
+          merge-multiple: true
+      # Draft on purpose: the release body makes a public wire-compat
+      # claim, so a human reviews the parity artifacts and presses
+      # publish. The tag must never publish unattended.
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          body: "Wire: iroh v1 (proven against iroh 1.0.0, 1.0.3 — full matrix attached)."
+          files: proof/*
