@@ -1,6 +1,9 @@
 # go-iroh
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/tmc/go-iroh.svg)](https://pkg.go.dev/github.com/tmc/go-iroh)
+[![parity](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Ftmc%2Fgo-iroh%2Fcompat-harness%2Firoh-compat-harness%2Fresults%2Fbadge.json)](COMPATIBILITY.md)
+
+Wire compatibility: iroh wire v1, observed against pinned Rust iroh releases by the [compatibility matrix](COMPATIBILITY.md).
 
 `go-iroh` is a Go implementation of [iroh](https://github.com/n0-computer/iroh).
 It provides peer-to-peer QUIC
@@ -10,10 +13,6 @@ plus Rust-compatible ports of the iroh protocol stack: blobs, gossip, and docs.
 
 The module is a clean-room Go port targeting wire compatibility with upstream
 Rust iroh. It is not affiliated with the n0 team.
-
-Wire compatibility and Go API stability are separate promises. The wire
-protocol tracks pinned upstream releases; the Go API is not stable before v1
-and may change in any v0 release.
 
 ## Packages
 
@@ -42,7 +41,7 @@ Protocols (Rust-compatible ports):
 | `endpointticket` | Rust-compatible endpoint ticket codec |
 | `irpc` | postcard-framed RPC helpers for iroh streams |
 | `postcard` | Rust-compatible postcard wire codec (shared with sibling modules) |
-| `quicconn` | adapts iroh connections to a QUIC-like surface |
+| `http3` | adapts iroh connections for HTTP/3 implementations |
 
 Commands:
 
@@ -152,15 +151,24 @@ the magic-socket path: it uses the same receive queue depth, pooled receive
 buffers, caller-buffer copy, and separate write queue shape as the direct IP
 transport.
 
-Live Rust interop runs through the compatibility harness on the
-[`compat-harness`](https://github.com/tmc/go-iroh/tree/compat-harness) branch,
-which drives unmodified upstream iroh binaries in pinned Docker images against
-go-iroh and renders [COMPATIBILITY.md](COMPATIBILITY.md). It requires only Go
-and Docker:
+Live Rust interop runs through the compatibility harness in
+[iroh-compat-harness](./iroh-compat-harness), which drives unmodified upstream
+iroh binaries in pinned Docker images against go-iroh and renders
+[COMPATIBILITY.md](COMPATIBILITY.md). It requires only Go and Docker:
 
 ```sh
-git checkout compat-harness
 cd iroh-compat-harness && make parity
+```
+
+The harness is the published claim, so it pins the Rust peer. For the
+development loop there are also in-module interop tests that build a Rust peer
+from a checkout you control, which is what you want when the Rust side is the
+thing being changed. They are skipped unless you opt in:
+
+```sh
+IROH_RUST_REPO=../iroh go test ./internal/compat/          # source-level parity
+IROH_RUST_REPO=../iroh go test -tags interop ./iroh/       # connect and echo
+GO_IROH_LIVE_RUST_GOSSIP=1 go test ./gossip/               # live gossip peer
 ```
 
 ## Debugging
@@ -226,8 +234,8 @@ PlumTree state machine with a postcard discovery channel.
 The normal local suite covers the public packages, qng transport extensions, and
 local relay/direct behavior. Live Go↔Rust coverage — handshakes, transport
 semantics, relay, discovery, and gossip against pinned upstream releases — runs
-in the [compatibility harness](https://github.com/tmc/go-iroh/tree/compat-harness/iroh-compat-harness)
-and is summarized in [COMPATIBILITY.md](COMPATIBILITY.md).
+in the [compatibility harness](./iroh-compat-harness) and is summarized in
+[COMPATIBILITY.md](COMPATIBILITY.md).
 
 GOOS=js/GOARCH=wasm builds compile. Browser runtime support is limited by the
 platform: the relay WebSocket client has a js-specific dial path, but direct UDP
