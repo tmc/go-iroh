@@ -1,0 +1,7 @@
+commit 0495166 2026-08-22
+claude-code 2.1.220 (Claude Code)
+model claude-opus-5[1m]
+tty not a tty pid 12967
+ITERM_SESSION_ID w1t8p7:752EFF9F-01F8-4427-83EA-49C6D82E5A33
+variance rule for prediction eligibility: between-session SD <= 1.0pp, k>=4, bar 9/11 (p=0.0327)
+excludes conn-scaling-16 (3.00), conn-scaling-4 (1.39), stream-scaling-64 (1.16)
