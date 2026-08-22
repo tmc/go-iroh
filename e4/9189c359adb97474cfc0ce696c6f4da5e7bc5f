@@ -1,0 +1,7 @@
+commit e49189c 2026-08-22
+claude-code 2.1.220 (Claude Code)
+model claude-opus-5[1m]
+tty not a tty pid 72169
+ITERM_SESSION_ID w1t8p7:752EFF9F-01F8-4427-83EA-49C6D82E5A33
+session 5: 840/840 records, arm hashes matched, sign test 10/14 vs bar 11 (p=0.0898)
+evidence ~/tmp/pmrerun/session5/ and verdicts-s5/, session5.tgz sha256 42651fe6cbd9c389620a6330353e6c6737cd4278dc5529293a444531ecf75248
