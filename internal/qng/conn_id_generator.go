@@ -133,6 +133,22 @@ func (m *connIDGenerator) SetMaxActiveConnIDs(limit uint64) error {
 	return nil
 }
 
+// ensurePathCIDs tops the path's active CID pool up to the budget. It is a
+// no-op when the pool is already full, making it safe to call from every
+// path-open flow after IssueFirstPathCIDs has batch-filled the path.
+func (m *connIDGenerator) ensurePathCIDs(pid protocol.PathID) error {
+	if m.generator.ConnectionIDLen() == 0 {
+		return nil
+	}
+	budget := m.issueCIDsLimit()
+	for uint64(len(m.pathSrcConnIDs[pid])) < budget {
+		if _, err := m.issuePathConnID(pid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // IssueFirstPathCIDs issues an initial batch of connection IDs up to the budget
 // for newly covered paths when local MAX_PATH_ID is set or raised, matching noq's
 // issue_first_path_cids (connection/mod.rs:6030-6044). maxPathIDWithCIDs tracks

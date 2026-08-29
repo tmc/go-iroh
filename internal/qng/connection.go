@@ -2407,7 +2407,7 @@ func (c *Conn) maybeJoinPath(pid protocol.PathID) bool {
 	if err := c.receivedPacketHandler.AddPath(pid, c.logger); err != nil {
 		return false
 	}
-	if _, err := c.issuePathConnID(pid); err != nil {
+	if err := c.connIDGenerator.ensurePathCIDs(pid); err != nil {
 		return false
 	}
 	// A path joined by the peer is open from our perspective: we answer its
