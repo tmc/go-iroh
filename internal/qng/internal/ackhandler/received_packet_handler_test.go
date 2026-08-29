@@ -209,37 +209,30 @@ func TestReceivedPacketHandlerAckFrequencyParams(t *testing.T) {
 		t.Fatalf("unexpected ACK queued before threshold")
 	}
 
-	// Update threshold to 20.
+	// Update frame threshold to T=20.
+	// Per noq (spaces.rs:1201) count > threshold, so exactly T+1 = 21 ack-eliciting packets must be received before an ACK queues.
 	h.SetAckFrequencyParams(20, 50*time.Millisecond, 1, now)
 
-	// Sending packet 9 (10th packet) should not queue ACK under threshold 20.
-	if err := h.ReceivedPacket(9, protocol.ECNNon, protocol.Encryption1RTT, now, true); err != nil {
-		t.Fatalf("ReceivedPacket(9): %v", err)
-	}
-	if ack := h.GetAckFrame(protocol.Encryption1RTT, now, true); ack != nil {
-		t.Fatalf("unexpected ACK queued under new threshold 20")
-	}
-
-	// Send up to 19 packets total (indices 10..19).
-	for pn := protocol.PacketNumber(10); pn < 19; pn++ {
+	// Send up to 20 packets total (pn 9 .. 19).
+	for pn := protocol.PacketNumber(9); pn < 20; pn++ {
 		if err := h.ReceivedPacket(pn, protocol.ECNNon, protocol.Encryption1RTT, now, true); err != nil {
 			t.Fatalf("ReceivedPacket(%d): %v", pn, err)
 		}
 	}
 	if ack := h.GetAckFrame(protocol.Encryption1RTT, now, true); ack != nil {
-		t.Fatalf("unexpected ACK queued at 19 packets")
+		t.Fatalf("unexpected ACK queued at 20 packets with frame threshold 20 (want trigger on 21st packet)")
 	}
 
-	// 20th packet (pn 19) hits threshold 20 and queues ACK.
-	if err := h.ReceivedPacket(19, protocol.ECNNon, protocol.Encryption1RTT, now, true); err != nil {
-		t.Fatalf("ReceivedPacket(19): %v", err)
+	// 21st packet (pn 20) exceeds threshold 20 (count 21 >= 21) and queues ACK.
+	if err := h.ReceivedPacket(20, protocol.ECNNon, protocol.Encryption1RTT, now, true); err != nil {
+		t.Fatalf("ReceivedPacket(20): %v", err)
 	}
 	ack := h.GetAckFrame(protocol.Encryption1RTT, now, true)
 	if ack == nil {
-		t.Fatalf("expected ACK queued at 20 packets")
+		t.Fatalf("expected ACK queued at 21 packets for frame threshold 20")
 	}
-	if ack.LargestAcked() != 19 {
-		t.Fatalf("largest acked = %d, want 19", ack.LargestAcked())
+	if ack.LargestAcked() != 20 {
+		t.Fatalf("largest acked = %d, want 20", ack.LargestAcked())
 	}
 }
 

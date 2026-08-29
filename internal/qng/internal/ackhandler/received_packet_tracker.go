@@ -111,7 +111,15 @@ func newAppDataReceivedPacketTracker(logger utils.Logger) *appDataReceivedPacket
 }
 
 func (h *appDataReceivedPacketTracker) SetAckFrequencyParams(ackElicitingThreshold uint64, maxAckDelay time.Duration, reorderingThreshold protocol.PacketNumber, now monotime.Time) {
-	h.ackElicitingThreshold = ackElicitingThreshold
+	// In noq (spaces.rs:1201) and draft-ietf-quic-ack-frequency, the ACK triggers when
+	// the count of ack-eliciting packets EXCEEDS the frame's threshold: count > threshold.
+	// We preserve the unpatched `>= packetsBeforeAck` comparison operator for the default path
+	// (preserving the GG guard) and map the frame's threshold T to T+1 here.
+	if ackElicitingThreshold < ^uint64(0) {
+		h.ackElicitingThreshold = ackElicitingThreshold + 1
+	} else {
+		h.ackElicitingThreshold = ^uint64(0)
+	}
 	h.maxAckDelay = maxAckDelay
 	h.reorderingThreshold = reorderingThreshold
 
