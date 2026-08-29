@@ -647,7 +647,10 @@ func (c *Conn) preSetup() {
 	c.frameParser = *wire.NewFrameParser(
 		c.config.EnableDatagrams,
 		c.config.EnableStreamResetPartialDelivery,
-		false, // ACK_FREQUENCY is not supported yet
+		// We always advertise min_ack_delay, which commits us to parsing
+		// ACK_FREQUENCY and IMMEDIATE_ACK from any peer that engages the
+		// extension (draft-ietf-quic-ack-frequency).
+		true,
 		false, // multipath is not negotiated yet (Stage 3)
 	)
 	c.rttStats = utils.NewRTTStats()
