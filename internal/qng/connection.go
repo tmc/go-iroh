@@ -247,6 +247,9 @@ type Conn struct {
 	rttStats  *utils.RTTStats
 	connStats utils.ConnectionStats
 
+	lastAckFrequencySeq    uint64
+	lastAckFrequencySeqSet bool
+
 	cryptoStreamManager   *cryptoStreamManager
 	sentPacketHandler     ackhandler.SentPacketHandler
 	receivedPacketHandler ackhandler.ReceivedPacketHandler
@@ -453,6 +456,7 @@ var newConnection = func(
 		InitialSourceConnectionID: srcConnID,
 		RetrySourceConnectionID:   retrySrcConnID,
 		EnableResetStreamAt:       conf.EnableStreamResetPartialDelivery,
+		MinAckDelay:               func() *time.Duration { d := protocol.TimerGranularity; return &d }(),
 		InitialMaxPathID:          initialMaxPathIDParam(s.config.InitialMaxPathID),
 		MaxRemoteNATTraversalAddresses: maxRemoteNATTraversalAddressesParam(
 			s.config.MaxRemoteNATTraversalAddresses,
@@ -584,6 +588,7 @@ var newClientConnection = func(
 		ActiveConnectionIDLimit:   protocol.MaxActiveConnectionIDs,
 		InitialSourceConnectionID: srcConnID,
 		EnableResetStreamAt:       conf.EnableStreamResetPartialDelivery,
+		MinAckDelay:               func() *time.Duration { d := protocol.TimerGranularity; return &d }(),
 		InitialMaxPathID:          initialMaxPathIDParam(s.config.InitialMaxPathID),
 		MaxRemoteNATTraversalAddresses: maxRemoteNATTraversalAddressesParam(
 			s.config.MaxRemoteNATTraversalAddresses,
@@ -2306,6 +2311,10 @@ func (c *Conn) handleFrame(
 		err = c.handlePathsBlockedFrame(frame)
 	case *wire.PathCIDsBlockedFrame:
 		err = c.handlePathCIDsBlockedFrame(frame)
+	case *wire.AckFrequencyFrame:
+		err = c.handleAckFrequencyFrame(frame, encLevel, rcvTime)
+	case *wire.ImmediateAckFrame:
+		err = c.handleImmediateAckFrame(frame, encLevel)
 	case *wire.ObservedAddrFrame:
 		err = c.handleObservedAddrFrame(frame)
 	case *wire.AddAddressFrame:
@@ -2537,6 +2546,53 @@ func (c *Conn) handlePathCIDsBlockedFrame(frame *wire.PathCIDsBlockedFrame) erro
 	}
 	_, err := c.issuePathConnID(frame.PathID)
 	return err
+}
+
+func (c *Conn) handleAckFrequencyFrame(frame *wire.AckFrequencyFrame, encLevel protocol.EncryptionLevel, now monotime.Time) error {
+	if encLevel != protocol.Encryption1RTT {
+		return &qerr.TransportError{
+			ErrorCode:    qerr.ProtocolViolation,
+			ErrorMessage: "received ACK_FREQUENCY frame outside 1-RTT",
+		}
+	}
+	// Staleness rule: reject stale or duplicate sequence numbers.
+	if c.lastAckFrequencySeqSet && frame.SequenceNumber <= c.lastAckFrequencySeq {
+		return nil
+	}
+	// Validation per draft: requested max ack delay must be at least our advertised min_ack_delay.
+	if frame.RequestMaxAckDelay < protocol.TimerGranularity {
+		return &qerr.TransportError{
+			ErrorCode:    qerr.ProtocolViolation,
+			ErrorMessage: "requested max_ack_delay in ACK_FREQUENCY frame is less than min_ack_delay",
+		}
+	}
+	c.lastAckFrequencySeq = frame.SequenceNumber
+	c.lastAckFrequencySeqSet = true
+
+	c.receivedPacketHandler.SetAckFrequencyParams(
+		frame.AckElicitingThreshold,
+		frame.RequestMaxAckDelay,
+		frame.ReorderingThreshold,
+		now,
+	)
+	if c.timer != nil {
+		c.maybeResetTimer()
+	}
+	return nil
+}
+
+func (c *Conn) handleImmediateAckFrame(frame *wire.ImmediateAckFrame, encLevel protocol.EncryptionLevel) error {
+	if encLevel != protocol.Encryption1RTT {
+		return &qerr.TransportError{
+			ErrorCode:    qerr.ProtocolViolation,
+			ErrorMessage: "received IMMEDIATE_ACK frame outside 1-RTT",
+		}
+	}
+	c.receivedPacketHandler.SetImmediateAckRequired()
+	if c.sendQueue != nil {
+		c.scheduleSending()
+	}
+	return nil
 }
 
 // handlePacket is called by the server with a new packet
