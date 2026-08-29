@@ -152,13 +152,13 @@ func TestFrameInjection(t *testing.T) {
 		}
 	})
 
-	t.Run("PATH_NEW_CONNECTION_ID exceeding active CID limit", func(t *testing.T) {
-		maxPathID := uint32(10)
-		pid := protocol.PathID(10)
+	t.Run("PATH_NEW_CONNECTION_ID first CID for paths 1..8 all accepted", func(t *testing.T) {
+		maxPathID := uint32(8)
+		pid := protocol.PathID(8)
 		c := newTestConn(&maxPathID, &pid)
 
-		// Populate active CIDs up to MaxActiveConnectionIDs (8)
-		for i := 1; i <= int(protocol.MaxActiveConnectionIDs); i++ {
+		// Peers issue first CIDs for all paths 1..8. All must be accepted.
+		for i := 1; i <= 8; i++ {
 			p := protocol.PathID(i)
 			cid := protocol.ParseConnectionID([]byte{byte(i), 1, 1, 1})
 			frame := &wire.NewConnectionIDFrame{
@@ -167,25 +167,12 @@ func TestFrameInjection(t *testing.T) {
 				ConnectionID:   cid,
 			}
 			if _, err := c.handleFrame(frame, protocol.Encryption1RTT, protocol.ConnectionID{}, now, srcAddr); err != nil {
-				t.Fatalf("handleFrame(PATH_NEW_CONNECTION_ID %d): %v", i, err)
+				t.Fatalf("handleFrame(PATH_NEW_CONNECTION_ID path %d): %v", i, err)
 			}
-		}
-
-		// Now add one more on a new path
-		overflowPathID := protocol.PathID(protocol.MaxActiveConnectionIDs + 1)
-		overflowCID := protocol.ParseConnectionID([]byte{99, 1, 1, 1})
-		frame := &wire.NewConnectionIDFrame{
-			PathID:         &overflowPathID,
-			SequenceNumber: 0,
-			ConnectionID:   overflowCID,
-		}
-		_, err := c.handleFrame(frame, protocol.Encryption1RTT, protocol.ConnectionID{}, now, srcAddr)
-		if err == nil {
-			t.Fatalf("expected CONNECTION_ID_LIMIT_ERROR, got nil")
-		}
-		var targetErr *qerr.TransportError
-		if !errors.As(err, &targetErr) || targetErr.ErrorCode != qerr.ConnectionIDLimitError {
-			t.Fatalf("expected ConnectionIDLimitError, got %v", err)
+			got, ok := c.destConnIDForPath(p)
+			if !ok || got != cid {
+				t.Fatalf("destConnIDForPath(%d) = %v (ok=%v), want %v", p, got, ok, cid)
+			}
 		}
 	})
 

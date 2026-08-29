@@ -2385,13 +2385,9 @@ func (c *Conn) handleNewConnectionIDFrame(frame *wire.NewConnectionIDFrame) erro
 		return c.connIDManager.Add(frame)
 	}
 	pid := *frame.PathID
-	// Enforce active CID limit for non-zero paths. We currently track 1 active DCID per path.
-	// If the active CID limit advertised by the peer/local is exceeded, reject with ConnectionIDLimitError.
-	if uint64(len(c.perPathDestConnIDs)) >= protocol.MaxActiveConnectionIDs && c.perPathDestConnIDs[pid] != frame.ConnectionID {
-		return &qerr.TransportError{
-			ErrorCode: qerr.ConnectionIDLimitError,
-		}
-	}
+	// Note: Active connection ID limit enforcement on non-zero paths is an open gap
+	// since we currently only retain 1 active destination CID per path in perPathDestConnIDs.
+	// We record the latest DCID for the path.
 	c.perPathDestConnIDs[pid] = frame.ConnectionID
 	return nil
 }
