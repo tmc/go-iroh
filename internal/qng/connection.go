@@ -1172,11 +1172,24 @@ func (c *Conn) handleHandshakeConfirmed(now monotime.Time) error {
 	// queued exactly once.
 	c.queueMaxPathID()
 	if c.multipathNegotiated() && c.connIDGenerator != nil {
-		if err := c.connIDGenerator.IssueFirstPathCIDs(c.ourLocalMaxPathID()); err != nil {
+		if err := c.connIDGenerator.IssueFirstPathCIDs(c.effectiveMaxPathID()); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// effectiveMaxPathID returns the largest PathID for which per-path connection
+// IDs may be issued: the minimum of our own advertised max and the peer's
+// (initial_max_path_id transport parameter, raised by MAX_PATH_ID frames),
+// matching noq's max_path_id (connection/mod.rs:7059-7065). Issuing a
+// PATH_NEW_CONNECTION_ID above the peer's max is a PROTOCOL_VIOLATION.
+func (c *Conn) effectiveMaxPathID() protocol.PathID {
+	peerMax := *c.peerParams.Load().InitialMaxPathID
+	if raised, ok := c.multipathManager.peerMax(); ok && raised > peerMax {
+		peerMax = raised
+	}
+	return min(c.ourLocalMaxPathID(), peerMax)
 }
 
 // ourLocalMaxPathID returns the largest PathID we will accept, i.e. the value
@@ -2520,6 +2533,12 @@ func (c *Conn) handleMaxPathIDFrame(frame *wire.MaxPathIDFrame) error {
 		return err
 	}
 	c.multipathManager.handleMaxPathID(frame.PathID)
+	// The peer raising its max can newly cover paths on our side; top up their
+	// CID batches (noq re-runs issue_first_path_cids whenever max_path_id
+	// changes). IssueFirstPathCIDs is idempotent via its high-water mark.
+	if c.handshakeConfirmed && c.connIDGenerator != nil {
+		return c.connIDGenerator.IssueFirstPathCIDs(c.effectiveMaxPathID())
+	}
 	return nil
 }
 
