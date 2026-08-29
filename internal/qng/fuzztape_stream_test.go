@@ -480,7 +480,9 @@ type pathCIDMachine struct {
 	multipathNegotiated bool
 	handshakeConfirmed  bool
 	peerLimit           uint64
-	maxPathID           protocol.PathID
+	localMaxPathID      protocol.PathID
+	peerMaxPathID       protocol.PathID
+	parser              wire.FrameParser
 
 	receivedPathCIDsBlocked bool
 }
@@ -492,6 +494,9 @@ func newPathCIDMachine(t *fuzztape.T) *pathCIDMachine {
 		cidSeenAcross:       make(map[protocol.ConnectionID]protocol.PathID),
 		multipathNegotiated: true,
 		peerLimit:           protocol.DefaultActiveConnectionIDLimit,
+		localMaxPathID:      4,
+		peerMaxPathID:       0,
+		parser:              *wire.NewFrameParser(true, true, true, true),
 	}
 
 	initial := protocol.ParseConnectionID([]byte{0x00, 0x11, 0x22, 0x33})
@@ -520,6 +525,13 @@ func (m *pathCIDMachine) budget() uint64 {
 	return min(m.peerLimit, protocol.MaxIssuedConnectionIDs)
 }
 
+func (m *pathCIDMachine) effectiveMaxPathID() protocol.PathID {
+	if m.localMaxPathID < m.peerMaxPathID {
+		return m.localMaxPathID
+	}
+	return m.peerMaxPathID
+}
+
 func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 	return fuzztape.Machine[*pathCIDMachine]{
 		Name:   "FuzzPathCIDMachine",
@@ -527,13 +539,29 @@ func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 		Init:   newPathCIDMachine,
 		Ops: []fuzztape.Op[*pathCIDMachine]{
 			{
+				Name:   "drawInitialTransportParams",
+				Weight: 3,
+				When:   func(m *pathCIDMachine) bool { return !m.handshakeConfirmed },
+				Apply: func(t *fuzztape.T, m *pathCIDMachine) {
+					// Draw active_connection_id_limit in [2, 8]
+					m.peerLimit = uint64(2 + t.IntN(7))
+					if err := m.g.SetMaxActiveConnIDs(m.peerLimit); err != nil {
+						t.Fatalf("SetMaxActiveConnIDs: %v", err)
+					}
+					// Draw local and peer initial_max_path_id in [1, 8]
+					m.localMaxPathID = protocol.PathID(1 + t.IntN(8))
+					m.peerMaxPathID = protocol.PathID(1 + t.IntN(8))
+				},
+			},
+			{
 				Name:   "handshakeComplete",
 				Weight: 2,
 				When:   func(m *pathCIDMachine) bool { return !m.handshakeConfirmed },
 				Apply: func(t *fuzztape.T, m *pathCIDMachine) {
 					m.handshakeConfirmed = true
-					if m.multipathNegotiated && m.maxPathID > 0 {
-						if err := m.g.IssueFirstPathCIDs(m.maxPathID); err != nil {
+					effectiveMax := m.effectiveMaxPathID()
+					if m.multipathNegotiated && effectiveMax > 0 {
+						if err := m.g.IssueFirstPathCIDs(effectiveMax); err != nil {
 							t.Fatalf("IssueFirstPathCIDs on handshakeComplete: %v", err)
 						}
 					}
@@ -542,16 +570,17 @@ func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 			{
 				Name:   "raiseMaxPathID",
 				Weight: 4,
-				When:   func(m *pathCIDMachine) bool { return m.maxPathID < 8 },
+				When:   func(m *pathCIDMachine) bool { return m.peerMaxPathID < 8 },
 				Apply: func(t *fuzztape.T, m *pathCIDMachine) {
 					delta := protocol.PathID(1 + t.IntN(3))
-					newMax := m.maxPathID + delta
+					newMax := m.peerMaxPathID + delta
 					if newMax > 8 {
 						newMax = 8
 					}
-					m.maxPathID = newMax
-					if m.handshakeConfirmed && m.multipathNegotiated {
-						if err := m.g.IssueFirstPathCIDs(m.maxPathID); err != nil {
+					m.peerMaxPathID = newMax
+					effectiveMax := m.effectiveMaxPathID()
+					if m.handshakeConfirmed && m.multipathNegotiated && effectiveMax > 0 {
+						if err := m.g.IssueFirstPathCIDs(effectiveMax); err != nil {
 							t.Fatalf("IssueFirstPathCIDs on raiseMaxPathID: %v", err)
 						}
 					}
@@ -561,7 +590,7 @@ func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 				Name:   "peerLimitRenegotiation",
 				Weight: 2,
 				Apply: func(t *fuzztape.T, m *pathCIDMachine) {
-					// In QUIC, active_connection_id_limit can only increase (or be set on TP)
+					// In QUIC, active_connection_id_limit can increase
 					limit := m.peerLimit + uint64(1+t.IntN(4))
 					if limit > protocol.MaxIssuedConnectionIDs {
 						limit = protocol.MaxIssuedConnectionIDs
@@ -576,7 +605,8 @@ func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 				Name:   "retireCID",
 				Weight: 5,
 				When: func(m *pathCIDMachine) bool {
-					for pid := protocol.PathID(1); pid <= m.maxPathID; pid++ {
+					effectiveMax := m.effectiveMaxPathID()
+					for pid := protocol.PathID(1); pid <= effectiveMax; pid++ {
 						if len(m.g.pathSrcConnIDs[pid]) > 0 {
 							return true
 						}
@@ -590,7 +620,8 @@ func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 						cid protocol.ConnectionID
 					}
 					var candidates []activeCID
-					for pid := protocol.PathID(1); pid <= m.maxPathID; pid++ {
+					effectiveMax := m.effectiveMaxPathID()
+					for pid := protocol.PathID(1); pid <= effectiveMax; pid++ {
 						for seq, cid := range m.g.pathSrcConnIDs[pid] {
 							candidates = append(candidates, activeCID{pid: pid, seq: seq, cid: cid})
 						}
@@ -613,11 +644,11 @@ func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 			{
 				Name: "receivePathCIDsBlocked",
 				When: func(m *pathCIDMachine) bool {
-					// The peer signals PATH_CIDS_BLOCKED when its needed CIDs are missing (empty active pool)
-					if !m.handshakeConfirmed || m.maxPathID == 0 {
+					effectiveMax := m.effectiveMaxPathID()
+					if !m.handshakeConfirmed || effectiveMax == 0 {
 						return false
 					}
-					for pid := protocol.PathID(1); pid <= m.maxPathID; pid++ {
+					for pid := protocol.PathID(1); pid <= effectiveMax; pid++ {
 						if len(m.g.pathSrcConnIDs[pid]) == 0 {
 							return true
 						}
@@ -635,7 +666,7 @@ func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 				t.Fatalf("invariant violation: received PATH_CIDS_BLOCKED (a correct issuer never lets the peer starve)")
 			}
 
-			// Validate all queued frames and invariant checks
+			effectiveMax := m.effectiveMaxPathID()
 			perPathSeenSeqs := make(map[protocol.PathID]map[uint64]bool)
 			for _, f := range m.frames {
 				nc, ok := f.(*wire.NewConnectionIDFrame)
@@ -646,12 +677,16 @@ func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 					// Path 0 CID
 					continue
 				}
-				// Invariant: PathIDZero never in a PATH_NEW_CONNECTION_ID frame
-				if *nc.PathID == protocol.PathIDZero {
+				pid := *nc.PathID
+				// Invariant 1: PathIDZero never in a PATH_NEW_CONNECTION_ID frame
+				if pid == protocol.PathIDZero {
 					t.Fatalf("invariant violation: PathIDZero in PATH_NEW_CONNECTION_ID frame")
 				}
+				// Invariant 2: No PATH_NEW_CONNECTION_ID with path_id > min(local, peer max)
+				if pid > effectiveMax {
+					t.Fatalf("invariant violation: emitted PATH_NEW_CONNECTION_ID for path %d > effectiveMax %d", pid, effectiveMax)
+				}
 
-				pid := *nc.PathID
 				if perPathSeenSeqs[pid] == nil {
 					perPathSeenSeqs[pid] = make(map[uint64]bool)
 				}
@@ -662,6 +697,23 @@ func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 					t.Fatalf("invariant violation: CID %s reused across path %d and path %d", nc.ConnectionID, prevPid, pid)
 				}
 				m.cidSeenAcross[nc.ConnectionID] = pid
+
+				// Invariant 3: Every emitted advertised-implied frame type must parse in 1-RTT
+				data, err := nc.Append(nil, protocol.Version1)
+				if err != nil {
+					t.Fatalf("invariant violation: failed to append frame: %v", err)
+				}
+				ft, l, err := m.parser.ParseType(data, protocol.Encryption1RTT)
+				if err != nil {
+					t.Fatalf("invariant violation: emitted frame failed ParseType: %v", err)
+				}
+				parsedFrame, _, err := m.parser.ParseLessCommonFrame(ft, data[l:], protocol.Version1)
+				if err != nil {
+					t.Fatalf("invariant violation: emitted frame failed ParseLessCommonFrame: %v", err)
+				}
+				if parsedFrame == nil {
+					t.Fatalf("invariant violation: parsed frame is nil")
+				}
 			}
 
 			// Invariant: per-path sequence numbers strictly monotonic starting at 0 (no gaps)
@@ -673,11 +725,14 @@ func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 				}
 			}
 
-			// Invariant: after handshake is confirmed, every open path's active pool exactly at budget
-			if m.handshakeConfirmed {
-				b := m.budget()
-				for pid := protocol.PathID(1); pid <= m.maxPathID; pid++ {
-					activeCount := uint64(len(m.g.pathSrcConnIDs[pid]))
+			// Invariant 4: Per-path active CID count (issued minus retired) never exceeds peer's advertised limit
+			b := m.budget()
+			for pid := protocol.PathID(1); pid <= 8; pid++ {
+				activeCount := uint64(len(m.g.pathSrcConnIDs[pid]))
+				if activeCount > m.peerLimit {
+					t.Fatalf("invariant violation: path %d active pool size = %d exceeds peer limit %d", pid, activeCount, m.peerLimit)
+				}
+				if m.handshakeConfirmed && pid <= effectiveMax {
 					if activeCount != b {
 						t.Fatalf("invariant violation: path %d active pool size = %d, want budget %d", pid, activeCount, b)
 					}
