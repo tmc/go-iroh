@@ -66,6 +66,9 @@ type connIDGenerator struct {
 	pathSrcConnIDs map[protocol.PathID]map[uint64]protocol.ConnectionID
 	pathHighestSeq map[protocol.PathID]uint64
 
+	peerActiveConnIDLimit uint64
+	maxPathIDWithCIDs     protocol.PathID
+
 	statelessResetter *statelessResetter
 
 	queueControlFrame func(wire.Frame)
@@ -81,12 +84,13 @@ func newConnIDGenerator(
 	generator ConnectionIDGenerator,
 ) *connIDGenerator {
 	m := &connIDGenerator{
-		generator:         generator,
-		activeSrcConnIDs:  make(map[uint64]protocol.ConnectionID),
-		cidPath:           make(map[protocol.ConnectionID]protocol.PathID),
-		statelessResetter: statelessResetter,
-		connRunners:       map[connRunner]connRunnerCallbacks{runner: callbacks},
-		queueControlFrame: queueControlFrame,
+		generator:             generator,
+		activeSrcConnIDs:      make(map[uint64]protocol.ConnectionID),
+		cidPath:               make(map[protocol.ConnectionID]protocol.PathID),
+		statelessResetter:     statelessResetter,
+		connRunners:           map[connRunner]connRunnerCallbacks{runner: callbacks},
+		queueControlFrame:     queueControlFrame,
+		peerActiveConnIDLimit: protocol.DefaultActiveConnectionIDLimit,
 	}
 	m.activeSrcConnIDs[0] = initialConnectionID
 	m.cidPath[initialConnectionID] = protocol.PathIDZero
@@ -97,7 +101,12 @@ func newConnIDGenerator(
 	return m
 }
 
+func (m *connIDGenerator) issueCIDsLimit() uint64 {
+	return min(m.peerActiveConnIDLimit, protocol.MaxIssuedConnectionIDs)
+}
+
 func (m *connIDGenerator) SetMaxActiveConnIDs(limit uint64) error {
+	m.peerActiveConnIDLimit = limit
 	if m.generator.ConnectionIDLen() == 0 {
 		return nil
 	}
@@ -107,10 +116,45 @@ func (m *connIDGenerator) SetMaxActiveConnIDs(limit uint64) error {
 	// transport parameter.
 	// We currently don't send the preferred_address transport parameter,
 	// so we can issue (limit - 1) connection IDs.
-	for i := uint64(len(m.activeSrcConnIDs)); i < min(limit, protocol.MaxIssuedConnectionIDs); i++ {
+	for i := uint64(len(m.activeSrcConnIDs)); i < m.issueCIDsLimit(); i++ {
 		if err := m.issueNewConnID(); err != nil {
 			return err
 		}
+	}
+	budget := m.issueCIDsLimit()
+	for pid := protocol.PathID(1); pid <= m.maxPathIDWithCIDs; pid++ {
+		cur := uint64(len(m.pathSrcConnIDs[pid]))
+		for i := cur; i < budget; i++ {
+			if _, err := m.issuePathConnID(pid); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// IssueFirstPathCIDs issues an initial batch of connection IDs up to the budget
+// for newly covered paths when local MAX_PATH_ID is set or raised, matching noq's
+// issue_first_path_cids (connection/mod.rs:6030-6044). maxPathIDWithCIDs tracks
+// the high-water mark so raises are incremental and idempotent.
+func (m *connIDGenerator) IssueFirstPathCIDs(maxPathID protocol.PathID) error {
+	if m.generator.ConnectionIDLen() == 0 {
+		if maxPathID > m.maxPathIDWithCIDs {
+			m.maxPathIDWithCIDs = maxPathID
+		}
+		return nil
+	}
+	budget := m.issueCIDsLimit()
+	for pid := m.maxPathIDWithCIDs + 1; pid <= maxPathID; pid++ {
+		cur := uint64(len(m.pathSrcConnIDs[pid]))
+		for i := cur; i < budget; i++ {
+			if _, err := m.issuePathConnID(pid); err != nil {
+				return err
+			}
+		}
+	}
+	if maxPathID > m.maxPathIDWithCIDs {
+		m.maxPathIDWithCIDs = maxPathID
 	}
 	return nil
 }
@@ -176,8 +220,14 @@ func (m *connIDGenerator) RetirePath(pid protocol.PathID, seq uint64, sentWithDe
 	if len(ids) == 0 {
 		delete(m.pathSrcConnIDs, pid)
 	}
-	_, err := m.issuePathConnID(pid)
-	return err
+	// Replenish active pool to budget (noq connection/mod.rs:5084 semantics)
+	budget := m.issueCIDsLimit()
+	for uint64(len(m.pathSrcConnIDs[pid])) < budget {
+		if _, err := m.issuePathConnID(pid); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *connIDGenerator) queueConnIDForRetiring(connID protocol.ConnectionID, expiry monotime.Time) {

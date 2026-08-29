@@ -11,4 +11,5 @@ type ConnectionStats struct {
 	PacketsReceived atomic.Uint64
 	BytesLost       atomic.Uint64
 	PacketsLost     atomic.Uint64
+	PathCIDsBlocked atomic.Uint64
 }

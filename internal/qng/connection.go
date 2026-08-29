@@ -247,6 +247,8 @@ type Conn struct {
 	rttStats  *utils.RTTStats
 	connStats utils.ConnectionStats
 
+	warnPathCIDsBlockedOnce bool
+
 	cryptoStreamManager   *cryptoStreamManager
 	sentPacketHandler     ackhandler.SentPacketHandler
 	receivedPacketHandler ackhandler.ReceivedPacketHandler
@@ -981,6 +983,9 @@ type ConnectionStats struct {
 	// (does not monotonically increase, because packets that are declared lost
 	// can subsequently be received).
 	PacketsLost uint64
+	// PathCIDsBlocked is the number of PATH_CIDS_BLOCKED frames received from
+	// the peer on this connection.
+	PathCIDsBlocked uint64
 }
 
 func (c *Conn) ConnectionStats() ConnectionStats {
@@ -996,6 +1001,7 @@ func (c *Conn) ConnectionStats() ConnectionStats {
 		PacketsReceived: c.connStats.PacketsReceived.Load(),
 		BytesLost:       c.connStats.BytesLost.Load(),
 		PacketsLost:     c.connStats.PacketsLost.Load(),
+		PathCIDsBlocked: c.connStats.PathCIDsBlocked.Load(),
 	}
 }
 
@@ -1165,6 +1171,11 @@ func (c *Conn) handleHandshakeConfirmed(now monotime.Time) error {
 	// (gated by !c.handshakeConfirmed at every call site), so the frame is
 	// queued exactly once.
 	c.queueMaxPathID()
+	if c.multipathNegotiated() && c.connIDGenerator != nil {
+		if err := c.connIDGenerator.IssueFirstPathCIDs(c.ourLocalMaxPathID()); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -2524,19 +2535,15 @@ func (c *Conn) handlePathCIDsBlockedFrame(frame *wire.PathCIDsBlockedFrame) erro
 	if err := c.rejectIfMultipathOff("PATH_CIDS_BLOCKED"); err != nil {
 		return err
 	}
+	c.connStats.PathCIDsBlocked.Add(1)
+	if !c.warnPathCIDsBlockedOnce {
+		c.warnPathCIDsBlockedOnce = true
+		if c.logger != nil {
+			c.logger.Infof("received PATH_CIDS_BLOCKED for path %d (seq %d)", frame.PathID, frame.NextSeq)
+		}
+	}
 	c.multipathManager.handlePathCIDsBlocked(frame.PathID, frame.NextSeq)
-	if frame.PathID == protocol.PathIDZero || !c.canOpenPath(frame.PathID) || c.connIDGenerator == nil {
-		return nil
-	}
-	highestNext := uint64(0)
-	if c.connIDGenerator.pathHighestSeq != nil {
-		highestNext = c.connIDGenerator.pathHighestSeq[frame.PathID]
-	}
-	if highestNext > frame.NextSeq {
-		return nil
-	}
-	_, err := c.issuePathConnID(frame.PathID)
-	return err
+	return nil
 }
 
 // handlePacket is called by the server with a new packet
