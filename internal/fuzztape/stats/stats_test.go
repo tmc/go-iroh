@@ -10,14 +10,14 @@ import (
 
 func TestWrap(t *testing.T) {
 	ops := []fuzztape.Op[*int]{
-		{Name: "inc", Apply: func(n *int, t *fuzztape.Tape) error { *n++; return nil }},
-		{Name: "full", Apply: func(n *int, t *fuzztape.Tape) error { return errFull }},
+		{Name: "inc", Apply: func(t *fuzztape.T, n *int) { *n++ }},
+		{Name: "full", Apply: func(t *fuzztape.T, n *int) { t.Reject("full") }},
 		{Name: "gated", When: func(*int) bool { return false },
-			Apply: func(n *int, t *fuzztape.Tape) error { return nil }},
+			Apply: func(t *fuzztape.T, n *int) {}},
 	}
 	wrapped, report := stats.Wrap(ops)
 	m := fuzztape.Machine[*int]{
-		Init: func(t *testing.T) *int { return new(int) },
+		Init: func(t *fuzztape.T) *int { return new(int) },
 		Ops:  wrapped,
 	}
 	m.Run(t, 30)
@@ -53,13 +53,13 @@ func TestWrap(t *testing.T) {
 func TestWrapPreservesEncoding(t *testing.T) {
 	build := func(ops []fuzztape.Op[*int]) fuzztape.Machine[*int] {
 		return fuzztape.Machine[*int]{
-			Init: func(t *testing.T) *int { return new(int) },
+			Init: func(t *fuzztape.T) *int { return new(int) },
 			Ops:  ops,
 		}
 	}
 	ops := []fuzztape.Op[*int]{
-		{Name: "a", Weight: 2, Apply: func(n *int, t *fuzztape.Tape) error { *n += t.IntN(10); return nil }},
-		{Name: "b", Apply: func(n *int, t *fuzztape.Tape) error { *n *= 2; return nil }},
+		{Name: "a", Weight: 2, Apply: func(t *fuzztape.T, n *int) { *n += t.IntN(10) }},
+		{Name: "b", Apply: func(t *fuzztape.T, n *int) { *n *= 2 }},
 	}
 	wrapped, _ := stats.Wrap(ops)
 	data := []byte{4, 9, 9, 9, 9, 9, 9, 9, 9, 4, 1, 0, 2, 3}

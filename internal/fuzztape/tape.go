@@ -1,6 +1,9 @@
 package fuzztape
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"math"
+)
 
 // A Tape consumes a fuzz input as a sequence of typed decisions.
 // The zero Tape is empty and yields zero values forever.
@@ -24,6 +27,12 @@ func (t *Tape) Done() bool {
 // the end of the input do not advance it.
 func (t *Tape) Pos() int {
 	return t.pos
+}
+
+// Len returns the length of the input, which bounds the work a
+// correctly behaved system under test should do for it.
+func (t *Tape) Len() int {
+	return len(t.data)
 }
 
 // Byte returns the next byte, or 0 when the input is exhausted.
@@ -57,6 +66,13 @@ func (t *Tape) Uint64() uint64 {
 // byte occasionally forces a boundary value — 0, 1, n-1, or a power of
 // two — because most bugs live at boundaries and uniform bytes rarely
 // land there. A zero tape decodes to 0.
+//
+// The unskewed case reduces eight bytes modulo n, which for an n that
+// is not a power of two favors the low end by a factor of at most
+// 2⁻⁶⁴ per value. That bias is beneath notice next to the deliberate
+// one above it, and removing it would cost a variable number of tape
+// bytes per draw, which would break the fixed decoding that shrinking
+// depends on.
 func (t *Tape) IntN(n int) int {
 	if n <= 0 {
 		panic("fuzztape: IntN called with n <= 0")
@@ -79,20 +95,37 @@ func (t *Tape) IntN(n int) int {
 }
 
 // Bytes returns a slice of length in [0, max], drawn from the tape and
-// zero-filled past the end of the input.
+// zero-filled past the end of the input. It panics if max is negative
+// or [math.MaxInt].
 func (t *Tape) Bytes(max int) []byte {
-	if max < 0 {
-		max = 0
-	}
-	out := make([]byte, t.IntN(max+1))
+	out := make([]byte, t.IntN(lengths("Bytes", max)))
 	for i := range out {
 		out[i] = t.Byte()
 	}
 	return out
 }
 
+// lengths returns max+1, the exclusive bound for a length drawn in
+// [0, max]. It panics on a max that cannot have one, so that every
+// generator taking a maximum length rejects the same arguments with the
+// same message: a negative bound is a caller's arithmetic gone wrong,
+// and silently clamping it to zero turns that into a generator that
+// quietly yields nothing forever.
+func lengths(who string, max int) int {
+	if max < 0 {
+		panic("fuzztape: " + who + " called with a negative max")
+	}
+	if max == math.MaxInt {
+		panic("fuzztape: " + who + " called with max = MaxInt")
+	}
+	return max + 1
+}
+
 // Pick returns one of opts, chosen by the tape. It panics if opts is
 // empty. A zero tape picks opts[0].
-func Pick[T any](t *Tape, opts []T) T {
+//
+// The type parameter is named V rather than the conventional T because
+// this package has a type named [T].
+func Pick[V any](t *Tape, opts []V) V {
 	return opts[t.IntN(len(opts))]
 }

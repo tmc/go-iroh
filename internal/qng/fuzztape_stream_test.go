@@ -77,7 +77,7 @@ func (s *streamMachineStream) sendable() bool {
 }
 
 type streamMachine struct {
-	t   *testing.T
+	t   *fuzztape.T
 	now monotime.Time
 
 	connFC flowcontrol.ConnectionFlowController
@@ -114,7 +114,7 @@ func (s streamMachineSender) onHasStreamControlFrame(id protocol.StreamID, str s
 
 func (s streamMachineSender) onStreamCompleted(protocol.StreamID) {}
 
-func newStreamMachine(t *testing.T) *streamMachine {
+func newStreamMachine(t *fuzztape.T) *streamMachine {
 	rttStats := utils.NewRTTStats()
 	connFC := flowcontrol.NewConnectionFlowController(
 		streamMachineConnWindow,
@@ -173,7 +173,7 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 				Name:   "openStream",
 				Weight: 2,
 				When:   func(m *streamMachine) bool { return len(m.streams) < streamMachineMaxStreams },
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *streamMachine) {
 					id := m.nextID
 					m.nextID += 4
 					fc := flowcontrol.NewStreamFlowController(
@@ -191,7 +191,6 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 						fc:         fc,
 						sendWindow: streamMachineStreamWindow,
 					})
-					return nil
 				},
 			},
 			{
@@ -208,7 +207,7 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 					}
 					return false
 				},
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *streamMachine) {
 					open := make([]*streamMachineStream, 0, len(m.streams))
 					for _, s := range m.streams {
 						if s.sendable() {
@@ -236,7 +235,6 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 						s.fin = true
 						s.finOffset = s.sent
 					}
-					return nil
 				},
 			},
 			{
@@ -249,7 +247,7 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 					}
 					return false
 				},
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *streamMachine) {
 					open := make([]*streamMachineStream, 0, len(m.streams))
 					for _, s := range m.streams {
 						if s.last != nil && !s.reset {
@@ -265,7 +263,6 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 						Data:     append([]byte(nil), s.last.Data...),
 						Fin:      s.last.Fin,
 					})
-					return nil
 				},
 			},
 			{
@@ -279,7 +276,7 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 					}
 					return false
 				},
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *streamMachine) {
 					open := make([]*streamMachineStream, 0, len(m.streams))
 					for _, s := range m.streams {
 						if s.readable() {
@@ -295,19 +292,19 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 					n, err := s.rs.Read(buf)
 					s.rs.SetReadDeadline(time.Time{})
 					if errors.Is(err, errDeadline) {
-						m.t.Fatalf("stream %d: Read blocked with %d bytes buffered (read %d, sent %d)",
+						t.Fatalf("stream %d: Read blocked with %d bytes buffered (read %d, sent %d)",
 							s.id, s.sent-s.readPos, s.readPos, s.sent)
 					}
 					for i := range n {
 						want := streamMachineData(s.id, s.readPos+protocol.ByteCount(i))
 						if buf[i] != want {
-							m.t.Fatalf("stream %d: Read at offset %d = %#x, want %#x",
+							t.Fatalf("stream %d: Read at offset %d = %#x, want %#x",
 								s.id, s.readPos+protocol.ByteCount(i), buf[i], want)
 						}
 					}
 					s.readPos += protocol.ByteCount(n)
 					if s.readPos > s.sent {
-						m.t.Fatalf("stream %d: read %d bytes, but only %d were sent", s.id, s.readPos, s.sent)
+						t.Fatalf("stream %d: read %d bytes, but only %d were sent", s.id, s.readPos, s.sent)
 					}
 					var streamErr *StreamError
 					switch {
@@ -315,45 +312,43 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 					case errors.Is(err, io.EOF), errors.As(err, &streamErr):
 						s.eof = true
 					default:
-						m.t.Fatalf("stream %d: Read: %v", s.id, err)
+						t.Fatalf("stream %d: Read: %v", s.id, err)
 					}
-					return nil
 				},
 			},
 			{
 				Name:   "connWindowUpdate",
 				Weight: 3,
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *streamMachine) {
 					// This mirrors Conn.sendPackets: whenever the send loop
 					// runs, a pending connection-level window update is
 					// queued as a MAX_DATA frame.
 					m.connData = false
 					offset := m.connFC.GetWindowUpdate(m.now)
 					if offset == 0 {
-						return nil
+						return
 					}
 					m.framer.QueueMaxDataFrame(offset)
 					m.maxDataQueued = true
 					if offset > m.maxDataOffset {
 						m.maxDataOffset = offset
 					}
-					return nil
 				},
 			},
 			{
 				Name:   "packPacket",
 				Weight: 5,
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
-					size := fuzztape.Pick(t, []protocol.ByteCount{1200, 128, 64, 32, 26, 1452})
+				Apply: func(t *fuzztape.T, m *streamMachine) {
+					size := fuzztape.Pick(t.Tape, []protocol.ByteCount{1200, 128, 64, 32, 26, 1452})
 					pl := m.packer.composeNextPacket(size, false, true, m.now, protocol.Version1)
 					if pl.hasStreamFrame || len(pl.streamFrames) > 0 {
-						m.t.Fatalf("packed %d STREAM frames, but no stream is sending", pl.numStreamFrames())
+						t.Fatalf("packed %d STREAM frames, but no stream is sending", pl.numStreamFrames())
 					}
 					for _, f := range pl.frames {
 						switch frame := f.Frame.(type) {
 						case *wire.MaxDataFrame:
 							if frame.MaximumData < m.connSendWindow {
-								m.t.Fatalf("MAX_DATA = %d, below the already granted %d",
+								t.Fatalf("MAX_DATA = %d, below the already granted %d",
 									frame.MaximumData, m.connSendWindow)
 							}
 							m.connSendWindow = frame.MaximumData
@@ -361,7 +356,7 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 						case *wire.MaxStreamDataFrame:
 							s := m.stream(frame.StreamID)
 							if s == nil {
-								m.t.Fatalf("MAX_STREAM_DATA for unknown stream %d", frame.StreamID)
+								t.Fatalf("MAX_STREAM_DATA for unknown stream %d", frame.StreamID)
 							}
 							// A queued MAX_STREAM_DATA can be packed after the
 							// update became unnecessary — an abandoned stream
@@ -372,11 +367,10 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 							}
 						case *wire.StopSendingFrame:
 							if s := m.stream(frame.StreamID); s == nil {
-								m.t.Fatalf("STOP_SENDING for unknown stream %d", frame.StreamID)
+								t.Fatalf("STOP_SENDING for unknown stream %d", frame.StreamID)
 							}
 						}
 					}
-					return nil
 				},
 			},
 			{
@@ -389,7 +383,7 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 					}
 					return false
 				},
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *streamMachine) {
 					open := make([]*streamMachineStream, 0, len(m.streams))
 					for _, s := range m.streams {
 						if !s.reset && !s.fin {
@@ -404,12 +398,11 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 						ErrorCode: qerr.StreamErrorCode(t.IntN(8)),
 						FinalSize: s.sent,
 					}, m.now); err != nil {
-						m.t.Fatalf("stream %d: handleResetStreamFrame(final %d): %v", s.id, s.sent, err)
+						t.Fatalf("stream %d: handleResetStreamFrame(final %d): %v", s.id, s.sent, err)
 					}
 					s.reset = true
 					s.fin = true
 					s.finOffset = s.sent
-					return nil
 				},
 			},
 			{
@@ -422,7 +415,7 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 					}
 					return false
 				},
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *streamMachine) {
 					open := make([]*streamMachineStream, 0, len(m.streams))
 					for _, s := range m.streams {
 						if !s.cancelled && !s.eof {
@@ -432,18 +425,16 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 					s := open[t.IntN(len(open))]
 					s.rs.CancelRead(StreamErrorCode(t.IntN(8)))
 					s.cancelled = true
-					return nil
 				},
 			},
 			{
 				Name: "advanceTime",
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *streamMachine) {
 					m.now = m.now.Add(time.Duration(t.IntN(100)) * time.Millisecond)
-					return nil
 				},
 			},
 		},
-		Check: func(t *testing.T, m *streamMachine) {
+		Check: func(t *fuzztape.T, m *streamMachine) {
 			for _, s := range m.streams {
 				if s.sent > s.sendWindow {
 					t.Fatalf("stream %d: sent %d bytes, granted %d", s.id, s.sent, s.sendWindow)
@@ -479,7 +470,7 @@ func (m *streamMachine) stream(id protocol.StreamID) *streamMachineStream {
 
 // pathCIDMachine models the per-path CID generator and state machine under fuzztape.
 type pathCIDMachine struct {
-	t             *testing.T
+	t             *fuzztape.T
 	g             *connIDGenerator
 	frames        []wire.Frame
 	addedCIDs     []protocol.ConnectionID
@@ -494,7 +485,7 @@ type pathCIDMachine struct {
 	receivedPathCIDsBlocked bool
 }
 
-func newPathCIDMachine(t *testing.T) *pathCIDMachine {
+func newPathCIDMachine(t *fuzztape.T) *pathCIDMachine {
 	m := &pathCIDMachine{
 		t:                   t,
 		retiredCIDs:         make(map[protocol.PathID]map[protocol.ConnectionID]bool),
@@ -539,21 +530,20 @@ func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 				Name:   "handshakeComplete",
 				Weight: 2,
 				When:   func(m *pathCIDMachine) bool { return !m.handshakeConfirmed },
-				Apply: func(m *pathCIDMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *pathCIDMachine) {
 					m.handshakeConfirmed = true
 					if m.multipathNegotiated && m.maxPathID > 0 {
 						if err := m.g.IssueFirstPathCIDs(m.maxPathID); err != nil {
-							m.t.Fatalf("IssueFirstPathCIDs on handshakeComplete: %v", err)
+							t.Fatalf("IssueFirstPathCIDs on handshakeComplete: %v", err)
 						}
 					}
-					return nil
 				},
 			},
 			{
 				Name:   "raiseMaxPathID",
 				Weight: 4,
 				When:   func(m *pathCIDMachine) bool { return m.maxPathID < 8 },
-				Apply: func(m *pathCIDMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *pathCIDMachine) {
 					delta := protocol.PathID(1 + t.IntN(3))
 					newMax := m.maxPathID + delta
 					if newMax > 8 {
@@ -562,16 +552,15 @@ func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 					m.maxPathID = newMax
 					if m.handshakeConfirmed && m.multipathNegotiated {
 						if err := m.g.IssueFirstPathCIDs(m.maxPathID); err != nil {
-							m.t.Fatalf("IssueFirstPathCIDs on raiseMaxPathID: %v", err)
+							t.Fatalf("IssueFirstPathCIDs on raiseMaxPathID: %v", err)
 						}
 					}
-					return nil
 				},
 			},
 			{
 				Name:   "peerLimitRenegotiation",
 				Weight: 2,
-				Apply: func(m *pathCIDMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *pathCIDMachine) {
 					// In QUIC, active_connection_id_limit can only increase (or be set on TP)
 					limit := m.peerLimit + uint64(1+t.IntN(4))
 					if limit > protocol.MaxIssuedConnectionIDs {
@@ -579,9 +568,8 @@ func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 					}
 					m.peerLimit = limit
 					if err := m.g.SetMaxActiveConnIDs(limit); err != nil {
-						m.t.Fatalf("SetMaxActiveConnIDs: %v", err)
+						t.Fatalf("SetMaxActiveConnIDs: %v", err)
 					}
-					return nil
 				},
 			},
 			{
@@ -595,7 +583,7 @@ func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 					}
 					return false
 				},
-				Apply: func(m *pathCIDMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *pathCIDMachine) {
 					type activeCID struct {
 						pid protocol.PathID
 						seq uint64
@@ -608,7 +596,7 @@ func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 						}
 					}
 					if len(candidates) == 0 {
-						return nil
+						return
 					}
 					c := candidates[t.IntN(len(candidates))]
 					if m.retiredCIDs[c.pid] == nil {
@@ -618,9 +606,8 @@ func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 
 					// Retire using a dummy destination connection ID
 					if err := m.g.RetirePath(c.pid, c.seq, protocol.ParseConnectionID([]byte{0xfe, 0xdc, 0xba, 0x98}), monotime.Now()); err != nil {
-						m.t.Fatalf("RetirePath(path %d, seq %d): %v", c.pid, c.seq, err)
+						t.Fatalf("RetirePath(path %d, seq %d): %v", c.pid, c.seq, err)
 					}
-					return nil
 				},
 			},
 			{
@@ -637,13 +624,12 @@ func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
 					}
 					return false
 				},
-				Apply: func(m *pathCIDMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *pathCIDMachine) {
 					m.receivedPathCIDsBlocked = true
-					return nil
 				},
 			},
 		},
-		Check: func(t *testing.T, m *pathCIDMachine) {
+		Check: func(t *fuzztape.T, m *pathCIDMachine) {
 			// Invariant: receiving PATH_CIDS_BLOCKED at all is a failure (a correct issuer never lets the peer starve)
 			if m.receivedPathCIDsBlocked {
 				t.Fatalf("invariant violation: received PATH_CIDS_BLOCKED (a correct issuer never lets the peer starve)")
@@ -708,4 +694,3 @@ func TestPathCIDMachine(t *testing.T) {
 func FuzzPathCIDMachine(f *testing.F) {
 	pathCIDMachineSpec().Fuzz(f)
 }
-

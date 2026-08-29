@@ -28,6 +28,10 @@ type Report struct {
 // and rejections in the returned Report. Everything else about the ops
 // — names, weights, When gates, and how they consume the tape — is
 // unchanged, so wrapping does not alter the corpus encoding.
+//
+// An op that ends by failing the test rather than by returning or
+// rejecting is counted as rejected. That case is not worth
+// distinguishing: the run is already over.
 func Wrap[S any](ops []fuzztape.Op[S]) ([]fuzztape.Op[S], *Report) {
 	r := &Report{
 		names:    make([]string, len(ops)),
@@ -38,16 +42,21 @@ func Wrap[S any](ops []fuzztape.Op[S]) ([]fuzztape.Op[S], *Report) {
 	for i, op := range ops {
 		r.names[i] = op.Name
 		apply := op.Apply
-		op.Apply = func(s S, t *fuzztape.Tape) error {
-			err := apply(s, t)
-			r.mu.Lock()
-			if err != nil {
-				r.rejected[i]++
-			} else {
-				r.applied[i]++
-			}
-			r.mu.Unlock()
-			return err
+		op.Apply = func(t *fuzztape.T, s S) {
+			// Counted from a defer so that the rejection, which
+			// unwinds the op, is observed without intercepting it.
+			done := false
+			defer func() {
+				r.mu.Lock()
+				if done {
+					r.applied[i]++
+				} else {
+					r.rejected[i]++
+				}
+				r.mu.Unlock()
+			}()
+			apply(t, s)
+			done = true
 		}
 		wrapped[i] = op
 	}
@@ -70,8 +79,10 @@ func (r *Report) Missing() []string {
 
 // Log writes per-op applied and rejected counts to t and flags ops
 // that never applied. It is typically called once after Machine.Run,
-// or from a testing.T Cleanup registered in Init.
-func (r *Report) Log(t *testing.T) {
+// or from a cleanup registered in Init. It takes a [testing.TB] so
+// that both callers can reach it: the outer *testing.T, and a
+// fuzztape.T through its Cleanup.
+func (r *Report) Log(t testing.TB) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for i, name := range r.names {

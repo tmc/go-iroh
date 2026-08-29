@@ -12,9 +12,9 @@ import (
 // Splits offsets are fully predictable: one selector byte per op for
 // selectors 0–3, nine bytes for uniform selectors.
 var counter = fuzztape.Machine[*int]{
-	Init: func(t *testing.T) *int { return new(int) },
+	Init: func(t *fuzztape.T) *int { return new(int) },
 	Ops: []fuzztape.Op[*int]{
-		{Name: "inc", Apply: func(n *int, t *fuzztape.Tape) error { *n++; return nil }},
+		{Name: "inc", Apply: func(t *fuzztape.T, n *int) { *n++ }},
 	},
 }
 
@@ -102,10 +102,10 @@ func TestDelete(t *testing.T) {
 // that never decodes.
 func TestSplitsNoPhantomBoundary(t *testing.T) {
 	gated := fuzztape.Machine[*int]{
-		Init: func(t *testing.T) *int { return new(int) },
+		Init: func(t *fuzztape.T) *int { return new(int) },
 		Ops: []fuzztape.Op[*int]{
 			{Name: "never", When: func(*int) bool { return false },
-				Apply: func(n *int, t *fuzztape.Tape) error { return nil }},
+				Apply: func(t *fuzztape.T, n *int) {}},
 		},
 	}
 	splits := gated.Splits(t, []byte{1, 2, 3})
