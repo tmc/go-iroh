@@ -39,6 +39,8 @@ type connIDManager struct {
 	removeStatelessResetToken func(protocol.StatelessResetToken)
 	queueControlFrame         func(wire.Frame)
 
+	maxActiveConnIDs uint64
+
 	closed bool
 }
 
@@ -54,6 +56,13 @@ func newConnIDManager(
 		removeStatelessResetToken: removeStatelessResetToken,
 		queueControlFrame:         queueControlFrame,
 		queue:                     make([]newConnID, 0, protocol.MaxActiveConnectionIDs),
+		maxActiveConnIDs:          protocol.MaxActiveConnectionIDs,
+	}
+}
+
+func (h *connIDManager) SetMaxActiveConnIDs(limit uint64) {
+	if limit > 0 {
+		h.maxActiveConnIDs = limit
 	}
 }
 
@@ -65,7 +74,7 @@ func (h *connIDManager) Add(f *wire.NewConnectionIDFrame) error {
 	if err := h.add(f); err != nil {
 		return err
 	}
-	if len(h.queue) >= protocol.MaxActiveConnectionIDs {
+	if uint64(len(h.queue)) >= h.maxActiveConnIDs {
 		return &qerr.TransportError{ErrorCode: qerr.ConnectionIDLimitError}
 	}
 	return nil
