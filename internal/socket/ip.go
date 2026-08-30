@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"sync"
 )
 
 // maxDatagramSize bounds a single read from the UDP socket. QUIC packets never
@@ -22,13 +23,18 @@ var ipRecvPool = make(chan []byte, 1024)
 type IpTransport struct {
 	conn   *net.UDPConn
 	recvCh chan<- recvBatch
+	gro    bool
 }
+
+const groBufSize = 65535
+
+var groRecvPool = sync.Pool{New: func() any { b := make([]byte, groBufSize); return &b }}
 
 // NewIpTransport returns an IpTransport over conn that delivers received
 // datagrams to recvCh. The transport does not take ownership of conn; the caller
 // closes it.
 func NewIpTransport(conn *net.UDPConn, recvCh chan<- recvBatch) *IpTransport {
-	return &IpTransport{conn: conn, recvCh: recvCh}
+	return &IpTransport{conn: conn, recvCh: recvCh, gro: enableGRO(conn)}
 }
 
 // LocalAddr returns the bound local address of the underlying socket.
@@ -40,6 +46,10 @@ func (t *IpTransport) LocalAddr() net.Addr { return t.conn.LocalAddr() }
 // match iroh/src/socket/transports/ip.rs:221 to_canonical). Empty datagrams and
 // transient errors are skipped; a closed socket ends the loop cleanly.
 func (t *IpTransport) Serve(ctx context.Context) {
+	if t.gro {
+		t.serveGRO(ctx)
+		return
+	}
 	for {
 		if ctx.Err() != nil {
 			return
@@ -65,6 +75,38 @@ func (t *IpTransport) Serve(ctx context.Context) {
 		// (unmapped) form. iroh/src/socket/transports/ip.rs:219.
 		cap := canonicalAddrPort(ap)
 		b := recvBatch{data: buf[:n], ip: cap, releaseIP: true}
+		if !t.enqueue(ctx, b) {
+			return
+		}
+	}
+}
+
+func (t *IpTransport) serveGRO(ctx context.Context) {
+	var oob [groOOBSize]byte
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		bp := groRecvPool.Get().(*[]byte)
+		buf := *bp
+		n, oobn, _, ap, err := t.conn.ReadMsgUDPAddrPort(buf, oob[:])
+		if err != nil {
+			groRecvPool.Put(bp)
+			if errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
+				return
+			}
+			continue
+		}
+		if n == 0 {
+			groRecvPool.Put(bp)
+			continue
+		}
+		seg := groSegmentSize(oob[:oobn])
+		if seg <= 0 || seg > n {
+			seg = n
+		}
+		recordUDPReceive((n+seg-1)/seg, seg < n)
+		b := recvBatch{data: buf[:n], stride: seg, ip: canonicalAddrPort(ap), groBuf: bp}
 		if !t.enqueue(ctx, b) {
 			return
 		}

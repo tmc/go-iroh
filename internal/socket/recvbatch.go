@@ -101,15 +101,27 @@ type RecvInfo struct {
 // is copied into the caller's buffer.
 type recvBatch struct {
 	data      []byte
+	stride    int // segment size when data holds several datagrams; 0 = one
 	info      RecvInfo
 	ip        netip.AddrPort
 	releaseIP bool
+	groBuf    *[]byte
 	releaseFn func()
+}
+
+func (b recvBatch) count() uint64 {
+	if b.stride <= 0 || len(b.data) == 0 {
+		return 1
+	}
+	return uint64((len(b.data) + b.stride - 1) / b.stride)
 }
 
 func (b recvBatch) release() {
 	if b.releaseIP {
 		putIPRecvBuffer(b.data)
+	}
+	if b.groBuf != nil {
+		groRecvPool.Put(b.groBuf)
 	}
 	if b.releaseFn != nil {
 		b.releaseFn()

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1114,25 +1115,36 @@ func TestRelayTransportServeForwardsRecv(t *testing.T) {
 		Datagrams:        relayproto.Datagrams{SegmentSize: 2, Contents: []byte("aabbcc")},
 	}
 
-	want := []string{"aa", "bb", "cc"}
-	deadline := time.After(5 * time.Second)
-	for i, w := range want {
-		select {
-		case b := <-recvCh:
-			if string(b.data) != w {
-				t.Errorf("segment %d = %q, want %q", i, b.data, w)
-			}
-			// Each batch must be tagged with the relay Addr it arrived on.
-			gu, ge, ok := b.info.Remote.Relay()
-			if !ok {
-				t.Errorf("segment %d Remote kind = %v, want relay", i, b.info.Remote.Kind())
-			} else if !gu.Equal(url) || !ge.Equal(src.Public().EndpointID()) {
-				t.Errorf("segment %d Remote = (%s, %s), want (%s, %s)", i, gu, ge, url, src.Public().EndpointID())
-			}
-		case <-deadline:
-			t.Fatalf("timed out waiting for segment %d", i)
+	select {
+	case b := <-recvCh:
+		if got := batchSegments(b); !slices.Equal(got, []string{"aa", "bb", "cc"}) {
+			t.Errorf("segments = %q", got)
 		}
+		// The batch must be tagged with the relay Addr it arrived on.
+		gu, ge, ok := b.info.Remote.Relay()
+		if !ok {
+			t.Errorf("Remote kind = %v, want relay", b.info.Remote.Kind())
+		} else if !gu.Equal(url) || !ge.Equal(src.Public().EndpointID()) {
+			t.Errorf("Remote = (%s, %s), want (%s, %s)", gu, ge, url, src.Public().EndpointID())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for batch")
 	}
+}
+
+// batchSegments splits b the way MagicConn.ReadFrom does.
+func batchSegments(b recvBatch) []string {
+	var out []string
+	d := b.data
+	for len(d) > 0 {
+		n := len(d)
+		if b.stride > 0 && n > b.stride {
+			n = b.stride
+		}
+		out = append(out, string(d[:n]))
+		d = d[n:]
+	}
+	return out
 }
 
 // TestRelayTransportDeliverSegments unit-tests deliver directly: an 8-byte
@@ -1152,16 +1164,13 @@ func TestRelayTransportDeliverSegments(t *testing.T) {
 	}
 
 	rt.deliver(context.Background(), dm)
-	wantLens := []int{3, 3, 2}
-	for i, wl := range wantLens {
-		select {
-		case b := <-recvCh:
-			if len(b.data) != wl {
-				t.Errorf("segment %d len = %d, want %d", i, len(b.data), wl)
-			}
-		default:
-			t.Fatalf("missing segment %d", i)
+	select {
+	case b := <-recvCh:
+		if got := batchSegments(b); !slices.Equal(got, []string{"aaa", "bbb", "cc"}) {
+			t.Errorf("segments = %q", got)
 		}
+	default:
+		t.Fatal("missing batch")
 	}
 
 	// A cancelled context makes deliver return before enqueuing into a full
@@ -1262,4 +1271,40 @@ func TestMagicConnRelayAccessor(t *testing.T) {
 	}
 
 	m.Close()
+}
+
+// TestReadFromSplitsBatch checks ReadFrom hands out one segment per call from a
+// strided recvBatch and releases the batch after the last one.
+func TestReadFromSplitsBatch(t *testing.T) {
+	udp, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+	m := NewMagicConnWithTransports(NewSocket(), udp, nil)
+	released := 0
+	src := netip.MustParseAddrPort("192.0.2.1:7")
+	m.recvCh <- recvBatch{data: []byte("aaabbbcc"), stride: 3, ip: src, releaseFn: func() { released++ }}
+	buf := make([]byte, 16)
+	for i, want := range []string{"aaa", "bbb", "cc"} {
+		n, addr, err := m.ReadFrom(buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(buf[:n]) != want {
+			t.Errorf("segment %d = %q, want %q", i, buf[:n], want)
+		}
+		if addr.(*net.UDPAddr).AddrPort() != src {
+			t.Errorf("segment %d addr = %v", i, addr)
+		}
+		if i < 2 && released != 0 {
+			t.Errorf("released before last segment")
+		}
+	}
+	if released != 1 {
+		t.Errorf("released = %d, want 1", released)
+	}
+	if got := m.Metrics().RecvDatagrams; got != 3 {
+		t.Errorf("RecvDatagrams = %d, want 3", got)
+	}
 }

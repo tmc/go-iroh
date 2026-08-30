@@ -42,10 +42,7 @@ func (t *RelayTransport) Serve(ctx context.Context) {
 
 // forwardRecv drains datagrams from the actor and forwards each as a recvBatch
 // tagged with the relay [Addr], so [MagicConn.recvAddr] rewrites it to the
-// relay mapped IPv6 ULA quic-go addresses the path by. A relay transmit may
-// carry a GRO batch (segment size set); each segment is delivered as its own
-// recvBatch, matching the re-batching in the Rust poll_recv
-// (iroh/src/socket/transports/relay.rs:115).
+// relay mapped IPv6 ULA quic-go addresses the path by.
 func (t *RelayTransport) forwardRecv(ctx context.Context) {
 	for {
 		select {
@@ -60,9 +57,10 @@ func (t *RelayTransport) forwardRecv(ctx context.Context) {
 	}
 }
 
-// deliver splits dm into single datagrams (by its segment size) and forwards
-// each to the recv channel. dm.Datagrams.Contents is owned by dm (the relay
-// client copies on receive) and ReadFrom copies out, so segments alias it.
+// deliver forwards dm as one recvBatch whose stride is the segment size, so
+// ReadFrom hands quic-go one datagram at a time (the Rust poll_recv re-batches
+// the same way, iroh/src/socket/transports/relay.rs:115). The pooled Contents
+// buffer is released once ReadFrom has copied out the last segment.
 func (t *RelayTransport) deliver(ctx context.Context, dm RelayRecvDatagram) {
 	remote := RelayAddr(dm.URL, dm.Src)
 	b := dm.Datagrams.Contents
@@ -70,21 +68,10 @@ func (t *RelayTransport) deliver(ctx context.Context, dm RelayRecvDatagram) {
 	if dm.Datagrams.SegmentSize != 0 {
 		stride = int(dm.Datagrams.SegmentSize)
 	}
-	for {
-		n := min(len(b), stride)
-		rb := recvBatch{data: b[:n], info: RecvInfo{Remote: remote}}
-		if n == len(b) {
-			rb.releaseFn = dm.Datagrams.Release
-		}
-		select {
-		case t.recvCh <- rb:
-		case <-ctx.Done():
-			return
-		}
-		b = b[n:]
-		if len(b) == 0 {
-			return
-		}
+	rb := recvBatch{data: b, stride: stride, info: RecvInfo{Remote: remote}, releaseFn: dm.Datagrams.Release}
+	select {
+	case t.recvCh <- rb:
+	case <-ctx.Done():
 	}
 }
 

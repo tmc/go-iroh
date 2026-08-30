@@ -34,3 +34,6 @@ const (
 // ConnectTimeout bounds a single Connect call when no reachable address
 // succeeds. iroh/src/endpoint.rs documents a 10s connect timeout.
 const ConnectTimeout = 10 * time.Second
+
+// DialAttemptDelay staggers handshakes across a peer's dial targets.
+const DialAttemptDelay = 250 * time.Millisecond

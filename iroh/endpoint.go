@@ -1252,18 +1252,69 @@ func (e *Endpoint) connectEarly(ctx context.Context, addr netaddr.EndpointAddr, 
 		defer cancel()
 	}
 
-	var firstErr error
-	for _, target := range dials {
-		qc, err := e.transport.DialEarly(ctx, target, clientTLS, e.quicConf)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		return &Connecting{ep: e, qc: qc, remoteID: addr.ID, addr: addr, alpn: alpn}, nil
+	qc, err := e.dialAny(ctx, dials, clientTLS)
+	if err != nil {
+		return nil, fmt.Errorf("iroh: connect to %s: %w", addr.ID, err)
 	}
-	return nil, fmt.Errorf("iroh: connect to %s: %w", addr.ID, firstErr)
+	return &Connecting{ep: e, qc: qc, remoteID: addr.ID, addr: addr, alpn: alpn}, nil
+}
+
+// dialAny starts a handshake with each target DialAttemptDelay apart and
+// returns the first that completes, so unreachable direct addresses delay
+// the relay path by that step rather than a handshake timeout each. Losing
+// handshakes are cancelled or closed; the peer may briefly accept one.
+func (e *Endpoint) dialAny(ctx context.Context, targets []net.Addr, clientTLS *itls.Config) (*quic.Conn, error) {
+	if len(targets) == 1 {
+		return e.transport.DialEarly(ctx, targets[0], clientTLS, e.quicConf)
+	}
+	type result struct {
+		qc  *quic.Conn
+		err error
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan result, len(targets))
+	for i, target := range targets {
+		go func() {
+			if i > 0 {
+				select {
+				case <-time.After(time.Duration(i) * DialAttemptDelay):
+				case <-ctx.Done():
+					results <- result{nil, ctx.Err()}
+					return
+				}
+			}
+			qc, err := e.transport.DialEarly(ctx, target, clientTLS.Clone(), e.quicConf)
+			if err == nil {
+				select {
+				case <-qc.HandshakeComplete():
+				case <-ctx.Done():
+					qc.CloseWithError(0, "")
+					qc, err = nil, ctx.Err()
+				}
+			}
+			results <- result{qc, err}
+		}()
+	}
+	var firstErr error
+	for got := 1; got <= len(targets); got++ {
+		r := <-results
+		if r.err == nil {
+			cancel()
+			go func() {
+				for range len(targets) - got {
+					if late := <-results; late.qc != nil {
+						late.qc.CloseWithError(0, "")
+					}
+				}
+			}()
+			return r.qc, nil
+		}
+		if firstErr == nil {
+			firstErr = r.err
+		}
+	}
+	return nil, firstErr
 }
 
 // Dial dials addr, negotiates alpn, opens a bidirectional stream, and returns it
