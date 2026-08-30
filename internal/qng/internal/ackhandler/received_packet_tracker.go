@@ -88,8 +88,10 @@ type appDataReceivedPacketTracker struct {
 	largestObserved protocol.PacketNumber
 	ignoreBelow     protocol.PacketNumber
 
-	maxAckDelay time.Duration
-	ackQueued   bool // true if we need send a new ACK
+	maxAckDelay           time.Duration
+	ackQueued             bool // true if we need send a new ACK
+	ackElicitingThreshold uint64
+	reorderingThreshold   protocol.PacketNumber
 
 	ackElicitingPacketsReceivedSinceLastAck int
 	ackAlarm                                monotime.Time
@@ -101,9 +103,49 @@ func newAppDataReceivedPacketTracker(logger utils.Logger) *appDataReceivedPacket
 	h := &appDataReceivedPacketTracker{
 		receivedPacketTracker: *newReceivedPacketTracker(),
 		maxAckDelay:           protocol.MaxAckDelay,
+		ackElicitingThreshold: packetsBeforeAck,
+		reorderingThreshold:   reorderingThreshold,
 		logger:                logger,
 	}
 	return h
+}
+
+func (h *appDataReceivedPacketTracker) SetAckFrequencyParams(ackElicitingThreshold uint64, maxAckDelay time.Duration, reorderingThreshold protocol.PacketNumber, now monotime.Time) {
+	// In noq (spaces.rs:1201) and draft-ietf-quic-ack-frequency, the ACK triggers when
+	// the count of ack-eliciting packets EXCEEDS the frame's threshold: count > threshold.
+	// We preserve the unpatched `>= packetsBeforeAck` comparison operator for the default path
+	// (preserving the GG guard) and map the frame's threshold T to T+1 here.
+	if ackElicitingThreshold < ^uint64(0) {
+		h.ackElicitingThreshold = ackElicitingThreshold + 1
+	} else {
+		h.ackElicitingThreshold = ^uint64(0)
+	}
+	h.maxAckDelay = maxAckDelay
+	h.reorderingThreshold = reorderingThreshold
+
+	// If the new threshold is already met by packets received since the last
+	// ACK, queue one now rather than waiting for the next packet or timer.
+	if uint64(h.ackElicitingPacketsReceivedSinceLastAck) >= h.ackElicitingThreshold {
+		h.ackQueued = true
+		h.ackAlarm = 0
+		return
+	}
+
+	// If an ACK alarm is already set, adjust it based on the new maxAckDelay.
+	if !h.ackAlarm.IsZero() && !h.ackQueued {
+		newAlarm := h.largestObservedRcvdTime.Add(h.maxAckDelay)
+		if newAlarm.Before(now) {
+			h.ackQueued = true
+			h.ackAlarm = 0
+		} else {
+			h.ackAlarm = newAlarm
+		}
+	}
+}
+
+func (h *appDataReceivedPacketTracker) SetImmediateAckRequired() {
+	h.ackQueued = true
+	h.ackAlarm = 0
 }
 
 func (h *appDataReceivedPacketTracker) ReceivedPacket(pn protocol.PacketNumber, ecn protocol.ECN, rcvTime monotime.Time, ackEliciting bool) error {
@@ -155,13 +197,16 @@ func (h *appDataReceivedPacketTracker) isMissing(p protocol.PacketNumber) bool {
 }
 
 func (h *appDataReceivedPacketTracker) hasNewMissingPackets() bool {
+	if h.reorderingThreshold == 0 {
+		return false
+	}
 	if h.lastAck == nil {
 		return false
 	}
-	if h.largestObserved < reorderingThreshold {
+	if h.largestObserved < h.reorderingThreshold {
 		return false
 	}
-	highestMissing := h.packetHistory.HighestMissingUpTo(h.largestObserved - reorderingThreshold)
+	highestMissing := h.packetHistory.HighestMissingUpTo(h.largestObserved - h.reorderingThreshold)
 	if highestMissing == protocol.InvalidPacketNumber {
 		return false
 	}
@@ -169,7 +214,7 @@ func (h *appDataReceivedPacketTracker) hasNewMissingPackets() bool {
 		// the packet was already reported missing in the last ACK
 		return false
 	}
-	return highestMissing > h.lastAck.LargestAcked()-reorderingThreshold
+	return highestMissing > h.lastAck.LargestAcked()-h.reorderingThreshold
 }
 
 func (h *appDataReceivedPacketTracker) shouldQueueACK(pn protocol.PacketNumber, ecn protocol.ECN, wasMissing bool) bool {
@@ -184,9 +229,9 @@ func (h *appDataReceivedPacketTracker) shouldQueueACK(pn protocol.PacketNumber, 
 	}
 
 	// send an ACK after enough ack-eliciting packets
-	if h.ackElicitingPacketsReceivedSinceLastAck >= packetsBeforeAck {
+	if uint64(h.ackElicitingPacketsReceivedSinceLastAck) >= h.ackElicitingThreshold {
 		if h.logger.Debug() {
-			h.logger.Debugf("\tQueueing ACK because packet %d packets were received after the last ACK (using initial threshold: %d).", h.ackElicitingPacketsReceivedSinceLastAck, packetsBeforeAck)
+			h.logger.Debugf("\tQueueing ACK because packet %d packets were received after the last ACK (using threshold: %d).", h.ackElicitingPacketsReceivedSinceLastAck, h.ackElicitingThreshold)
 		}
 		return true
 	}

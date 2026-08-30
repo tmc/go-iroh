@@ -2,6 +2,7 @@ package ackhandler
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
@@ -62,6 +63,20 @@ func (h *ReceivedPacketHandler) RemovePath(pid protocol.PathID) {
 		return
 	}
 	delete(h.appDataPaths, pid)
+}
+
+// SetAckFrequencyParams applies ACK_FREQUENCY frame parameters to all application data path trackers.
+func (h *ReceivedPacketHandler) SetAckFrequencyParams(ackElicitingThreshold uint64, maxAckDelay time.Duration, reorderingThreshold protocol.PacketNumber, now monotime.Time) {
+	for _, path := range h.appDataPaths {
+		path.SetAckFrequencyParams(ackElicitingThreshold, maxAckDelay, reorderingThreshold, now)
+	}
+}
+
+// SetImmediateAckRequired sets immediate ack required across all application data path trackers.
+func (h *ReceivedPacketHandler) SetImmediateAckRequired() {
+	for _, path := range h.appDataPaths {
+		path.SetImmediateAckRequired()
+	}
 }
 
 // ReceivedPacketForPath records a 1-RTT packet received on application-data path

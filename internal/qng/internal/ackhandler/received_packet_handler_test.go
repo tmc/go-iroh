@@ -2,6 +2,7 @@ package ackhandler
 
 import (
 	"testing"
+	"time"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
@@ -191,5 +192,89 @@ func TestReceivedPacketHandlerIgnoreBelow(t *testing.T) {
 	}
 	if got := ack.LargestAcked(); got != 3 {
 		t.Errorf("largest acked = %d, want 3", got)
+	}
+}
+
+func TestReceivedPacketHandlerAckFrequencyParams(t *testing.T) {
+	h := newOracleReceivedHandler()
+	now := monotime.Now()
+
+	// Default threshold is 10 (packetsBeforeAck).
+	for pn := protocol.PacketNumber(0); pn < 9; pn++ {
+		if err := h.ReceivedPacket(pn, protocol.ECNNon, protocol.Encryption1RTT, now, true); err != nil {
+			t.Fatalf("ReceivedPacket(%d): %v", pn, err)
+		}
+	}
+	if ack := h.GetAckFrame(protocol.Encryption1RTT, now, true); ack != nil {
+		t.Fatalf("unexpected ACK queued before threshold")
+	}
+
+	// Update frame threshold to T=20.
+	// Per noq (spaces.rs:1201) count > threshold, so exactly T+1 = 21 ack-eliciting packets must be received before an ACK queues.
+	h.SetAckFrequencyParams(20, 50*time.Millisecond, 1, now)
+
+	// Send up to 20 packets total (pn 9 .. 19).
+	for pn := protocol.PacketNumber(9); pn < 20; pn++ {
+		if err := h.ReceivedPacket(pn, protocol.ECNNon, protocol.Encryption1RTT, now, true); err != nil {
+			t.Fatalf("ReceivedPacket(%d): %v", pn, err)
+		}
+	}
+	if ack := h.GetAckFrame(protocol.Encryption1RTT, now, true); ack != nil {
+		t.Fatalf("unexpected ACK queued at 20 packets with frame threshold 20 (want trigger on 21st packet)")
+	}
+
+	// 21st packet (pn 20) exceeds threshold 20 (count 21 >= 21) and queues ACK.
+	if err := h.ReceivedPacket(20, protocol.ECNNon, protocol.Encryption1RTT, now, true); err != nil {
+		t.Fatalf("ReceivedPacket(20): %v", err)
+	}
+	ack := h.GetAckFrame(protocol.Encryption1RTT, now, true)
+	if ack == nil {
+		t.Fatalf("expected ACK queued at 21 packets for frame threshold 20")
+	}
+	if ack.LargestAcked() != 20 {
+		t.Fatalf("largest acked = %d, want 20", ack.LargestAcked())
+	}
+}
+
+func TestReceivedPacketHandlerImmediateAck(t *testing.T) {
+	h := newOracleReceivedHandler()
+	now := monotime.Now()
+
+	// Receive 1 packet; under default threshold 10, no ACK is queued immediately.
+	if err := h.ReceivedPacket(0, protocol.ECNNon, protocol.Encryption1RTT, now, true); err != nil {
+		t.Fatalf("ReceivedPacket(0): %v", err)
+	}
+	if ack := h.GetAckFrame(protocol.Encryption1RTT, now, true); ack != nil {
+		t.Fatalf("unexpected ACK queued before IMMEDIATE_ACK")
+	}
+
+	// Immediate ACK required forces ACK to be queued.
+	h.SetImmediateAckRequired()
+	ack := h.GetAckFrame(protocol.Encryption1RTT, now, true)
+	if ack == nil {
+		t.Fatalf("expected ACK after SetImmediateAckRequired")
+	}
+	if ack.LargestAcked() != 0 {
+		t.Fatalf("largest acked = %d, want 0", ack.LargestAcked())
+	}
+}
+
+func TestReceivedPacketHandlerReorderingThresholdZero(t *testing.T) {
+	h := newOracleReceivedHandler()
+	now := monotime.Now()
+
+	// Reordering threshold 0 disables early ACK on reordering.
+	h.SetAckFrequencyParams(10, 25*time.Millisecond, 0, now)
+
+	// Receive packet 0 then packet 2 (gap: packet 1 missing).
+	if err := h.ReceivedPacket(0, protocol.ECNNon, protocol.Encryption1RTT, now, true); err != nil {
+		t.Fatalf("ReceivedPacket(0): %v", err)
+	}
+	if err := h.ReceivedPacket(2, protocol.ECNNon, protocol.Encryption1RTT, now, true); err != nil {
+		t.Fatalf("ReceivedPacket(2): %v", err)
+	}
+	// With threshold 0, gap does not trigger immediate ACK.
+	if ack := h.GetAckFrame(protocol.Encryption1RTT, now, true); ack != nil {
+		t.Fatalf("reorderingThreshold 0 queued ACK on gap, want none")
 	}
 }
