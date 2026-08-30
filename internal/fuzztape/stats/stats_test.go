@@ -74,4 +74,3 @@ func TestWrapPreservesEncoding(t *testing.T) {
 		}
 	}
 }
-
