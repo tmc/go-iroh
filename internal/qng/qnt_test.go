@@ -762,8 +762,11 @@ func TestQNTOpenValidatedPathStoresRoute(t *testing.T) {
 	if alarm := c.receivedPacketHandler.GetAlarmTimeoutForPath(pid); !alarm.IsZero() {
 		t.Fatalf("new recv path %d ACK alarm = %v, want zero", pid, alarm)
 	}
-	if len(*frames) != 1 {
-		t.Fatalf("queued %d local path CID frames, want 1", len(*frames))
+	// Path open now tops the pool up to the CID budget (min(peer limit,
+	// MaxIssuedConnectionIDs)); with the default peer limit of 2 that is two
+	// frames, where the old reactive path issued exactly one.
+	if len(*frames) != 2 {
+		t.Fatalf("queued %d local path CID frames, want 2", len(*frames))
 	}
 	nc, ok := (*frames)[0].(*wire.NewConnectionIDFrame)
 	if !ok {
@@ -841,8 +844,8 @@ func TestQNTOpenValidatedPathRollsBackCIDIssueFailure(t *testing.T) {
 	if !ok || pid != protocol.PathID(1) || route != addr {
 		t.Fatalf("qntOpenValidatedPathLocked retry = %d, %v, %v, want 1, %v, true", pid, route, ok, addr)
 	}
-	if len(*frames) != 1 {
-		t.Fatalf("queued %d local path CID frames after retry, want 1", len(*frames))
+	if len(*frames) != 2 {
+		t.Fatalf("queued %d local path CID frames after retry, want 2", len(*frames))
 	}
 }
 

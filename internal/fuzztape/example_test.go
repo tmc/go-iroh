@@ -37,3 +37,34 @@ func ExamplePick() {
 	// Output:
 	// open
 }
+
+// Weighted selects proportionally; a zero tape takes the first option
+// with a positive weight.
+func ExampleWeighted() {
+	g := fuzztape.Weighted([]string{"read", "write"}, []int{1, 9})
+	fmt.Println(g(fuzztape.New(nil)))
+	// Output:
+	// read
+}
+
+// Float64 skews toward the values that break arithmetic. Selector 6
+// draws NaN, which a uniform bit pattern reaches vanishingly rarely.
+func ExampleFloat64() {
+	g := fuzztape.Float64()
+	fmt.Println(g(fuzztape.New(nil)))
+	fmt.Println(g(fuzztape.New([]byte{6})))
+	// Output:
+	// 0
+	// NaN
+}
+
+// An op can draw its parameter through a generator, which keeps the
+// value typed and lets the same draw drive a reference implementation.
+func ExampleNewOp() {
+	type queue struct{ xs []int }
+	op := fuzztape.NewOp("push", fuzztape.IntRange(1, 100),
+		func(t *fuzztape.T, q *queue, v int) { q.xs = append(q.xs, v) })
+	fmt.Println(op.Name)
+	// Output:
+	// push
+}

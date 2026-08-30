@@ -34,7 +34,7 @@ type pathWatcherSub struct {
 	cancel func()
 }
 
-func newPathWatcherMachine(t *testing.T) *pathWatcherMachine {
+func newPathWatcherMachine(t *fuzztape.T) *pathWatcherMachine {
 	m := &pathWatcherMachine{w: NewPathWatcher()}
 	// Close inside the bubble, before its exit check: a subscription that is
 	// still live at the end is idle in cond.Wait, which is durably blocked
@@ -64,41 +64,37 @@ func pathWatcherMachineSpec() fuzztape.Machine[*pathWatcherMachine] {
 		MaxOps: 80,
 		Ops: []fuzztape.Op[*pathWatcherMachine]{{
 			Name: "subscribe",
-			Apply: func(m *pathWatcherMachine, tape *fuzztape.Tape) error {
+			Apply: func(t *fuzztape.T, m *pathWatcherMachine) {
 				ch, cancel := m.w.Subscribe()
 				m.subs = append(m.subs, pathWatcherSub{ch, cancel})
-				return nil
 			},
 		}, {
 			Name:   "send",
 			Weight: 4,
-			Apply: func(m *pathWatcherMachine, tape *fuzztape.Tape) error {
-				m.w.Send(PathEvent{Kind: fuzztape.Pick(tape, kinds), Addr: addr})
-				return nil
+			Apply: func(t *fuzztape.T, m *pathWatcherMachine) {
+				m.w.Send(PathEvent{Kind: fuzztape.Pick(t.Tape, kinds), Addr: addr})
 			},
 		}, {
 			Name: "read",
 			When: func(m *pathWatcherMachine) bool { return len(m.subs) > 0 },
-			Apply: func(m *pathWatcherMachine, tape *fuzztape.Tape) error {
+			Apply: func(t *fuzztape.T, m *pathWatcherMachine) {
 				select {
-				case <-m.subs[tape.IntN(len(m.subs))].ch:
+				case <-m.subs[t.IntN(len(m.subs))].ch:
 				default:
 				}
-				return nil
 			},
 		}, {
 			Name: "cancel",
 			When: func(m *pathWatcherMachine) bool { return len(m.subs) > 0 },
-			Apply: func(m *pathWatcherMachine, tape *fuzztape.Tape) error {
-				i := tape.IntN(len(m.subs))
+			Apply: func(t *fuzztape.T, m *pathWatcherMachine) {
+				i := t.IntN(len(m.subs))
 				m.subs[i].cancel()
 				m.subs = append(m.subs[:i], m.subs[i+1:]...)
-				return nil
 			},
 		}},
 		// Delivery is asynchronous, so without settling between ops a burst
 		// never resolves into the buffer-full-then-one-more shape that parks
 		// a delivery goroutine.
-		Check: func(t *testing.T, m *pathWatcherMachine) { synctest.Wait() },
+		Check: func(t *fuzztape.T, m *pathWatcherMachine) { synctest.Wait() },
 	}
 }

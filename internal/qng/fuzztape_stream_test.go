@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/internal/fuzztape"
-	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
 	"github.com/tmc/go-iroh/internal/qng/internal/flowcontrol"
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
@@ -78,7 +77,7 @@ func (s *streamMachineStream) sendable() bool {
 }
 
 type streamMachine struct {
-	t   *testing.T
+	t   *fuzztape.T
 	now monotime.Time
 
 	connFC flowcontrol.ConnectionFlowController
@@ -115,7 +114,7 @@ func (s streamMachineSender) onHasStreamControlFrame(id protocol.StreamID, str s
 
 func (s streamMachineSender) onStreamCompleted(protocol.StreamID) {}
 
-func newStreamMachine(t *testing.T) *streamMachine {
+func newStreamMachine(t *fuzztape.T) *streamMachine {
 	rttStats := utils.NewRTTStats()
 	connFC := flowcontrol.NewConnectionFlowController(
 		streamMachineConnWindow,
@@ -174,7 +173,7 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 				Name:   "openStream",
 				Weight: 2,
 				When:   func(m *streamMachine) bool { return len(m.streams) < streamMachineMaxStreams },
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *streamMachine) {
 					id := m.nextID
 					m.nextID += 4
 					fc := flowcontrol.NewStreamFlowController(
@@ -192,7 +191,6 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 						fc:         fc,
 						sendWindow: streamMachineStreamWindow,
 					})
-					return nil
 				},
 			},
 			{
@@ -209,7 +207,7 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 					}
 					return false
 				},
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *streamMachine) {
 					open := make([]*streamMachineStream, 0, len(m.streams))
 					for _, s := range m.streams {
 						if s.sendable() {
@@ -237,7 +235,6 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 						s.fin = true
 						s.finOffset = s.sent
 					}
-					return nil
 				},
 			},
 			{
@@ -250,7 +247,7 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 					}
 					return false
 				},
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *streamMachine) {
 					open := make([]*streamMachineStream, 0, len(m.streams))
 					for _, s := range m.streams {
 						if s.last != nil && !s.reset {
@@ -266,7 +263,6 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 						Data:     append([]byte(nil), s.last.Data...),
 						Fin:      s.last.Fin,
 					})
-					return nil
 				},
 			},
 			{
@@ -280,7 +276,7 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 					}
 					return false
 				},
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *streamMachine) {
 					open := make([]*streamMachineStream, 0, len(m.streams))
 					for _, s := range m.streams {
 						if s.readable() {
@@ -296,19 +292,19 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 					n, err := s.rs.Read(buf)
 					s.rs.SetReadDeadline(time.Time{})
 					if errors.Is(err, errDeadline) {
-						m.t.Fatalf("stream %d: Read blocked with %d bytes buffered (read %d, sent %d)",
+						t.Fatalf("stream %d: Read blocked with %d bytes buffered (read %d, sent %d)",
 							s.id, s.sent-s.readPos, s.readPos, s.sent)
 					}
 					for i := range n {
 						want := streamMachineData(s.id, s.readPos+protocol.ByteCount(i))
 						if buf[i] != want {
-							m.t.Fatalf("stream %d: Read at offset %d = %#x, want %#x",
+							t.Fatalf("stream %d: Read at offset %d = %#x, want %#x",
 								s.id, s.readPos+protocol.ByteCount(i), buf[i], want)
 						}
 					}
 					s.readPos += protocol.ByteCount(n)
 					if s.readPos > s.sent {
-						m.t.Fatalf("stream %d: read %d bytes, but only %d were sent", s.id, s.readPos, s.sent)
+						t.Fatalf("stream %d: read %d bytes, but only %d were sent", s.id, s.readPos, s.sent)
 					}
 					var streamErr *StreamError
 					switch {
@@ -316,45 +312,43 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 					case errors.Is(err, io.EOF), errors.As(err, &streamErr):
 						s.eof = true
 					default:
-						m.t.Fatalf("stream %d: Read: %v", s.id, err)
+						t.Fatalf("stream %d: Read: %v", s.id, err)
 					}
-					return nil
 				},
 			},
 			{
 				Name:   "connWindowUpdate",
 				Weight: 3,
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *streamMachine) {
 					// This mirrors Conn.sendPackets: whenever the send loop
 					// runs, a pending connection-level window update is
 					// queued as a MAX_DATA frame.
 					m.connData = false
 					offset := m.connFC.GetWindowUpdate(m.now)
 					if offset == 0 {
-						return nil
+						return
 					}
 					m.framer.QueueMaxDataFrame(offset)
 					m.maxDataQueued = true
 					if offset > m.maxDataOffset {
 						m.maxDataOffset = offset
 					}
-					return nil
 				},
 			},
 			{
 				Name:   "packPacket",
 				Weight: 5,
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
-					size := fuzztape.Pick(t, []protocol.ByteCount{1200, 128, 64, 32, 26, 1452})
+				Apply: func(t *fuzztape.T, m *streamMachine) {
+					size := fuzztape.Pick(t.Tape, []protocol.ByteCount{1200, 128, 64, 32, 26, 1452})
 					pl := m.packer.composeNextPacket(size, false, true, m.now, protocol.Version1)
 					if pl.hasStreamFrame || len(pl.streamFrames) > 0 {
-						m.t.Fatalf("packed %d STREAM frames, but no stream is sending", pl.numStreamFrames())
+						t.Fatalf("packed %d STREAM frames, but no stream is sending", pl.numStreamFrames())
 					}
 					for _, f := range pl.frames {
 						switch frame := f.Frame.(type) {
 						case *wire.MaxDataFrame:
 							if frame.MaximumData < m.connSendWindow {
-								m.t.Fatalf("MAX_DATA = %d, below the already granted %d",
+								t.Fatalf("MAX_DATA = %d, below the already granted %d",
 									frame.MaximumData, m.connSendWindow)
 							}
 							m.connSendWindow = frame.MaximumData
@@ -362,7 +356,8 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 						case *wire.MaxStreamDataFrame:
 							s := m.stream(frame.StreamID)
 							if s == nil {
-								m.t.Fatalf("MAX_STREAM_DATA for unknown stream %d", frame.StreamID)
+								t.Fatalf("MAX_STREAM_DATA for unknown stream %d", frame.StreamID)
+								return
 							}
 							// A queued MAX_STREAM_DATA can be packed after the
 							// update became unnecessary — an abandoned stream
@@ -373,11 +368,10 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 							}
 						case *wire.StopSendingFrame:
 							if s := m.stream(frame.StreamID); s == nil {
-								m.t.Fatalf("STOP_SENDING for unknown stream %d", frame.StreamID)
+								t.Fatalf("STOP_SENDING for unknown stream %d", frame.StreamID)
 							}
 						}
 					}
-					return nil
 				},
 			},
 			{
@@ -390,7 +384,7 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 					}
 					return false
 				},
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *streamMachine) {
 					open := make([]*streamMachineStream, 0, len(m.streams))
 					for _, s := range m.streams {
 						if !s.reset && !s.fin {
@@ -405,12 +399,11 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 						ErrorCode: qerr.StreamErrorCode(t.IntN(8)),
 						FinalSize: s.sent,
 					}, m.now); err != nil {
-						m.t.Fatalf("stream %d: handleResetStreamFrame(final %d): %v", s.id, s.sent, err)
+						t.Fatalf("stream %d: handleResetStreamFrame(final %d): %v", s.id, s.sent, err)
 					}
 					s.reset = true
 					s.fin = true
 					s.finOffset = s.sent
-					return nil
 				},
 			},
 			{
@@ -423,7 +416,7 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 					}
 					return false
 				},
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *streamMachine) {
 					open := make([]*streamMachineStream, 0, len(m.streams))
 					for _, s := range m.streams {
 						if !s.cancelled && !s.eof {
@@ -433,18 +426,16 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 					s := open[t.IntN(len(open))]
 					s.rs.CancelRead(StreamErrorCode(t.IntN(8)))
 					s.cancelled = true
-					return nil
 				},
 			},
 			{
 				Name: "advanceTime",
-				Apply: func(m *streamMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *streamMachine) {
 					m.now = m.now.Add(time.Duration(t.IntN(100)) * time.Millisecond)
-					return nil
 				},
 			},
 		},
-		Check: func(t *testing.T, m *streamMachine) {
+		Check: func(t *fuzztape.T, m *streamMachine) {
 			for _, s := range m.streams {
 				if s.sent > s.sendWindow {
 					t.Fatalf("stream %d: sent %d bytes, granted %d", s.id, s.sent, s.sendWindow)
@@ -478,190 +469,284 @@ func (m *streamMachine) stream(id protocol.StreamID) *streamMachineStream {
 	return nil
 }
 
-// ackFrequencyMachine models the received packet handler and ACK frequency processing under fuzztape.
-type ackFrequencyMachine struct {
-	t                     *testing.T
-	c                     *Conn
-	unpatchedHandler      *ackhandler.ReceivedPacketHandler
-	receivedAckFreq       bool
-	lastSeq               uint64
-	lastSeqSet            bool
-	lastRequestedMaxAck   time.Duration
-	currentAckElicitingPN protocol.PacketNumber
-	nextRcvTime           monotime.Time
-	immediateAckOccurred  bool
-	immediateAckAckQueued bool
+// pathCIDMachine models the per-path CID generator and state machine under fuzztape.
+type pathCIDMachine struct {
+	t             *fuzztape.T
+	g             *connIDGenerator
+	frames        []wire.Frame
+	addedCIDs     []protocol.ConnectionID
+	retiredCIDs   map[protocol.PathID]map[protocol.ConnectionID]bool
+	cidSeenAcross map[protocol.ConnectionID]protocol.PathID
+
+	multipathNegotiated bool
+	handshakeConfirmed  bool
+	peerLimit           uint64
+	localMaxPathID      protocol.PathID
+	peerMaxPathID       protocol.PathID
+	parser              wire.FrameParser
+
+	receivedPathCIDsBlocked bool
 }
 
-func newAckFrequencyMachine(t *testing.T) *ackFrequencyMachine {
-	cfg := &Config{}
-	peer := &wire.TransportParameters{}
-	c := &Conn{
-		config:      cfg,
-		perspective: protocol.PerspectiveClient,
+func newPathCIDMachine(t *fuzztape.T) *pathCIDMachine {
+	m := &pathCIDMachine{
+		t:                   t,
+		retiredCIDs:         make(map[protocol.PathID]map[protocol.ConnectionID]bool),
+		cidSeenAcross:       make(map[protocol.ConnectionID]protocol.PathID),
+		multipathNegotiated: true,
+		peerLimit:           protocol.DefaultActiveConnectionIDLimit,
+		localMaxPathID:      4,
+		peerMaxPathID:       0,
+		parser:              *wire.NewFrameParser(true, true, true, true),
 	}
-	c.peerParams.Store(peer)
-	c.receivedPacketHandler = *ackhandler.NewReceivedPacketHandler(utils.DefaultLogger)
-	c.rttStats = utils.NewRTTStats()
 
-	unpatched := ackhandler.NewReceivedPacketHandler(utils.DefaultLogger)
-
-	return &ackFrequencyMachine{
-		t:                     t,
-		c:                     c,
-		unpatchedHandler:      unpatched,
-		lastRequestedMaxAck:   protocol.MaxAckDelay,
-		nextRcvTime:           monotime.Now(),
-		currentAckElicitingPN: 0,
-	}
+	initial := protocol.ParseConnectionID([]byte{0x00, 0x11, 0x22, 0x33})
+	m.g = newConnIDGenerator(
+		stubConnRunner{},
+		initial,
+		nil,
+		newStatelessResetter(nil),
+		connRunnerCallbacks{
+			AddConnectionID: func(id protocol.ConnectionID) {
+				m.addedCIDs = append(m.addedCIDs, id)
+			},
+			RemoveConnectionID: func(protocol.ConnectionID) {},
+			ReplaceWithClosed:  func([]protocol.ConnectionID, []byte, time.Duration) {},
+		},
+		func(f wire.Frame) {
+			m.frames = append(m.frames, f)
+		},
+		&protocol.DefaultConnectionIDGenerator{ConnLen: 4},
+	)
+	m.cidSeenAcross[initial] = protocol.PathIDZero
+	return m
 }
 
-func ackFrequencyMachineSpec() fuzztape.Machine[*ackFrequencyMachine] {
-	return fuzztape.Machine[*ackFrequencyMachine]{
-		Name:   "FuzzAckFrequencyMachine",
+func (m *pathCIDMachine) budget() uint64 {
+	return min(m.peerLimit, protocol.MaxIssuedConnectionIDs)
+}
+
+func (m *pathCIDMachine) effectiveMaxPathID() protocol.PathID {
+	if m.localMaxPathID < m.peerMaxPathID {
+		return m.localMaxPathID
+	}
+	return m.peerMaxPathID
+}
+
+func pathCIDMachineSpec() fuzztape.Machine[*pathCIDMachine] {
+	return fuzztape.Machine[*pathCIDMachine]{
+		Name:   "FuzzPathCIDMachine",
 		MaxOps: 48,
-		Init:   newAckFrequencyMachine,
-		Ops: []fuzztape.Op[*ackFrequencyMachine]{
+		Init:   newPathCIDMachine,
+		Ops: []fuzztape.Op[*pathCIDMachine]{
 			{
-				Name:   "recvDataPacket",
-				Weight: 5,
-				Apply: func(m *ackFrequencyMachine, t *fuzztape.Tape) error {
-					pn := m.currentAckElicitingPN
-					m.currentAckElicitingPN++
-					now := m.nextRcvTime
-					m.nextRcvTime = m.nextRcvTime.Add(time.Duration(1+t.IntN(5)) * time.Millisecond)
-					ackEliciting := t.Bool()
-
-					if err := m.c.receivedPacketHandler.ReceivedPacket(pn, protocol.ECNNon, protocol.Encryption1RTT, now, ackEliciting); err != nil {
-						m.t.Fatalf("ReceivedPacket: %v", err)
-					}
-					if !m.receivedAckFreq {
-						if err := m.unpatchedHandler.ReceivedPacket(pn, protocol.ECNNon, protocol.Encryption1RTT, now, ackEliciting); err != nil {
-							m.t.Fatalf("unpatched ReceivedPacket: %v", err)
-						}
-					}
-					return nil
-				},
-			},
-			{
-				Name:   "recvAckFrequency",
+				Name:   "drawInitialTransportParams",
 				Weight: 3,
-				Apply: func(m *ackFrequencyMachine, t *fuzztape.Tape) error {
-					// Choose sequence number: either in-order, out-of-order/stale, or jump ahead
-					var seq uint64
-					if !m.lastSeqSet {
-						seq = uint64(t.IntN(10))
-					} else {
-						mode := t.IntN(3)
-						switch mode {
-						case 0: // stale
-							if m.lastSeq > 0 {
-								seq = uint64(t.IntN(int(m.lastSeq + 1)))
-							} else {
-								seq = 0
-							}
-						case 1: // next in-order
-							seq = m.lastSeq + 1
-						case 2: // jump ahead
-							seq = m.lastSeq + uint64(2+t.IntN(5))
-						}
+				When:   func(m *pathCIDMachine) bool { return !m.handshakeConfirmed },
+				Apply: func(t *fuzztape.T, m *pathCIDMachine) {
+					// Draw active_connection_id_limit in [2, 8]
+					m.peerLimit = uint64(2 + t.IntN(7))
+					if err := m.g.SetMaxActiveConnIDs(m.peerLimit); err != nil {
+						t.Fatalf("SetMaxActiveConnIDs: %v", err)
 					}
-
-					threshold := uint64(1 + t.IntN(32))
-					// Delay between 1ms and 100ms
-					reqDelay := time.Duration(1+t.IntN(100)) * time.Millisecond
-					reordering := protocol.PacketNumber(t.IntN(5))
-
-					prevLastSeq := m.lastSeq
-					prevLastSeqSet := m.lastSeqSet
-					prevMaxAckDelay := m.lastRequestedMaxAck
-
-					frame := &wire.AckFrequencyFrame{
-						SequenceNumber:        seq,
-						AckElicitingThreshold: threshold,
-						RequestMaxAckDelay:    reqDelay,
-						ReorderingThreshold:   reordering,
-					}
-					err := m.c.handleAckFrequencyFrame(frame, protocol.Encryption1RTT, m.nextRcvTime)
-					if err != nil {
-						m.t.Fatalf("handleAckFrequencyFrame: %v", err)
-					}
-
-					isStale := prevLastSeqSet && seq <= prevLastSeq
-					if !isStale {
-						m.receivedAckFreq = true
-						m.lastSeq = seq
-						m.lastSeqSet = true
-						m.lastRequestedMaxAck = reqDelay
-					} else {
-						// Stale frames must not regress sequence or delay
-						if m.lastSeq != prevLastSeq || m.lastRequestedMaxAck != prevMaxAckDelay {
-							m.t.Fatalf("stale ACK_FREQUENCY regressed state")
-						}
-					}
-					return nil
+					// Draw local and peer initial_max_path_id in [1, 8]
+					m.localMaxPathID = protocol.PathID(1 + t.IntN(8))
+					m.peerMaxPathID = protocol.PathID(1 + t.IntN(8))
 				},
 			},
 			{
-				Name:   "recvImmediateAck",
+				Name:   "handshakeComplete",
 				Weight: 2,
-				Apply: func(m *ackFrequencyMachine, t *fuzztape.Tape) error {
-					err := m.c.handleImmediateAckFrame(&wire.ImmediateAckFrame{}, protocol.Encryption1RTT)
-					if err != nil {
-						m.t.Fatalf("handleImmediateAckFrame: %v", err)
+				When:   func(m *pathCIDMachine) bool { return !m.handshakeConfirmed },
+				Apply: func(t *fuzztape.T, m *pathCIDMachine) {
+					m.handshakeConfirmed = true
+					effectiveMax := m.effectiveMaxPathID()
+					if m.multipathNegotiated && effectiveMax > 0 {
+						if err := m.g.IssueFirstPathCIDs(effectiveMax); err != nil {
+							t.Fatalf("IssueFirstPathCIDs on handshakeComplete: %v", err)
+						}
 					}
-					m.receivedAckFreq = true
-					return nil
 				},
 			},
 			{
-				Name:   "timerFire",
-				Weight: 2,
-				Apply: func(m *ackFrequencyMachine, t *fuzztape.Tape) error {
-					// Advance time past alarm
-					timeout := m.c.receivedPacketHandler.GetAlarmTimeout()
-					if !timeout.IsZero() {
-						m.nextRcvTime = timeout.Add(time.Millisecond)
-						_ = m.c.receivedPacketHandler.GetAckFrame(protocol.Encryption1RTT, m.nextRcvTime, true)
+				Name:   "raiseMaxPathID",
+				Weight: 4,
+				When:   func(m *pathCIDMachine) bool { return m.peerMaxPathID < 8 },
+				Apply: func(t *fuzztape.T, m *pathCIDMachine) {
+					delta := protocol.PathID(1 + t.IntN(3))
+					newMax := m.peerMaxPathID + delta
+					if newMax > 8 {
+						newMax = 8
 					}
-					if !m.receivedAckFreq {
-						timeoutUnpatched := m.unpatchedHandler.GetAlarmTimeout()
-						if !timeoutUnpatched.IsZero() {
-							_ = m.unpatchedHandler.GetAckFrame(protocol.Encryption1RTT, m.nextRcvTime, true)
+					m.peerMaxPathID = newMax
+					effectiveMax := m.effectiveMaxPathID()
+					if m.handshakeConfirmed && m.multipathNegotiated && effectiveMax > 0 {
+						if err := m.g.IssueFirstPathCIDs(effectiveMax); err != nil {
+							t.Fatalf("IssueFirstPathCIDs on raiseMaxPathID: %v", err)
 						}
 					}
-					return nil
+				},
+			},
+			{
+				Name:   "peerLimitRenegotiation",
+				Weight: 2,
+				Apply: func(t *fuzztape.T, m *pathCIDMachine) {
+					// In QUIC, active_connection_id_limit can increase
+					limit := m.peerLimit + uint64(1+t.IntN(4))
+					if limit > protocol.MaxIssuedConnectionIDs {
+						limit = protocol.MaxIssuedConnectionIDs
+					}
+					m.peerLimit = limit
+					if err := m.g.SetMaxActiveConnIDs(limit); err != nil {
+						t.Fatalf("SetMaxActiveConnIDs: %v", err)
+					}
+				},
+			},
+			{
+				Name:   "retireCID",
+				Weight: 5,
+				When: func(m *pathCIDMachine) bool {
+					effectiveMax := m.effectiveMaxPathID()
+					for pid := protocol.PathID(1); pid <= effectiveMax; pid++ {
+						if len(m.g.pathSrcConnIDs[pid]) > 0 {
+							return true
+						}
+					}
+					return false
+				},
+				Apply: func(t *fuzztape.T, m *pathCIDMachine) {
+					type activeCID struct {
+						pid protocol.PathID
+						seq uint64
+						cid protocol.ConnectionID
+					}
+					var candidates []activeCID
+					effectiveMax := m.effectiveMaxPathID()
+					for pid := protocol.PathID(1); pid <= effectiveMax; pid++ {
+						for seq, cid := range m.g.pathSrcConnIDs[pid] {
+							candidates = append(candidates, activeCID{pid: pid, seq: seq, cid: cid})
+						}
+					}
+					if len(candidates) == 0 {
+						return
+					}
+					c := candidates[t.IntN(len(candidates))]
+					if m.retiredCIDs[c.pid] == nil {
+						m.retiredCIDs[c.pid] = make(map[protocol.ConnectionID]bool)
+					}
+					m.retiredCIDs[c.pid][c.cid] = true
+
+					// Retire using a dummy destination connection ID
+					if err := m.g.RetirePath(c.pid, c.seq, protocol.ParseConnectionID([]byte{0xfe, 0xdc, 0xba, 0x98}), monotime.Now()); err != nil {
+						t.Fatalf("RetirePath(path %d, seq %d): %v", c.pid, c.seq, err)
+					}
+				},
+			},
+			{
+				Name: "receivePathCIDsBlocked",
+				When: func(m *pathCIDMachine) bool {
+					effectiveMax := m.effectiveMaxPathID()
+					if !m.handshakeConfirmed || effectiveMax == 0 {
+						return false
+					}
+					for pid := protocol.PathID(1); pid <= effectiveMax; pid++ {
+						if len(m.g.pathSrcConnIDs[pid]) == 0 {
+							return true
+						}
+					}
+					return false
+				},
+				Apply: func(t *fuzztape.T, m *pathCIDMachine) {
+					m.receivedPathCIDsBlocked = true
 				},
 			},
 		},
-		Check: func(t *testing.T, m *ackFrequencyMachine) {
-			// Invariant 1: Effective max ack delay must be within [min_ack_delay, requestedMaxAckDelay]
-			minDelay := protocol.TimerGranularity
-			if m.lastRequestedMaxAck < minDelay {
-				t.Fatalf("invariant violation: requested max ack delay %v below min_ack_delay %v", m.lastRequestedMaxAck, minDelay)
+		Check: func(t *fuzztape.T, m *pathCIDMachine) {
+			// Invariant: receiving PATH_CIDS_BLOCKED at all is a failure (a correct issuer never lets the peer starve)
+			if m.receivedPathCIDsBlocked {
+				t.Fatalf("invariant violation: received PATH_CIDS_BLOCKED (a correct issuer never lets the peer starve)")
 			}
 
-			// Invariant 2 (GG guard): If no ACK_FREQUENCY/IMMEDIATE_ACK was ever processed, tracker decisions must be bit-identical to unpatched tracker.
-			if !m.receivedAckFreq {
-				cAlarm := m.c.receivedPacketHandler.GetAlarmTimeout()
-				uAlarm := m.unpatchedHandler.GetAlarmTimeout()
-				if cAlarm != uAlarm {
-					t.Fatalf("GG invariant violation: alarm timeout mismatch: %v vs %v", cAlarm, uAlarm)
+			effectiveMax := m.effectiveMaxPathID()
+			perPathSeenSeqs := make(map[protocol.PathID]map[uint64]bool)
+			for _, f := range m.frames {
+				nc, ok := f.(*wire.NewConnectionIDFrame)
+				if !ok {
+					t.Fatalf("unexpected frame type: %T", f)
 				}
-				cAck := m.c.receivedPacketHandler.GetAckFrame(protocol.Encryption1RTT, m.nextRcvTime, true)
-				uAck := m.unpatchedHandler.GetAckFrame(protocol.Encryption1RTT, m.nextRcvTime, true)
-				if (cAck == nil) != (uAck == nil) {
-					t.Fatalf("GG invariant violation: queued ack mismatch: %v vs %v", cAck != nil, uAck != nil)
+				if nc.PathID == nil {
+					// Path 0 CID
+					continue
+				}
+				pid := *nc.PathID
+				// Invariant 1: PathIDZero never in a PATH_NEW_CONNECTION_ID frame
+				if pid == protocol.PathIDZero {
+					t.Fatalf("invariant violation: PathIDZero in PATH_NEW_CONNECTION_ID frame")
+				}
+				// Invariant 2: No PATH_NEW_CONNECTION_ID with path_id > min(local, peer max)
+				if pid > effectiveMax {
+					t.Fatalf("invariant violation: emitted PATH_NEW_CONNECTION_ID for path %d > effectiveMax %d", pid, effectiveMax)
+				}
+
+				if perPathSeenSeqs[pid] == nil {
+					perPathSeenSeqs[pid] = make(map[uint64]bool)
+				}
+				perPathSeenSeqs[pid][nc.SequenceNumber] = true
+
+				// Invariant: No CID reuse across paths
+				if prevPid, ok := m.cidSeenAcross[nc.ConnectionID]; ok && prevPid != pid {
+					t.Fatalf("invariant violation: CID %s reused across path %d and path %d", nc.ConnectionID, prevPid, pid)
+				}
+				m.cidSeenAcross[nc.ConnectionID] = pid
+
+				// Invariant 3: Every emitted advertised-implied frame type must parse in 1-RTT
+				data, err := nc.Append(nil, protocol.Version1)
+				if err != nil {
+					t.Fatalf("invariant violation: failed to append frame: %v", err)
+				}
+				ft, l, err := m.parser.ParseType(data, protocol.Encryption1RTT)
+				if err != nil {
+					t.Fatalf("invariant violation: emitted frame failed ParseType: %v", err)
+				}
+				parsedFrame, _, err := m.parser.ParseLessCommonFrame(ft, data[l:], protocol.Version1)
+				if err != nil {
+					t.Fatalf("invariant violation: emitted frame failed ParseLessCommonFrame: %v", err)
+				}
+				if parsedFrame == nil {
+					t.Fatalf("invariant violation: parsed frame is nil")
+				}
+			}
+
+			// Invariant: per-path sequence numbers strictly monotonic starting at 0 (no gaps)
+			for pid, seqs := range perPathSeenSeqs {
+				for i := uint64(0); i < uint64(len(seqs)); i++ {
+					if !seqs[i] {
+						t.Fatalf("path %d sequence numbers not strictly monotonic: missing seq %d out of %d issued", pid, i, len(seqs))
+					}
+				}
+			}
+
+			// Invariant 4: Per-path active CID count (issued minus retired) never exceeds peer's advertised limit
+			b := m.budget()
+			for pid := protocol.PathID(1); pid <= 8; pid++ {
+				activeCount := uint64(len(m.g.pathSrcConnIDs[pid]))
+				if activeCount > m.peerLimit {
+					t.Fatalf("invariant violation: path %d active pool size = %d exceeds peer limit %d", pid, activeCount, m.peerLimit)
+				}
+				if m.handshakeConfirmed && pid <= effectiveMax {
+					if activeCount != b {
+						t.Fatalf("invariant violation: path %d active pool size = %d, want budget %d", pid, activeCount, b)
+					}
 				}
 			}
 		},
 	}
 }
 
-func TestAckFrequencyMachine(t *testing.T) {
-	ackFrequencyMachineSpec().Run(t, 200)
+func TestPathCIDMachine(t *testing.T) {
+	pathCIDMachineSpec().Run(t, 200)
 }
 
-func FuzzAckFrequencyMachine(f *testing.F) {
-	ackFrequencyMachineSpec().Fuzz(f)
+func FuzzPathCIDMachine(f *testing.F) {
+	pathCIDMachineSpec().Fuzz(f)
 }

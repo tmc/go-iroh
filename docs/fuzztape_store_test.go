@@ -18,7 +18,7 @@ import (
 // storeMachine is a MemoryStore and its reference model. The model is keyed
 // by the encoded record identifier, the same identity the store uses.
 type storeMachine struct {
-	t     *testing.T
+	t     *fuzztape.T
 	store *MemoryStore
 	model map[string]Entry
 
@@ -39,7 +39,7 @@ var storeMachineHashes = []blobs.Hash{{1}, {2}, {3}}
 // timestamp and the tie-break on content hash is exercised.
 var storeMachineTimestamps = []uint64{1, 2, 3}
 
-func newStoreMachine(t *testing.T) *storeMachine {
+func newStoreMachine(t *fuzztape.T) *storeMachine {
 	m := &storeMachine{
 		t:     t,
 		store: NewMemoryStore(),
@@ -57,7 +57,7 @@ func newStoreMachine(t *testing.T) *storeMachine {
 
 // pickID draws one of the identifiers the machine works with, and returns the
 // namespace secret and author needed to sign an entry for it.
-func (m *storeMachine) pickID(t *fuzztape.Tape) (RecordIdentifier, NamespaceSecret, Author) {
+func (m *storeMachine) pickID(t *fuzztape.T) (RecordIdentifier, NamespaceSecret, Author) {
 	ns := m.namespaces[t.IntN(len(m.namespaces))]
 	author := m.authors[t.IntN(len(m.authors))]
 	key := storeMachineKeys[t.IntN(len(storeMachineKeys))]
@@ -133,7 +133,7 @@ func storeMachineSpec() fuzztape.Machine[*storeMachine] {
 			{
 				Name:   "put",
 				Weight: 6,
-				Apply: func(m *storeMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *storeMachine) {
 					id, ns, author := m.pickID(t)
 					record := NewRecord(
 						storeMachineHashes[t.IntN(len(storeMachineHashes))],
@@ -141,23 +141,21 @@ func storeMachineSpec() fuzztape.Machine[*storeMachine] {
 						storeMachineTimestamps[t.IntN(len(storeMachineTimestamps))],
 					)
 					m.put(NewSignedEntry(NewEntry(id, record), ns, author))
-					return nil
 				},
 			},
 			{
 				Name:   "delete",
 				Weight: 2,
-				Apply: func(m *storeMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *storeMachine) {
 					id, ns, author := m.pickID(t)
 					record := EmptyRecord(storeMachineTimestamps[t.IntN(len(storeMachineTimestamps))])
 					m.put(NewSignedEntry(NewEntry(id, record), ns, author))
-					return nil
 				},
 			},
 			{
 				Name:   "getExact",
 				Weight: 3,
-				Apply: func(m *storeMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *storeMachine) {
 					id, _, _ := m.pickID(t)
 					includeEmpty := t.Bool()
 					got, ok := m.store.GetExact(id.Namespace(), id.Author(), id.Key(), includeEmpty)
@@ -173,13 +171,12 @@ func storeMachineSpec() fuzztape.Machine[*storeMachine] {
 						m.t.Fatalf("GetExact(%q) = %s, want %s",
 							id.Key(), entryString(got.Entry), entryString(want))
 					}
-					return nil
 				},
 			},
 			{
 				Name:   "getRange",
 				Weight: 2,
-				Apply: func(m *storeMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *storeMachine) {
 					start, _, _ := m.pickID(t)
 					end, _, _ := m.pickID(t)
 					r := NewRange(start, end)
@@ -199,12 +196,11 @@ func storeMachineSpec() fuzztape.Machine[*storeMachine] {
 								i, entryString(got[i].Entry), entryString(want[i]))
 						}
 					}
-					return nil
 				},
 			},
 			{
 				Name: "reload",
-				Apply: func(m *storeMachine, t *fuzztape.Tape) error {
+				Apply: func(t *fuzztape.T, m *storeMachine) {
 					// A snapshot round trip must preserve the store exactly:
 					// the entries are written in document order and reinserted
 					// under the same prefix rules.
@@ -217,11 +213,10 @@ func storeMachineSpec() fuzztape.Machine[*storeMachine] {
 						m.t.Fatalf("ReadFrom: %v", err)
 					}
 					m.store = reloaded
-					return nil
 				},
 			},
 		},
-		Check: func(t *testing.T, m *storeMachine) {
+		Check: func(t *fuzztape.T, m *storeMachine) {
 			want := m.modelEntries()
 			got := m.store.Entries()
 			if m.store.Len() != len(want) {

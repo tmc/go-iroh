@@ -165,15 +165,22 @@ func TestRetirePathConnIDIssuesReplacement(t *testing.T) {
 	if _, ok := g.pathSrcConnIDs[1][0]; ok {
 		t.Fatalf("retired path CID %s still active", cid)
 	}
-	if len(*frames) != 2 {
-		t.Fatalf("queued frames = %d, want replacement", len(*frames))
+	// DefaultActiveConnectionIDLimit is 2, MaxIssuedConnectionIDs is 6, so budget is 2.
+	// We started with 1 CID, retired it, so RetirePath replenished path 1 back to budget (2 active CIDs).
+	// Total frames queued = 1 (initial) + 2 (replenishment) = 3 frames.
+	if len(*frames) != 3 {
+		t.Fatalf("queued frames = %d, want 3 (1 initial + 2 replenishment to budget)", len(*frames))
 	}
 	nc := (*frames)[1].(*wire.NewConnectionIDFrame)
 	if nc.PathID == nil || *nc.PathID != 1 || nc.SequenceNumber != 1 {
-		t.Fatalf("replacement frame = {PathID:%v Seq:%d}, want {1 1}", nc.PathID, nc.SequenceNumber)
+		t.Fatalf("replacement frame 1 = {PathID:%v Seq:%d}, want {1 1}", nc.PathID, nc.SequenceNumber)
 	}
-	if len(*added) != 2 {
-		t.Fatalf("registered CIDs = %d, want 2", len(*added))
+	nc2 := (*frames)[2].(*wire.NewConnectionIDFrame)
+	if nc2.PathID == nil || *nc2.PathID != 1 || nc2.SequenceNumber != 2 {
+		t.Fatalf("replacement frame 2 = {PathID:%v Seq:%d}, want {1 2}", nc2.PathID, nc2.SequenceNumber)
+	}
+	if len(*added) != 3 {
+		t.Fatalf("registered CIDs = %d, want 3", len(*added))
 	}
 }
 
@@ -323,7 +330,7 @@ func TestHandlePathNewConnectionIDRecordsDestConnID(t *testing.T) {
 	}
 }
 
-func TestHandlePathCIDsBlockedIssuesPathConnID(t *testing.T) {
+func TestHandlePathCIDsBlockedRecordsStats(t *testing.T) {
 	c := newMultipathConn(true)
 	g, frames, _ := newTestConnIDGenerator(t)
 	c.connIDGenerator = g
@@ -331,25 +338,24 @@ func TestHandlePathCIDsBlockedIssuesPathConnID(t *testing.T) {
 	if err := c.handlePathCIDsBlockedFrame(&wire.PathCIDsBlockedFrame{PathID: 1, NextSeq: 0}); err != nil {
 		t.Fatalf("handlePathCIDsBlockedFrame: %v", err)
 	}
-	if len(*frames) != 1 {
-		t.Fatalf("queued %d frames, want 1", len(*frames))
+	if len(*frames) != 0 {
+		t.Fatalf("queued %d frames, want 0 (informational only)", len(*frames))
 	}
-	nc, ok := (*frames)[0].(*wire.NewConnectionIDFrame)
-	if !ok {
-		t.Fatalf("queued frame = %T, want *wire.NewConnectionIDFrame", (*frames)[0])
-	}
-	if nc.PathID == nil || *nc.PathID != protocol.PathID(1) || nc.SequenceNumber != 0 {
-		t.Fatalf("queued path CID PathID=%v seq=%d, want path 1 seq 0", nc.PathID, nc.SequenceNumber)
+	if c.connStats.PathCIDsBlocked.Load() != 1 {
+		t.Fatalf("connStats.PathCIDsBlocked = %d, want 1", c.connStats.PathCIDsBlocked.Load())
 	}
 	if c.multipathOut != nil {
-		t.Fatal("PATH_CIDS_BLOCKED issued a CID but should not open path state")
+		t.Fatal("PATH_CIDS_BLOCKED should not open path state")
 	}
 
 	if err := c.handlePathCIDsBlockedFrame(&wire.PathCIDsBlockedFrame{PathID: 1, NextSeq: 0}); err != nil {
 		t.Fatalf("handle duplicate PATH_CIDS_BLOCKED: %v", err)
 	}
-	if len(*frames) != 1 {
-		t.Fatalf("queued %d frames after duplicate, want 1", len(*frames))
+	if len(*frames) != 0 {
+		t.Fatalf("queued %d frames after duplicate, want 0", len(*frames))
+	}
+	if c.connStats.PathCIDsBlocked.Load() != 2 {
+		t.Fatalf("connStats.PathCIDsBlocked = %d, want 2", c.connStats.PathCIDsBlocked.Load())
 	}
 }
 
@@ -464,5 +470,137 @@ func TestHandlePlainNewConnectionIDUnchanged(t *testing.T) {
 	}
 	if len(c.perPathDestConnIDs) != 0 {
 		t.Fatalf("plain NEW_CONNECTION_ID must not touch perPathDestConnIDs, got %v", c.perPathDestConnIDs)
+	}
+}
+
+// TestIssueFirstPathCIDsBatchAndSequenceNumbers verifies that when multipath is
+// negotiated with max path id N and peer limit L, exactly N * min(L, cap) path
+// CID frames are queued with strictly monotonic sequence numbers starting at 0 per path.
+func TestIssueFirstPathCIDsBatchAndSequenceNumbers(t *testing.T) {
+	g, frames, added := newTestConnIDGenerator(t)
+	peerLimit := uint64(4)
+	if err := g.SetMaxActiveConnIDs(peerLimit); err != nil {
+		t.Fatalf("SetMaxActiveConnIDs: %v", err)
+	}
+
+	// For path 0, SetMaxActiveConnIDs queued peerLimit-1 = 3 frames.
+	if len(*frames) != 3 {
+		t.Fatalf("path 0 queued %d frames, want 3", len(*frames))
+	}
+	*frames = (*frames)[:0]
+	*added = (*added)[:0]
+
+	maxPathID := protocol.PathID(3)
+	if err := g.IssueFirstPathCIDs(maxPathID); err != nil {
+		t.Fatalf("IssueFirstPathCIDs(3): %v", err)
+	}
+
+	// 3 paths (1, 2, 3) * 4 CIDs each = 12 frames.
+	if len(*frames) != 12 {
+		t.Fatalf("queued %d frames, want 12", len(*frames))
+	}
+	if len(*added) != 12 {
+		t.Fatalf("added %d CIDs, want 12", len(*added))
+	}
+
+	perPathSeqs := make(map[protocol.PathID][]uint64)
+	for _, f := range *frames {
+		nc, ok := f.(*wire.NewConnectionIDFrame)
+		if !ok {
+			t.Fatalf("expected *wire.NewConnectionIDFrame, got %T", f)
+		}
+		if nc.PathID == nil {
+			t.Fatalf("PathID is nil in path frame")
+		}
+		if *nc.PathID == protocol.PathIDZero {
+			t.Fatalf("PathIDZero appeared in PATH_NEW_CONNECTION_ID")
+		}
+		perPathSeqs[*nc.PathID] = append(perPathSeqs[*nc.PathID], nc.SequenceNumber)
+	}
+
+	for pid := protocol.PathID(1); pid <= maxPathID; pid++ {
+		seqs := perPathSeqs[pid]
+		if len(seqs) != 4 {
+			t.Fatalf("path %d got %d frames, want 4", pid, len(seqs))
+		}
+		for i, seq := range seqs {
+			if seq != uint64(i) {
+				t.Fatalf("path %d seq %d != %d", pid, seq, i)
+			}
+		}
+	}
+
+	// Calling again with same or smaller maxPathID is a no-op (idempotent).
+	*frames = (*frames)[:0]
+	if err := g.IssueFirstPathCIDs(maxPathID); err != nil {
+		t.Fatalf("IssueFirstPathCIDs duplicate: %v", err)
+	}
+	if len(*frames) != 0 {
+		t.Fatalf("IssueFirstPathCIDs duplicate queued %d frames, want 0", len(*frames))
+	}
+
+	// Raising MAX_PATH_ID from 3 to 5 issues batches ONLY for paths 4 and 5 (2 * 4 = 8 frames).
+	if err := g.IssueFirstPathCIDs(protocol.PathID(5)); err != nil {
+		t.Fatalf("IssueFirstPathCIDs(5): %v", err)
+	}
+	if len(*frames) != 8 {
+		t.Fatalf("raising to 5 queued %d frames, want 8", len(*frames))
+	}
+	for _, f := range *frames {
+		nc := f.(*wire.NewConnectionIDFrame)
+		if *nc.PathID < 4 || *nc.PathID > 5 {
+			t.Fatalf("unexpected PathID %d on raise", *nc.PathID)
+		}
+	}
+}
+
+// TestRetireMultipleCIDsReplenishesToBudget verifies that retiring multiple CIDs on one path
+// restores that path to the full budget while leaving other paths untouched.
+func TestRetireMultipleCIDsReplenishesToBudget(t *testing.T) {
+	g, frames, _ := newTestConnIDGenerator(t)
+	peerLimit := uint64(3)
+	if err := g.SetMaxActiveConnIDs(peerLimit); err != nil {
+		t.Fatalf("SetMaxActiveConnIDs: %v", err)
+	}
+	if err := g.IssueFirstPathCIDs(protocol.PathID(2)); err != nil {
+		t.Fatalf("IssueFirstPathCIDs: %v", err)
+	}
+
+	// Paths 1 and 2 each have 3 CIDs (seqs 0, 1, 2).
+	if len(g.pathSrcConnIDs[1]) != 3 || len(g.pathSrcConnIDs[2]) != 3 {
+		t.Fatalf("initial path sizes: path1=%d, path2=%d", len(g.pathSrcConnIDs[1]), len(g.pathSrcConnIDs[2]))
+	}
+
+	*frames = (*frames)[:0]
+	// Retire seq 0 on path 1.
+	if err := g.RetirePath(1, 0, protocol.ParseConnectionID([]byte{0xff}), monotime.Now()); err != nil {
+		t.Fatalf("RetirePath(1, 0): %v", err)
+	}
+	if len(g.pathSrcConnIDs[1]) != 3 {
+		t.Fatalf("path 1 size after 1 retire = %d, want 3", len(g.pathSrcConnIDs[1]))
+	}
+	if len(g.pathSrcConnIDs[2]) != 3 {
+		t.Fatalf("path 2 size touched: %d", len(g.pathSrcConnIDs[2]))
+	}
+	// Emitted seq 3 for path 1.
+	if len(*frames) != 1 {
+		t.Fatalf("queued %d frames, want 1", len(*frames))
+	}
+	nc := (*frames)[0].(*wire.NewConnectionIDFrame)
+	if *nc.PathID != 1 || nc.SequenceNumber != 3 {
+		t.Fatalf("replacement = {PathID:%v Seq:%d}, want {1 3}", nc.PathID, nc.SequenceNumber)
+	}
+
+	*frames = (*frames)[:0]
+	// Retire seq 1 on path 1.
+	if err := g.RetirePath(1, 1, protocol.ParseConnectionID([]byte{0xff}), monotime.Now()); err != nil {
+		t.Fatalf("RetirePath(1, 1): %v", err)
+	}
+	if len(g.pathSrcConnIDs[1]) != 3 {
+		t.Fatalf("path 1 size after 2nd retire = %d, want 3", len(g.pathSrcConnIDs[1]))
+	}
+	nc = (*frames)[0].(*wire.NewConnectionIDFrame)
+	if *nc.PathID != 1 || nc.SequenceNumber != 4 {
+		t.Fatalf("replacement = {PathID:%v Seq:%d}, want {1 4}", nc.PathID, nc.SequenceNumber)
 	}
 }
