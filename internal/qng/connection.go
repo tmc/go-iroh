@@ -2561,7 +2561,14 @@ func (c *Conn) handlePathCIDsBlockedFrame(frame *wire.PathCIDsBlockedFrame) erro
 			c.logger.Infof("received PATH_CIDS_BLOCKED for path %d (seq %d)", frame.PathID, frame.NextSeq)
 		}
 	}
-	c.multipathManager.handlePathCIDsBlocked(frame.PathID, frame.NextSeq)
+	// Bound the recorded state: a peer spraying PATH_CIDS_BLOCKED with
+	// arbitrary path ids must not grow peerPathCIDsBlocked without limit.
+	// Frames above our advertised max are counted and logged but not stored
+	// (the strict PROTOCOL_VIOLATION for this case lands separately with the
+	// receive-enforcement work).
+	if frame.PathID <= c.ourLocalMaxPathID() {
+		c.multipathManager.handlePathCIDsBlocked(frame.PathID, frame.NextSeq)
+	}
 	return nil
 }
 
