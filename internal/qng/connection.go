@@ -470,6 +470,10 @@ var newConnection = func(
 	} else {
 		params.MaxDatagramFrameSize = protocol.InvalidByteCount
 	}
+	// Enforce the active_connection_id_limit we just advertised: the
+	// connIDManager errors with CONNECTION_ID_LIMIT_ERROR when the peer
+	// exceeds it, so its limit must come from the same value.
+	s.connIDManager.SetMaxActiveConnIDs(params.ActiveConnectionIDLimit)
 	if s.qlogger != nil {
 		s.qlogTransportParameters(params, protocol.PerspectiveServer, false)
 	}
@@ -602,6 +606,10 @@ var newClientConnection = func(
 	} else {
 		params.MaxDatagramFrameSize = protocol.InvalidByteCount
 	}
+	// Enforce the active_connection_id_limit we just advertised: the
+	// connIDManager errors with CONNECTION_ID_LIMIT_ERROR when the peer
+	// exceeds it, so its limit must come from the same value.
+	s.connIDManager.SetMaxActiveConnIDs(params.ActiveConnectionIDLimit)
 	if s.qlogger != nil {
 		s.qlogTransportParameters(params, protocol.PerspectiveClient, false)
 	}
@@ -1204,9 +1212,11 @@ func (c *Conn) effectiveMaxPathID() protocol.PathID {
 // advertised in our initial_max_path_id transport parameter (Config.InitialMaxPathID,
 // transport_parameters.rs:121). MAX_PATH_ID frames raise this initial value; in
 // this sub-increment we only advertise the initial value and never raise it, so
-// the local max equals the configured value. Caller must hold multipath
-// negotiated (Config.InitialMaxPathID != nil).
+// the local max equals the configured value.
 func (c *Conn) ourLocalMaxPathID() protocol.PathID {
+	if c.config.InitialMaxPathID == nil {
+		return protocol.PathIDZero
+	}
 	return protocol.PathID(*c.config.InitialMaxPathID)
 }
 
@@ -2363,6 +2373,8 @@ func (c *Conn) handleFrame(
 // (frame.rs:2005-2012). A path-qualified non-zero frame is the peer issuing a
 // DCID for that QUIC multipath path; we record it in perPathDestConnIDs for the
 // send side and do NOT feed it to connIDManager.
+//
+// Reference: noq v1.1.0 connection/mod.rs:5102-5170.
 func (c *Conn) handleNewConnectionIDFrame(frame *wire.NewConnectionIDFrame) error {
 	if frame.PathID == nil {
 		return c.connIDManager.Add(frame)
@@ -2370,10 +2382,20 @@ func (c *Conn) handleNewConnectionIDFrame(frame *wire.NewConnectionIDFrame) erro
 	if err := c.rejectIfMultipathOff("PATH_NEW_CONNECTION_ID"); err != nil {
 		return err
 	}
+	// Reference: noq v1.1.0 connection/mod.rs:5107-5111
+	if *frame.PathID > c.ourLocalMaxPathID() {
+		return &qerr.TransportError{
+			ErrorCode:    qerr.ProtocolViolation,
+			ErrorMessage: "PATH_NEW_CONNECTION_ID contains path_id exceeding current max",
+		}
+	}
 	if *frame.PathID == protocol.PathIDZero {
 		return c.connIDManager.Add(frame)
 	}
 	pid := *frame.PathID
+	// Note: Active connection ID limit enforcement on non-zero paths is an open gap
+	// since we currently only retain 1 active destination CID per path in perPathDestConnIDs.
+	// We record the latest DCID for the path.
 	c.perPathDestConnIDs[pid] = frame.ConnectionID
 	return nil
 }
@@ -2554,14 +2576,25 @@ func (c *Conn) handleMaxPathIDFrame(frame *wire.MaxPathIDFrame) error {
 	return nil
 }
 
+// handlePathsBlockedFrame handles incoming PATHS_BLOCKED frames.
+// Reference: noq v1.1.0 connection/mod.rs:5361-5369.
 func (c *Conn) handlePathsBlockedFrame(frame *wire.PathsBlockedFrame) error {
 	if err := c.rejectIfMultipathOff("PATHS_BLOCKED"); err != nil {
 		return err
+	}
+	// Reference: noq v1.1.0 connection/mod.rs:5363-5367
+	if frame.MaxPathID > c.ourLocalMaxPathID() {
+		return &qerr.TransportError{
+			ErrorCode:    qerr.ProtocolViolation,
+			ErrorMessage: "PATHS_BLOCKED maximum path identifier was larger than local maximum",
+		}
 	}
 	c.multipathManager.handlePathsBlocked(frame.MaxPathID)
 	return nil
 }
 
+// handlePathCIDsBlockedFrame handles incoming PATH_CIDS_BLOCKED frames.
+// Reference: noq v1.1.0 connection/mod.rs:5376-5398.
 func (c *Conn) handlePathCIDsBlockedFrame(frame *wire.PathCIDsBlockedFrame) error {
 	if err := c.rejectIfMultipathOff("PATH_CIDS_BLOCKED"); err != nil {
 		return err
@@ -2573,14 +2606,14 @@ func (c *Conn) handlePathCIDsBlockedFrame(frame *wire.PathCIDsBlockedFrame) erro
 			c.logger.Infof("received PATH_CIDS_BLOCKED for path %d (seq %d)", frame.PathID, frame.NextSeq)
 		}
 	}
-	// Bound the recorded state: a peer spraying PATH_CIDS_BLOCKED with
-	// arbitrary path ids must not grow peerPathCIDsBlocked without limit.
-	// Frames above our advertised max are counted and logged but not stored
-	// (the strict PROTOCOL_VIOLATION for this case lands separately with the
-	// receive-enforcement work).
-	if frame.PathID <= c.ourLocalMaxPathID() {
-		c.multipathManager.handlePathCIDsBlocked(frame.PathID, frame.NextSeq)
+	// Reference: noq v1.1.0 connection/mod.rs:5382-5386
+	if frame.PathID > c.ourLocalMaxPathID() {
+		return &qerr.TransportError{
+			ErrorCode:    qerr.ProtocolViolation,
+			ErrorMessage: "PATH_CIDS_BLOCKED path identifier was larger than local maximum",
+		}
 	}
+	c.multipathManager.handlePathCIDsBlocked(frame.PathID, frame.NextSeq)
 	return nil
 }
 
