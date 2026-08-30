@@ -88,8 +88,8 @@ type appDataReceivedPacketTracker struct {
 	largestObserved protocol.PacketNumber
 	ignoreBelow     protocol.PacketNumber
 
-	maxAckDelay         time.Duration
-	ackQueued           bool // true if we need send a new ACK
+	maxAckDelay           time.Duration
+	ackQueued             bool // true if we need send a new ACK
 	ackElicitingThreshold uint64
 	reorderingThreshold   protocol.PacketNumber
 
@@ -122,6 +122,14 @@ func (h *appDataReceivedPacketTracker) SetAckFrequencyParams(ackElicitingThresho
 	}
 	h.maxAckDelay = maxAckDelay
 	h.reorderingThreshold = reorderingThreshold
+
+	// If the new threshold is already met by packets received since the last
+	// ACK, queue one now rather than waiting for the next packet or timer.
+	if uint64(h.ackElicitingPacketsReceivedSinceLastAck) >= h.ackElicitingThreshold {
+		h.ackQueued = true
+		h.ackAlarm = 0
+		return
+	}
 
 	// If an ACK alarm is already set, adjust it based on the new maxAckDelay.
 	if !h.ackAlarm.IsZero() && !h.ackQueued {

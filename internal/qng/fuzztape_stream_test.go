@@ -480,17 +480,17 @@ func (m *streamMachine) stream(id protocol.StreamID) *streamMachineStream {
 
 // ackFrequencyMachine models the received packet handler and ACK frequency processing under fuzztape.
 type ackFrequencyMachine struct {
-	t                      *testing.T
-	c                      *Conn
-	unpatchedHandler       *ackhandler.ReceivedPacketHandler
-	receivedAckFreq        bool
-	lastSeq                uint64
-	lastSeqSet             bool
-	lastRequestedMaxAck    time.Duration
-	currentAckElicitingPN  protocol.PacketNumber
-	nextRcvTime            monotime.Time
-	immediateAckOccurred   bool
-	immediateAckAckQueued  bool
+	t                     *testing.T
+	c                     *Conn
+	unpatchedHandler      *ackhandler.ReceivedPacketHandler
+	receivedAckFreq       bool
+	lastSeq               uint64
+	lastSeqSet            bool
+	lastRequestedMaxAck   time.Duration
+	currentAckElicitingPN protocol.PacketNumber
+	nextRcvTime           monotime.Time
+	immediateAckOccurred  bool
+	immediateAckAckQueued bool
 }
 
 func newAckFrequencyMachine(t *testing.T) *ackFrequencyMachine {
@@ -665,4 +665,3 @@ func TestAckFrequencyMachine(t *testing.T) {
 func FuzzAckFrequencyMachine(f *testing.F) {
 	ackFrequencyMachineSpec().Fuzz(f)
 }
-

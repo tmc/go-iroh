@@ -2572,6 +2572,11 @@ func (c *Conn) handleAckFrequencyFrame(frame *wire.AckFrequencyFrame, encLevel p
 	c.lastAckFrequencySeq = frame.SequenceNumber
 	c.lastAckFrequencySeqSet = true
 
+	// The requested delay is applied unclamped, matching noq's receiver
+	// (connection/mod.rs:5220-5247): the requesting peer owns the PTO
+	// consequences of the delay it asked for, and clamping to our own
+	// advertised max_ack_delay would defeat requests above it.
+
 	c.receivedPacketHandler.SetAckFrequencyParams(
 		frame.AckElicitingThreshold,
 		frame.RequestMaxAckDelay,
