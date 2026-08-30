@@ -353,6 +353,7 @@ func (s *session) enqueue(msg relayproto.RelayToClientMsg) bool {
 	for {
 		queued := s.queuedBytes.Load()
 		if n > s.maxQueuedBytes || queued > s.maxQueuedBytes-n {
+			relayproto.PutBuf(b)
 			return false
 		}
 		if s.queuedBytes.CompareAndSwap(queued, queued+n) {

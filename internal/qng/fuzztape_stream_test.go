@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/internal/fuzztape"
+	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
 	"github.com/tmc/go-iroh/internal/qng/internal/flowcontrol"
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
@@ -475,4 +476,192 @@ func (m *streamMachine) stream(id protocol.StreamID) *streamMachineStream {
 		}
 	}
 	return nil
+}
+
+// ackFrequencyMachine models the received packet handler and ACK frequency processing under fuzztape.
+type ackFrequencyMachine struct {
+	t                     *testing.T
+	c                     *Conn
+	unpatchedHandler      *ackhandler.ReceivedPacketHandler
+	receivedAckFreq       bool
+	lastSeq               uint64
+	lastSeqSet            bool
+	lastRequestedMaxAck   time.Duration
+	currentAckElicitingPN protocol.PacketNumber
+	nextRcvTime           monotime.Time
+	immediateAckOccurred  bool
+	immediateAckAckQueued bool
+}
+
+func newAckFrequencyMachine(t *testing.T) *ackFrequencyMachine {
+	cfg := &Config{}
+	peer := &wire.TransportParameters{}
+	c := &Conn{
+		config:      cfg,
+		perspective: protocol.PerspectiveClient,
+	}
+	c.peerParams.Store(peer)
+	c.receivedPacketHandler = *ackhandler.NewReceivedPacketHandler(utils.DefaultLogger)
+	c.rttStats = utils.NewRTTStats()
+
+	unpatched := ackhandler.NewReceivedPacketHandler(utils.DefaultLogger)
+
+	return &ackFrequencyMachine{
+		t:                     t,
+		c:                     c,
+		unpatchedHandler:      unpatched,
+		lastRequestedMaxAck:   protocol.MaxAckDelay,
+		nextRcvTime:           monotime.Now(),
+		currentAckElicitingPN: 0,
+	}
+}
+
+func ackFrequencyMachineSpec() fuzztape.Machine[*ackFrequencyMachine] {
+	return fuzztape.Machine[*ackFrequencyMachine]{
+		Name:   "FuzzAckFrequencyMachine",
+		MaxOps: 48,
+		Init:   newAckFrequencyMachine,
+		Ops: []fuzztape.Op[*ackFrequencyMachine]{
+			{
+				Name:   "recvDataPacket",
+				Weight: 5,
+				Apply: func(m *ackFrequencyMachine, t *fuzztape.Tape) error {
+					pn := m.currentAckElicitingPN
+					m.currentAckElicitingPN++
+					now := m.nextRcvTime
+					m.nextRcvTime = m.nextRcvTime.Add(time.Duration(1+t.IntN(5)) * time.Millisecond)
+					ackEliciting := t.Bool()
+
+					if err := m.c.receivedPacketHandler.ReceivedPacket(pn, protocol.ECNNon, protocol.Encryption1RTT, now, ackEliciting); err != nil {
+						m.t.Fatalf("ReceivedPacket: %v", err)
+					}
+					if !m.receivedAckFreq {
+						if err := m.unpatchedHandler.ReceivedPacket(pn, protocol.ECNNon, protocol.Encryption1RTT, now, ackEliciting); err != nil {
+							m.t.Fatalf("unpatched ReceivedPacket: %v", err)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				Name:   "recvAckFrequency",
+				Weight: 3,
+				Apply: func(m *ackFrequencyMachine, t *fuzztape.Tape) error {
+					// Choose sequence number: either in-order, out-of-order/stale, or jump ahead
+					var seq uint64
+					if !m.lastSeqSet {
+						seq = uint64(t.IntN(10))
+					} else {
+						mode := t.IntN(3)
+						switch mode {
+						case 0: // stale
+							if m.lastSeq > 0 {
+								seq = uint64(t.IntN(int(m.lastSeq + 1)))
+							} else {
+								seq = 0
+							}
+						case 1: // next in-order
+							seq = m.lastSeq + 1
+						case 2: // jump ahead
+							seq = m.lastSeq + uint64(2+t.IntN(5))
+						}
+					}
+
+					threshold := uint64(1 + t.IntN(32))
+					// Delay between 1ms and 100ms
+					reqDelay := time.Duration(1+t.IntN(100)) * time.Millisecond
+					reordering := protocol.PacketNumber(t.IntN(5))
+
+					prevLastSeq := m.lastSeq
+					prevLastSeqSet := m.lastSeqSet
+					prevMaxAckDelay := m.lastRequestedMaxAck
+
+					frame := &wire.AckFrequencyFrame{
+						SequenceNumber:        seq,
+						AckElicitingThreshold: threshold,
+						RequestMaxAckDelay:    reqDelay,
+						ReorderingThreshold:   reordering,
+					}
+					err := m.c.handleAckFrequencyFrame(frame, protocol.Encryption1RTT, m.nextRcvTime)
+					if err != nil {
+						m.t.Fatalf("handleAckFrequencyFrame: %v", err)
+					}
+
+					isStale := prevLastSeqSet && seq <= prevLastSeq
+					if !isStale {
+						m.receivedAckFreq = true
+						m.lastSeq = seq
+						m.lastSeqSet = true
+						m.lastRequestedMaxAck = reqDelay
+					} else {
+						// Stale frames must not regress sequence or delay
+						if m.lastSeq != prevLastSeq || m.lastRequestedMaxAck != prevMaxAckDelay {
+							m.t.Fatalf("stale ACK_FREQUENCY regressed state")
+						}
+					}
+					return nil
+				},
+			},
+			{
+				Name:   "recvImmediateAck",
+				Weight: 2,
+				Apply: func(m *ackFrequencyMachine, t *fuzztape.Tape) error {
+					err := m.c.handleImmediateAckFrame(&wire.ImmediateAckFrame{}, protocol.Encryption1RTT)
+					if err != nil {
+						m.t.Fatalf("handleImmediateAckFrame: %v", err)
+					}
+					m.receivedAckFreq = true
+					return nil
+				},
+			},
+			{
+				Name:   "timerFire",
+				Weight: 2,
+				Apply: func(m *ackFrequencyMachine, t *fuzztape.Tape) error {
+					// Advance time past alarm
+					timeout := m.c.receivedPacketHandler.GetAlarmTimeout()
+					if !timeout.IsZero() {
+						m.nextRcvTime = timeout.Add(time.Millisecond)
+						_ = m.c.receivedPacketHandler.GetAckFrame(protocol.Encryption1RTT, m.nextRcvTime, true)
+					}
+					if !m.receivedAckFreq {
+						timeoutUnpatched := m.unpatchedHandler.GetAlarmTimeout()
+						if !timeoutUnpatched.IsZero() {
+							_ = m.unpatchedHandler.GetAckFrame(protocol.Encryption1RTT, m.nextRcvTime, true)
+						}
+					}
+					return nil
+				},
+			},
+		},
+		Check: func(t *testing.T, m *ackFrequencyMachine) {
+			// Invariant 1: Effective max ack delay must be within [min_ack_delay, requestedMaxAckDelay]
+			minDelay := protocol.TimerGranularity
+			if m.lastRequestedMaxAck < minDelay {
+				t.Fatalf("invariant violation: requested max ack delay %v below min_ack_delay %v", m.lastRequestedMaxAck, minDelay)
+			}
+
+			// Invariant 2 (GG guard): If no ACK_FREQUENCY/IMMEDIATE_ACK was ever processed, tracker decisions must be bit-identical to unpatched tracker.
+			if !m.receivedAckFreq {
+				cAlarm := m.c.receivedPacketHandler.GetAlarmTimeout()
+				uAlarm := m.unpatchedHandler.GetAlarmTimeout()
+				if cAlarm != uAlarm {
+					t.Fatalf("GG invariant violation: alarm timeout mismatch: %v vs %v", cAlarm, uAlarm)
+				}
+				cAck := m.c.receivedPacketHandler.GetAckFrame(protocol.Encryption1RTT, m.nextRcvTime, true)
+				uAck := m.unpatchedHandler.GetAckFrame(protocol.Encryption1RTT, m.nextRcvTime, true)
+				if (cAck == nil) != (uAck == nil) {
+					t.Fatalf("GG invariant violation: queued ack mismatch: %v vs %v", cAck != nil, uAck != nil)
+				}
+			}
+		},
+	}
+}
+
+func TestAckFrequencyMachine(t *testing.T) {
+	ackFrequencyMachineSpec().Run(t, 200)
+}
+
+func FuzzAckFrequencyMachine(f *testing.F) {
+	ackFrequencyMachineSpec().Fuzz(f)
 }

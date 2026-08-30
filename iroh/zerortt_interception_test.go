@@ -281,3 +281,86 @@ func TestConnectEarlyVerifyHookRejection(t *testing.T) {
 		t.Fatalf("connection was not closed by the rejecting hook: %v", ctx.Err())
 	}
 }
+
+// TestConnectEarlyInto0RTTMultipleTargets checks that a peer advertising more
+// than one dial target still gets an early-data window. The other 0-RTT tests
+// all use a single-target address, so a dial path that resolves Connecting only
+// at handshake completion would leave them passing: Used0RTT stays true because
+// the transport still resumes, while Into0RTT reports ok=false because the
+// caller never gets to send before the handshake.
+func TestConnectEarlyInto0RTTMultipleTargets(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-0rtt-multi/0"
+	srvKey, _ := key.GenerateSecretKey()
+	server := startEchoServer(t, ctx, srvKey, alpn, true)
+	defer server.Shutdown(ctx)
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Shutdown(ctx)
+
+	// The reachable address plus a blackholed one, so the dial path sees
+	// several targets. The decoy is an unroutable IPv6 documentation address
+	// (RFC 3849) chosen to sort after the ::1 server: WithIP sorts the address
+	// set by [netaddr.TransportAddr.Compare], and a decoy sorting first would
+	// instead hang, because on a warm cache DialEarly hands back a usable 0-RTT
+	// connection without a round trip and the sequential dial commits to it.
+	// That is a separate bug; this test covers the early-data window.
+	addr := netaddr.NewEndpointAddr(server.ID()).
+		WithIP(server.LocalAddr()).
+		WithIP(netip.MustParseAddrPort("[2001:db8::1]:7"))
+
+	// Cold cache: connect once so the client caches a session ticket.
+	c1, err := client.ConnectEarly(ctx, addr, alpn)
+	if err != nil {
+		t.Fatalf("first ConnectEarly: %v", err)
+	}
+	conn1, ok := c1.Into0RTT()
+	if ok {
+		t.Fatal("cold-cache Into0RTT reported ok=true")
+	}
+	echo(t, ctx, conn1, "cold")
+	if !waitFor(ctx, func() bool { return client.sessionCache.Len() > 0 }) {
+		t.Fatalf("client never cached a session ticket: %v", ctx.Err())
+	}
+	conn1.CloseWithError(0, "")
+
+	// Warm cache: the extra target must not cost the early-data window.
+	c2, err := client.ConnectEarly(ctx, addr, alpn)
+	if err != nil {
+		t.Fatalf("second ConnectEarly: %v", err)
+	}
+	conn2, ok := c2.Into0RTT()
+	if !ok {
+		t.Fatal("warm-cache Into0RTT reported ok=false with more than one dial target")
+	}
+	defer conn2.CloseWithError(0, "")
+
+	s, err := conn2.OpenStreamSync(ctx)
+	if err != nil {
+		t.Fatalf("warm open stream: %v", err)
+	}
+	const msg = "early"
+	s.Write([]byte(msg))
+	s.Close()
+
+	select {
+	case <-conn2.HandshakeComplete():
+	case <-ctx.Done():
+		t.Fatalf("warm handshake did not complete: %v", ctx.Err())
+	}
+	if !conn2.Used0RTT() {
+		t.Error("warm connection did not use 0-RTT despite a cached ticket")
+	}
+	got, err := io.ReadAll(s)
+	if err != nil {
+		t.Fatalf("warm read echo: %v", err)
+	}
+	if string(got) != msg {
+		t.Errorf("warm echo = %q, want %q", got, msg)
+	}
+}
