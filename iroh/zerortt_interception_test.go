@@ -364,3 +364,124 @@ func TestConnectEarlyInto0RTTMultipleTargets(t *testing.T) {
 		t.Errorf("warm echo = %q, want %q", got, msg)
 	}
 }
+
+// TestConnectEarlyUnreachableFirstTarget covers the dial path when the first
+// address in the sorted set is unreachable. On a warm session cache DialEarly
+// can return a usable 0-RTT connection without a network round trip, so a
+// sequential dial has no evidence the path works and must not commit to it.
+func TestConnectEarlyUnreachableFirstTarget(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-0rtt-blackhole/0"
+	srvKey, _ := key.GenerateSecretKey()
+	server := startEchoServer(t, ctx, srvKey, alpn, true)
+	defer server.Shutdown(ctx)
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Shutdown(ctx)
+
+	// A blackholed IPv4 address (RFC 5737 TEST-NET-1) alongside the reachable
+	// ::1 server. WithIP sorts by [netaddr.TransportAddr.Compare], which puts
+	// the IPv4 decoy first, so every dial starts with a target that will never
+	// answer and must fall through to the loopback address behind it.
+	addr := netaddr.NewEndpointAddr(server.ID()).
+		WithIP(server.LocalAddr()).
+		WithIP(netip.MustParseAddrPort("192.0.2.1:7"))
+
+	// Cold cache: DialEarly blocks on the handshake, so the fall-through works.
+	c1, err := client.ConnectEarly(ctx, addr, alpn)
+	if err != nil {
+		t.Fatalf("first ConnectEarly: %v", err)
+	}
+	conn1, _ := c1.Into0RTT()
+	echo(t, ctx, conn1, "cold")
+	if !waitFor(ctx, func() bool { return client.sessionCache.Len() > 0 }) {
+		t.Fatalf("client never cached a session ticket: %v", ctx.Err())
+	}
+	conn1.CloseWithError(0, "")
+
+	// Warm cache: the same fall-through must still happen.
+	warmCtx, warmCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer warmCancel()
+	c2, err := client.ConnectEarly(warmCtx, addr, alpn)
+	if err != nil {
+		t.Fatalf("second ConnectEarly: %v", err)
+	}
+	conn2, ok := c2.Into0RTT()
+	defer conn2.CloseWithError(0, "")
+	// The cold dial proved the loopback address, so the warm dial promotes it
+	// and commits without waiting: falling through to the blackhole would have
+	// cost the early-data window even if it eventually connected.
+	if !ok {
+		t.Error("warm-cache Into0RTT reported ok=false; the proven target was not dialed first")
+	}
+
+	select {
+	case <-conn2.HandshakeComplete():
+	case <-warmCtx.Done():
+		t.Fatalf("warm handshake did not complete: dial committed to the unreachable first target (%v)", warmCtx.Err())
+	}
+	echo(t, ctx, conn2, "warm")
+}
+
+// TestConnectEarlyFallsThroughUnprovenTarget covers the dial path when no
+// proven target is available: the hint recorded by an earlier connection is
+// dropped when the remote is evicted, so a resumed dial must wait for evidence
+// on the unreachable first target and fall through to the next one.
+func TestConnectEarlyFallsThroughUnprovenTarget(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-0rtt-unproven/0"
+	srvKey, _ := key.GenerateSecretKey()
+	server := startEchoServer(t, ctx, srvKey, alpn, true)
+	defer server.Shutdown(ctx)
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Shutdown(ctx)
+
+	addr := netaddr.NewEndpointAddr(server.ID()).
+		WithIP(server.LocalAddr()).
+		WithIP(netip.MustParseAddrPort("192.0.2.1:7"))
+
+	c1, err := client.ConnectEarly(ctx, addr, alpn)
+	if err != nil {
+		t.Fatalf("first ConnectEarly: %v", err)
+	}
+	conn1, _ := c1.Into0RTT()
+	echo(t, ctx, conn1, "cold")
+	if !waitFor(ctx, func() bool { return client.sessionCache.Len() > 0 }) {
+		t.Fatalf("client never cached a session ticket: %v", ctx.Err())
+	}
+	conn1.CloseWithError(0, "")
+
+	// Evicting the remote drops the dial hint, which is what happens when a
+	// peer goes idle. The ticket outlives it, so the next dial is resumed but
+	// has no proven address.
+	client.forgetRemote(server.ID())
+
+	start := time.Now()
+	c2, err := client.ConnectEarly(ctx, addr, alpn)
+	if err != nil {
+		t.Fatalf("second ConnectEarly: %v", err)
+	}
+	conn2, _ := c2.Into0RTT()
+	defer conn2.CloseWithError(0, "")
+
+	select {
+	case <-conn2.HandshakeComplete():
+	case <-ctx.Done():
+		t.Fatalf("warm handshake did not complete: %v", ctx.Err())
+	}
+	if waited := time.Since(start); waited < dialAttemptTimeout {
+		t.Errorf("dial returned after %v, want at least dialAttemptTimeout (%v): the unproven first target was not waited on", waited, dialAttemptTimeout)
+	}
+	echo(t, ctx, conn2, "warm")
+}

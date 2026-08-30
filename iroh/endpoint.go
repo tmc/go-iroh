@@ -72,7 +72,12 @@ type Endpoint struct {
 	lastReport         *NetReport
 	nextStable         uint64
 	stableIDs          map[*quic.Conn]uint64
-	metrics            endpointMetrics
+	// lastGood records, per remote, the path whose handshake last completed,
+	// keyed by Addr.String. The remote actor's selected path is not a
+	// substitute: it covers a live connection only, and a dial needs the fact
+	// to outlive it.
+	lastGood map[key.EndpointID]string
+	metrics  endpointMetrics
 }
 
 type acceptOwner int
@@ -516,7 +521,10 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	}
 	// Reaped remotes release their mapped addresses, so the socket's tables do
 	// not grow without bound under peer churn (upstream iroh issue #4293).
-	ep.remotes.SetOnEvict(sock.EvictRemote)
+	ep.remotes.SetOnEvict(func(id key.EndpointID, addrs []socket.Addr) {
+		sock.EvictRemote(id, addrs)
+		ep.forgetRemote(id)
+	})
 	ep.magic.SetEndpointSender(func(id key.EndpointID, p []byte) bool {
 		err := ep.remotes.Actor(id).SendDatagram(p, func(addr socket.Addr, data []byte) bool {
 			return ep.magic.SendAddr(addr, data)
@@ -1252,14 +1260,34 @@ func (e *Endpoint) connectEarly(ctx context.Context, addr netaddr.EndpointAddr, 
 		defer cancel()
 	}
 
+	// With a resumable ticket DialEarly returns at the 0-RTT window, before any
+	// packet from the peer, so success says nothing about whether the target
+	// answers. Handshake completion is the first real evidence, needed for
+	// every target except one already proven or with nothing left to try.
+	sel, haveSel := e.goodTarget(addr.ID)
 	var firstErr error
-	for _, target := range dials {
+	for i, target := range dials {
 		qc, err := e.transport.DialEarly(ctx, target, clientTLS, e.quicConf)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
+		}
+		proven := haveSel && e.sock.PathAddr(addr.ID, target).String() == sel
+		if !proven && i < len(dials)-1 {
+			select {
+			case <-qc.HandshakeComplete():
+			case <-ctx.Done():
+				qc.CloseWithError(0, "")
+				return nil, fmt.Errorf("iroh: connect to %s: %w", addr.ID, ctx.Err())
+			case <-time.After(dialAttemptTimeout):
+				qc.CloseWithError(0, "")
+				if firstErr == nil {
+					firstErr = fmt.Errorf("dial %s: no handshake within %v", target, dialAttemptTimeout)
+				}
+				continue
+			}
 		}
 		return &Connecting{ep: e, qc: qc, remoteID: addr.ID, addr: addr, alpn: alpn}, nil
 	}
@@ -1318,7 +1346,48 @@ func (e *Endpoint) dialTargets(addr netaddr.EndpointAddr) []net.Addr {
 	if !e.relayFirst {
 		targets = append(targets, relays...)
 	}
+	// The address set is sorted by netaddr.TransportAddr.Compare, so slot order
+	// carries no reachability information.
+	if sel, ok := e.goodTarget(addr.ID); ok {
+		for i, t := range targets {
+			if e.sock.PathAddr(addr.ID, t).String() != sel {
+				continue
+			}
+			copy(targets[1:i+1], targets[:i])
+			targets[0] = t
+			break
+		}
+	}
 	return targets
+}
+
+// goodTarget returns the path whose handshake last completed with id.
+func (e *Endpoint) goodTarget(id key.EndpointID) (string, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	a, ok := e.lastGood[id]
+	return a, ok
+}
+
+// noteGoodTarget records path as working for remote. Callers must wait for the
+// handshake first; see connectEarly for why an earlier signal proves nothing.
+func (e *Endpoint) noteGoodTarget(remote key.EndpointID, path socket.Addr) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return
+	}
+	if e.lastGood == nil {
+		e.lastGood = make(map[key.EndpointID]string)
+	}
+	e.lastGood[remote] = path.String()
+}
+
+// forgetRemote drops the cached dial hint for id.
+func (e *Endpoint) forgetRemote(id key.EndpointID) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.lastGood, id)
 }
 
 // AcceptIncoming blocks until an incoming connection attempt arrives. The
@@ -1476,6 +1545,16 @@ func (e *Endpoint) registerConn(remote key.EndpointID, qc *quic.Conn, remoteAddr
 	}
 	pathAddr := e.sock.PathAddr(remote, qc.RemoteAddr())
 	adapter := newConnAdapter(qc, pathAddr)
+	go func() {
+		select {
+		case <-qc.HandshakeComplete():
+			e.noteGoodTarget(remote, pathAddr)
+		case <-qc.Context().Done():
+			// HandshakeComplete is closed only on success, so a connection
+			// that dies first would park this goroutine until shutdown.
+		case <-e.closedCh:
+		}
+	}()
 	if pathAddr.Kind() == socket.AddrIP {
 		for _, u := range remoteAddr.RelayURLs() {
 			m := e.sock.RelayMappedAddrFor(u, remote)
