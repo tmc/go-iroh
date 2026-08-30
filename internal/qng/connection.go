@@ -470,6 +470,10 @@ var newConnection = func(
 	} else {
 		params.MaxDatagramFrameSize = protocol.InvalidByteCount
 	}
+	// Enforce the active_connection_id_limit we just advertised: the
+	// connIDManager errors with CONNECTION_ID_LIMIT_ERROR when the peer
+	// exceeds it, so its limit must come from the same value.
+	s.connIDManager.SetMaxActiveConnIDs(params.ActiveConnectionIDLimit)
 	if s.qlogger != nil {
 		s.qlogTransportParameters(params, protocol.PerspectiveServer, false)
 	}
@@ -602,6 +606,10 @@ var newClientConnection = func(
 	} else {
 		params.MaxDatagramFrameSize = protocol.InvalidByteCount
 	}
+	// Enforce the active_connection_id_limit we just advertised: the
+	// connIDManager errors with CONNECTION_ID_LIMIT_ERROR when the peer
+	// exceeds it, so its limit must come from the same value.
+	s.connIDManager.SetMaxActiveConnIDs(params.ActiveConnectionIDLimit)
 	if s.qlogger != nil {
 		s.qlogTransportParameters(params, protocol.PerspectiveClient, false)
 	}

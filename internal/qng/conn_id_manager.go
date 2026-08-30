@@ -240,7 +240,7 @@ func (h *connIDManager) shouldUpdateConnID() bool {
 	// For later changes, only change if
 	// 1. The queue of connection IDs is filled more than 50%.
 	// 2. We sent at least PacketsPerConnectionID packets
-	return 2*len(h.queue) >= protocol.MaxActiveConnectionIDs &&
+	return uint64(2*len(h.queue)) >= h.maxActiveConnIDs &&
 		h.packetsSinceLastChange >= h.packetsPerConnectionID
 }
 

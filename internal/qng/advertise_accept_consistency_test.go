@@ -163,9 +163,10 @@ func TestAdvertiseAcceptConsistency(t *testing.T) {
 	}
 }
 
-// TestMinAckDelayAdvertisedAcceptsAckFrequency asserts that when ACK frequency support is enabled,
-// the frame parser accepts ACK_FREQUENCY and IMMEDIATE_ACK frames in 1-RTT.
-func TestMinAckDelayAdvertisedAcceptsAckFrequency(t *testing.T) {
+// TestFrameParserAcceptsAckFrequencyWhenEnabled asserts that a frame parser
+// constructed with supportsAckFrequency accepts ACK_FREQUENCY and
+// IMMEDIATE_ACK frames in 1-RTT.
+func TestFrameParserAcceptsAckFrequencyWhenEnabled(t *testing.T) {
 	parser := wire.NewFrameParser(true, true, true, true)
 	for _, ft := range []wire.FrameType{wire.FrameTypeAckFrequency, wire.FrameTypeImmediateAck} {
 		data := quicvarint.Append(nil, uint64(ft))

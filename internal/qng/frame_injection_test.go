@@ -210,15 +210,18 @@ func TestFrameInjection(t *testing.T) {
 	})
 }
 
-// TestPath0ActiveCIDLimitEnforcesAdvertisedLimit verifies that the path-0 connIDManager
-// enforces the advertised active_connection_id_limit rather than a hardcoded constant.
-func TestPath0ActiveCIDLimitEnforcesAdvertisedLimit(t *testing.T) {
+// TestPath0ActiveCIDLimitConfigurable verifies that the path-0 connIDManager
+// enforces the limit set via SetMaxActiveConnIDs rather than a hardcoded
+// constant. Connection setup wires this from the advertised
+// active_connection_id_limit transport parameter.
+func TestPath0ActiveCIDLimitConfigurable(t *testing.T) {
 	initialCID := protocol.ParseConnectionID([]byte{1, 2, 3, 4})
 	mgr := newConnIDManager(initialCID, nil, nil, nil)
 	// Set custom limit, e.g. 4
 	mgr.SetMaxActiveConnIDs(4)
 
-	// Add 3 CIDs (total active queue = 3, which is < 4)
+	// Queue 3 CIDs; with the initially active CID that is 4 total, and the
+	// manager errors only once the queue itself reaches the limit.
 	for i := uint64(1); i <= 3; i++ {
 		err := mgr.Add(&wire.NewConnectionIDFrame{
 			SequenceNumber: i,
@@ -229,7 +232,7 @@ func TestPath0ActiveCIDLimitEnforcesAdvertisedLimit(t *testing.T) {
 		}
 	}
 
-	// 4th CID should exceed limit of 4 active queued CIDs
+	// A 4th queued CID brings the queue to the limit and must be rejected.
 	err := mgr.Add(&wire.NewConnectionIDFrame{
 		SequenceNumber: 4,
 		ConnectionID:   protocol.ParseConnectionID([]byte{4, 0, 0, 0}),
