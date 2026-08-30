@@ -1,8 +1,8 @@
-commit: 2689d6d4c9667927fc95dce9bb36ce4f9749ad0f
-date: 2026-08-30T16:25:42-07:00
+commit: 47878993bbd6e39f35da4d99a2c6bdb25f8350be
+date: 2026-08-30T16:47:39-07:00
 claude-code: 2.1.220 (Claude Code)
 model: claude-opus-5
-tty: not a tty
-none
-pid: 72838
+tty: none
+pid: 99506
 ITERM_SESSION_ID: w2t1p9:9479C4B4-73B7-4A29-8FD2-7EF580982D8E
+note: amended to close a goroutine leak found in local review (HandshakeComplete closes only on success)
