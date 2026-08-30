@@ -357,6 +357,7 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 							s := m.stream(frame.StreamID)
 							if s == nil {
 								t.Fatalf("MAX_STREAM_DATA for unknown stream %d", frame.StreamID)
+								return
 							}
 							// A queued MAX_STREAM_DATA can be packed after the
 							// update became unnecessary — an abandoned stream

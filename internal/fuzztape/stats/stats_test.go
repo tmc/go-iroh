@@ -75,8 +75,3 @@ func TestWrapPreservesEncoding(t *testing.T) {
 	}
 }
 
-var errFull = errString("full")
-
-type errString string
-
-func (e errString) Error() string { return string(e) }
