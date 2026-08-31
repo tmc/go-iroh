@@ -1,0 +1,4 @@
+commit: aa76b71f96041c47f40008bae23eb6e255cf23a0
+date: 2026-08-31T19:22:22Z
+provenance: cherry-picked from 3C987443's cand8-rebased (bench host work repo) by session 02009d8d (claude-fable-5, AE370FE0); gofmt/blank-line cleanup folded in; full qng+iroh suites + race pass
+original-author-session: w2t1p15:3C987443 (gemini-2.5-pro)
