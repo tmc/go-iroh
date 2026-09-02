@@ -242,6 +242,20 @@ func (s *MemoryStore) entriesLocked() []SignedEntry {
 }
 
 // Put inserts entry if it is newer than all matching parent entries.
+//
+// Keys form a prefix hierarchy per author, so an entry shadows its
+// descendants: writing "menu" for an author removes that author's "menu/tea"
+// and every other key under "menu", and a document cannot hold both. The insert
+// is dropped instead when an ancestor key is already present with a newer or
+// equal record. "Newer" is the record timestamp, with the content hash breaking
+// ties. Entries from different authors never shadow each other.
+//
+// This is the iroh-docs model, deliberate and how a subtree is deleted, but it
+// is silent: [InsertOutcome.Removed] reports how many entries a write deleted,
+// and nothing reports it to a later reader. A caller that wants "menu" and
+// "menu/tea" to coexist must keep the author's keys prefix-free, so that no key
+// is a prefix of another. Note that a trailing separator does not help: "menu/"
+// is still a prefix of "menu/tea".
 func (s *MemoryStore) Put(entry SignedEntry) InsertOutcome {
 	return s.PutWithOrigin(entry, InsertOrigin{Kind: InsertOriginLocal})
 }
@@ -251,7 +265,8 @@ func (s *MemoryStore) put(entry SignedEntry) InsertOutcome {
 	return outcome
 }
 
-// PutWithOrigin inserts entry with origin metadata for subscribers.
+// PutWithOrigin inserts entry with origin metadata for subscribers. It shadows
+// descendant keys exactly as [MemoryStore.Put] does.
 func (s *MemoryStore) PutWithOrigin(entry SignedEntry, origin InsertOrigin) InsertOutcome {
 	outcome, event, events := s.putEntry(entry, origin, true)
 	if outcome.Inserted() && s.persistPath != "" {
