@@ -5,6 +5,12 @@
 // Go values of kind uint8 and int8 follow that rule, so uint8(200) encodes as
 // "c8" and int8(-2) as "fe".
 //
+// The 8-bit encoding changed in this v0 release: uint8 and int8 were previously
+// written as a varint and a zigzag varint, which did not match Rust. A uint8
+// below 128 encodes to the same single byte either way, so records holding only
+// small u8 tags are unaffected; a uint8 of 128 or more, and an int8 of anything
+// but zero, encoded differently before and cannot be read back by this version.
+//
 // Decoding accepts only canonical varints: a padded encoding such as "ac8200"
 // for 300 is rejected with [ErrOverlongVarint], so distinct byte strings never
 // decode to the same value.
