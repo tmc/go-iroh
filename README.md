@@ -185,7 +185,36 @@ jq -c 'select(.name == "quic:packet_sent") | .data.frames[]' qlog/*_client.sqlog
 
 `QLOGDIR` is read once per connection and applies process-wide, so a process
 running several endpoints interleaves their traces in one directory, keyed only
-by connection id.
+by connection id. `iroh.WithQLOG` replaces it for one endpoint: the sink is
+called once per connection and returns the `io.WriteCloser` for that trace, so
+endpoints in one process can be traced separately, or somewhere other than a
+file. `iroh.QLOGDir` builds a sink with the same file layout as `QLOGDIR`.
+
+### Payload bytes
+
+qlog stops at frame metadata. To see the bytes a stream carried, log the TLS
+traffic secrets with `iroh.WithKeyLogWriter`, capture the UDP flow, and let
+Wireshark decrypt it:
+
+```go
+keys, _ := os.Create("keys.txt")
+ep, _ := iroh.Bind(ctx, iroh.WithKeyLogWriter(keys)) // debugging only
+```
+
+```sh
+tshark -r cap.pcap -o tls.keylog_file:keys.txt -Y quic.stream_data -T fields -e quic.stream_data
+```
+
+Writing those secrets compromises the confidentiality of every connection the
+endpoint makes, so this is a debugging tool, not a deployment option. Three
+things stay dark:
+
+  - Relayed traffic. Relay paths are an encrypted websocket to the relay, not
+    the QUIC flow, so a capture of a relayed connection decrypts nothing.
+  - 0-RTT. No early-traffic secret is written, so resumed connections' early
+    data is not decryptable.
+  - The reverse direction after connection-id rotation. Only the direction that
+    keeps its connection id stays readable for the whole capture.
 
 ## Status
 
