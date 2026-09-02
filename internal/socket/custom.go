@@ -27,9 +27,15 @@ type Packet struct {
 // intentionally small: the transport owns its wire format and reports datagrams
 // as iroh custom addresses for the magic socket to map into qng paths.
 type CustomTransport interface {
-	// Serve runs the transport until ctx is done. Each received datagram should
-	// be passed to recv. recv reports false when the magic socket is shutting
-	// down or its receive queue is full.
+	// Serve runs the transport until ctx is done, passing each received
+	// datagram to recv.
+	//
+	// recv reports whether the datagram was taken. A false result means the
+	// datagram was dropped, most often because the receive queue was full
+	// under a burst; it is not a signal to stop. Serve must keep serving and
+	// return only when ctx is done, so `if !recv(d) { return }` tears the
+	// transport down on the first burst. Shutdown is reported through ctx
+	// alone, which is cancelled before the queue stops being drained.
 	Serve(ctx context.Context, recv func(CustomDatagram) bool)
 
 	// Send sends p to remote. local is nil when qng did not select a specific
@@ -42,7 +48,10 @@ type PacketTransport interface {
 	CustomTransport
 
 	// ServePackets runs the transport until ctx is done. Received packets are
-	// owned by the transport until their Free callback runs.
+	// owned by the transport until their Free callback runs. recv follows the
+	// same contract as [CustomTransport.Serve]: a false result means the packet
+	// was dropped, not that the transport should stop. A dropped packet's Free
+	// callback has already run.
 	ServePackets(ctx context.Context, recv func(Packet) bool)
 
 	// SendPacket sends p to remote. The transport must not retain p after the
