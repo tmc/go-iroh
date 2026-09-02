@@ -8,9 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"log/slog"
+	"maps"
 	"net"
 	"net/netip"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -43,11 +46,17 @@ var (
 
 // Discovery publishes and resolves iroh endpoint addressing information over
 // multicast DNS. The zero value is not usable; create one with [New].
+//
+// One DNS-SD instance carries one SRV record and so one port. An endpoint whose
+// direct addresses do not all share a port is announced on the port most of
+// them use, lowest port first on a tie, and the rest are dropped; see
+// [Discovery.Publish] for how that is reported.
 type Discovery struct {
 	id          key.EndpointID
 	serviceName string
 	passive     bool
 	timeout     time.Duration
+	logger      *slog.Logger
 
 	mu    sync.RWMutex
 	peers map[key.EndpointID]peerInfo
@@ -89,6 +98,17 @@ func WithLookupTimeout(timeout time.Duration) Option {
 	}
 }
 
+// WithLogger sets the logger for events a fire-and-forget [Discovery.Publish]
+// cannot report to its caller, such as endpoint data it cannot announce. The
+// default is [slog.Default].
+func WithLogger(logger *slog.Logger) Option {
+	return func(d *Discovery) {
+		if logger != nil {
+			d.logger = logger
+		}
+	}
+}
+
 // New returns a Discovery for id using the default iroh local-network service
 // name.
 func New(id key.EndpointID, opts ...Option) *Discovery {
@@ -96,6 +116,7 @@ func New(id key.EndpointID, opts ...Option) *Discovery {
 		id:          id,
 		serviceName: DefaultServiceName,
 		timeout:     defaultLookupTimeout,
+		logger:      slog.Default(),
 		peers:       make(map[key.EndpointID]peerInfo),
 	}
 	for _, opt := range opts {
@@ -199,16 +220,30 @@ func reusePortControl(_, _ string, c syscall.RawConn) error {
 }
 
 // Publish advertises data on the local network. It is fire-and-forget and
-// returns immediately, matching iroh.AddressPublisher.
+// returns immediately, matching iroh.AddressPublisher, so what it cannot
+// announce it reports to the logger given to [WithLogger] instead of to the
+// caller: endpoint data with no direct IP address (a relay-only endpoint
+// announces nothing) and addresses dropped by the single-port rule described on
+// [Discovery].
 func (d *Discovery) Publish(data dns.EndpointData) {
 	if d == nil || d.passive {
 		return
 	}
 	packet, err := d.announcement(data)
 	if err != nil {
+		d.log().Warn("mdns: not announcing endpoint data", "endpoint", d.id, "err", err)
 		return
 	}
 	go d.writeMulticast(packet)
+}
+
+// log returns the configured logger, or the default one for a Discovery built
+// before WithLogger existed or by a zero value.
+func (d *Discovery) log() *slog.Logger {
+	if d.logger == nil {
+		return slog.Default()
+	}
+	return d.logger
 }
 
 // Resolve returns the cached item for id, if present, and otherwise sends a
@@ -322,16 +357,24 @@ func (d *Discovery) announcementInfo(data dns.EndpointData) (announcementData, e
 		return announcementData{}, errNoAddresses
 	}
 	out := announcementData{id: d.id}
-	port := ipAddrs[0].Port()
-	out.port = port
+	out.port = announcementPort(ipAddrs)
+	var dropped []netip.AddrPort
 	for _, addr := range ipAddrs {
-		if addr.Port() != port || !addr.Addr().IsValid() {
+		if !addr.Addr().IsValid() {
+			continue
+		}
+		if addr.Port() != out.port {
+			dropped = append(dropped, addr)
 			continue
 		}
 		out.ips = append(out.ips, netip.AddrPortFrom(addr.Addr().Unmap(), addr.Port()))
 	}
 	if len(out.ips) == 0 {
 		return announcementData{}, errNoAddresses
+	}
+	if len(dropped) > 0 {
+		d.log().Warn("mdns: announcing one port only, dropping addresses on others",
+			"endpoint", d.id, "port", out.port, "dropped", dropped)
 	}
 	if relays := data.RelayURLs(); len(relays) != 0 {
 		if s := relays[0].String(); len(s) <= 249 {
@@ -342,6 +385,27 @@ func (d *Discovery) announcementInfo(data dns.EndpointData) (announcementData, e
 		out.userData = u.String()
 	}
 	return out, nil
+}
+
+// announcementPort returns the port to announce for addrs. One DNS-SD instance
+// has one SRV record and so one port; the port shared by the most addresses
+// keeps the most of them, and the lowest such port breaks ties so that repeated
+// announcements of the same address set are identical.
+func announcementPort(addrs []netip.AddrPort) uint16 {
+	counts := make(map[uint16]int, len(addrs))
+	for _, addr := range addrs {
+		if addr.Addr().IsValid() {
+			counts[addr.Port()]++
+		}
+	}
+	var best uint16
+	bestCount := 0
+	for _, port := range slices.Sorted(maps.Keys(counts)) {
+		if counts[port] > bestCount {
+			best, bestCount = port, counts[port]
+		}
+	}
+	return best
 }
 
 func cloneEndpointData(data dns.EndpointData) dns.EndpointData {
