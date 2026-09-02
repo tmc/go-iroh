@@ -68,6 +68,12 @@ func (s *Stream) Writev(bufs *net.Buffers) (int64, error) { return s.s.Writev(bu
 // Close closes the send side of s.
 func (s *Stream) Close() error { return s.s.Close() }
 
+// CloseWrite closes the send side of s, leaving the receive side open so the
+// peer's reply can still be read. It does exactly what [Stream.Close] does,
+// under the name the io half-close convention uses, so that a Stream satisfies
+// interfaces that probe for CloseWrite.
+func (s *Stream) CloseWrite() error { return s.s.Close() }
+
 // SetDeadline sets the read and write deadlines for s.
 func (s *Stream) SetDeadline(t time.Time) error { return s.s.SetDeadline(t) }
 
