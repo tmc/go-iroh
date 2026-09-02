@@ -186,13 +186,16 @@ func (id EndpointID) String() string { return id.PublicKey().String() }
 func (id EndpointID) Short() string { return id.PublicKey().Short() }
 
 // Z32 encodes the endpoint id in z-base-32, the encoding used by pkarr domain
-// names.
+// names. It uses a different alphabet from the RFC 4648 base32 accepted by
+// [ParseEndpointID] and is the same length, so the two cannot be told apart:
+// parse the result with [ParseEndpointIDZ32], not [ParseEndpointID].
 func (id EndpointID) Z32() string {
 	k := id.PublicKey()
 	return encodeZBase32(k.bytes[:])
 }
 
-// ParseEndpointIDZ32 parses an endpoint id from its z-base-32 encoding.
+// ParseEndpointIDZ32 parses an endpoint id from the z-base-32 encoding produced
+// by [EndpointID.Z32].
 func ParseEndpointIDZ32(s string) (EndpointID, error) {
 	b, err := decodeZBase32(s)
 	if err != nil {
@@ -204,7 +207,8 @@ func ParseEndpointIDZ32(s string) (EndpointID, error) {
 // ParsePublicKey parses a PublicKey from its hex or base32 string form. A string
 // of exactly 64 characters is decoded as lowercase hex; otherwise it is decoded
 // as RFC 4648 base32 (no padding, case-insensitive). [PublicKey.String] always
-// produces the hex form.
+// produces the hex form. The z-base-32 form is not accepted; see
+// [ParseEndpointID].
 func ParsePublicKey(s string) (PublicKey, error) {
 	b, err := decodeBase32OrHex(s)
 	if err != nil {
@@ -213,10 +217,21 @@ func ParsePublicKey(s string) (PublicKey, error) {
 	return NewPublicKey(b)
 }
 
-// ParseEndpointID parses an EndpointID from its hex or base32 string form.
+// ParseEndpointID parses an EndpointID from its hex or RFC 4648 base32 string
+// form: the forms [EndpointID.String] and upstream iroh produce.
+//
+// It does not accept the z-base-32 form produced by [EndpointID.Z32]. Both
+// base32 flavours encode an endpoint id in 52 characters but with different
+// alphabets, so a z-base-32 id cannot be recognized reliably — some decode
+// under RFC 4648 to a different, equally valid-looking id. Use
+// [ParseEndpointIDZ32] for that form. When the input fails to parse but is
+// well-formed z-base-32, the returned error says so.
 func ParseEndpointID(s string) (EndpointID, error) {
 	k, err := ParsePublicKey(s)
 	if err != nil {
+		if b, zerr := decodeZBase32(s); zerr == nil && len(b) == PublicKeySize {
+			return EndpointID{}, fmt.Errorf("%w: input is z-base-32, use ParseEndpointIDZ32", err)
+		}
 		return EndpointID{}, err
 	}
 	return k.EndpointID(), nil

@@ -268,6 +268,42 @@ func TestPublicKeyBinary(t *testing.T) {
 	}
 }
 
+// TestParseEndpointIDRejectsZ32 pins the reason ParseEndpointID must not learn
+// to accept z-base-32: both encodings render 32 bytes in 52 characters and
+// share 29 of 32 symbols, so the two cannot be distinguished. A z-base-32 id
+// usually fails to decode as RFC 4648 base32, and occasionally decodes to a
+// different, equally well-formed endpoint id.
+func TestParseEndpointIDRejectsZ32(t *testing.T) {
+	// Uses a symbol ("8") that exists only in the z-base-32 alphabet.
+	const rejected = "8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo"
+	want, err := ParseEndpointIDZ32(rejected)
+	if err != nil {
+		t.Fatalf("ParseEndpointIDZ32(%q): %v", rejected, err)
+	}
+	if _, err := ParseEndpointID(rejected); !errors.Is(err, ErrDecodeBase32) {
+		t.Errorf("ParseEndpointID(z32) error = %v, want ErrDecodeBase32", err)
+	}
+	if _, err := ParseEndpointID(want.String()); err != nil {
+		t.Errorf("ParseEndpointID(hex): %v", err)
+	}
+
+	// Drawn from the ~1-in-170 z-base-32 ids whose symbols all exist in the
+	// RFC 4648 alphabet too. These decode without error to the wrong id, which
+	// is why auto-detection cannot be added.
+	const ambiguous = "bf4nc56yxomts6n7whnrmotaqs7pgro36xdgeenscw4fdd3gexgy"
+	z32ID, err := ParseEndpointIDZ32(ambiguous)
+	if err != nil {
+		t.Fatalf("ParseEndpointIDZ32(%q): %v", ambiguous, err)
+	}
+	rfcID, err := ParseEndpointID(ambiguous)
+	if err != nil {
+		t.Fatalf("ParseEndpointID(%q): %v", ambiguous, err)
+	}
+	if rfcID.Equal(z32ID) {
+		t.Fatal("fixture is no longer ambiguous between the two base32 alphabets")
+	}
+}
+
 func TestEndpointIDEncoding(t *testing.T) {
 	sk, _ := GenerateSecretKey()
 	id := sk.Public().EndpointID()
