@@ -458,3 +458,87 @@ func TestGossipTopicEventsBufferedBeforeFirstRead(t *testing.T) {
 		t.Fatalf("first event after join = %+v, want NeighborUp", ev)
 	}
 }
+
+// TestGossipTopicJoinedAlongsideEvents checks that Joined and Events can run at
+// the same time. Joined used to read the subscription queue, so the two raced
+// for the same NeighborUp and the test pins both outcomes: whichever won, the
+// loser was starved. It requires that Joined returns and that the iterator
+// still sees NeighborUp, so it fails either way against the old code.
+func TestGossipTopicJoinedAlongsideEvents(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	var topic gossip.TopicID
+	copy(topic[:], "alongside")
+
+	server, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatalf("bind server: %v", err)
+	}
+	serverGossip := gossip.NewGossip(server)
+	serverRouter, err := iroh.NewRouter(server, map[string]iroh.ProtocolHandler{
+		gossip.ALPN: serverGossip.Handler(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("new server router: %v", err)
+	}
+	defer serverRouter.Shutdown(ctx)
+
+	client, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatalf("bind client: %v", err)
+	}
+	clientGossip := gossip.NewGossip(client)
+	clientRouter, err := iroh.NewRouter(client, map[string]iroh.ProtocolHandler{
+		gossip.ALPN: clientGossip.Handler(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("new client router: %v", err)
+	}
+	defer clientRouter.Shutdown(ctx)
+
+	serverTopic, err := serverGossip.Subscribe(ctx, topic, nil)
+	if err != nil {
+		t.Fatalf("server subscribe: %v", err)
+	}
+	defer serverTopic.Close()
+
+	serverAddr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	clientTopic, err := clientGossip.Subscribe(ctx, topic, []netaddr.EndpointAddr{serverAddr})
+	if err != nil {
+		t.Fatalf("client subscribe: %v", err)
+	}
+	defer clientTopic.Close()
+
+	// An Events iterator running for the whole test: it, not Joined, must be
+	// the one that sees NeighborUp.
+	events := make(chan gossip.Event, 8)
+	go func() {
+		for ev, err := range clientTopic.Events() {
+			if err != nil {
+				return
+			}
+			select {
+			case events <- ev:
+			default:
+			}
+		}
+	}()
+
+	joinCtx, joinCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer joinCancel()
+	if err := clientTopic.Joined(joinCtx); err != nil {
+		t.Fatalf("joined alongside events: %v", err)
+	}
+
+	for {
+		select {
+		case ev := <-events:
+			if ev.Kind == gossip.NeighborUp {
+				return
+			}
+		case <-ctx.Done():
+			t.Fatal("events iterator never saw NeighborUp")
+		}
+	}
+}
