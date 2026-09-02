@@ -22,7 +22,12 @@ import (
 type TransportAddr interface {
 	// Network returns the transport kind: "relay", "ip", or "custom".
 	Network() string
-	// String renders the address in its "kind:value" form, e.g. "ip:127.0.0.1:9".
+	// String renders the address for display and for the text encodings in
+	// this module. [RelayAddr] and [IPAddr] use the "kind:value" form, e.g.
+	// "ip:127.0.0.1:9"; [CustomAddr] omits the prefix and renders as
+	// "<id>_<data>", matching upstream iroh's CustomAddr Display and the DNS
+	// TXT encoding in [github.com/tmc/go-iroh/dns]. [ParseTransportAddr]
+	// accepts every form String produces, so String round-trips.
 	String() string
 	// Compare returns -1, 0, or +1 ordering this address against other. The
 	// order matches the Rust reference's derived Ord on the TransportAddr enum:
@@ -67,16 +72,12 @@ type IPAddr struct{ Addr netip.AddrPort }
 //
 // String encoding ([CustomAddr.String], [ParseCustomAddr]): "<id>_<data>" where
 // <id> is the transport ID as lowercase hex (no "0x", no leading zeros) and
-// <data> is the address bytes as lowercase hex.
+// <data> is the address bytes as lowercase hex. Unlike [RelayAddr] and
+// [IPAddr], a CustomAddr carries no "custom:" kind prefix; see
+// [CustomAddr.String].
 //
 // Binary encoding ([CustomAddr.MarshalBinary], [CustomAddr.UnmarshalBinary]):
 // 8-byte little-endian u64 ID followed by the raw data bytes (minimum 8 bytes).
-//
-// CustomAddr mirrors upstream iroh's experimental custom-transport address
-// surface, which upstream excludes from its stability guarantees. The Go API
-// below follows this module's normal compatibility policy, but the
-// endpoint-ticket wire encoding of a CustomAddr may change to track upstream
-// without a major go-iroh version bump.
 type CustomAddr struct {
 	id   uint64
 	data []byte
@@ -90,8 +91,18 @@ func (RelayAddr) Network() string  { return "relay" }
 func (IPAddr) Network() string     { return "ip" }
 func (CustomAddr) Network() string { return "custom" }
 
-func (a RelayAddr) String() string  { return "relay:" + a.URL.String() }
-func (a IPAddr) String() string     { return "ip:" + a.Addr.String() }
+func (a RelayAddr) String() string { return "relay:" + a.URL.String() }
+func (a IPAddr) String() string    { return "ip:" + a.Addr.String() }
+
+// String returns the address as "<id>_<data>": the transport ID in lowercase
+// hex followed by the address data in lowercase hex.
+//
+// It deliberately omits the "custom:" prefix that [RelayAddr] and [IPAddr]
+// carry. This is the form upstream iroh's CustomAddr Display produces and the
+// form written to DNS TXT records by [github.com/tmc/go-iroh/dns], so adding a
+// prefix here would change a wire encoding. [ParseCustomAddr] and
+// [ParseTransportAddr] accept the address with or without the prefix, so
+// String still round-trips through either.
 func (a CustomAddr) String() string { return a.customString() }
 
 // MarshalText implements encoding.TextMarshaler using the string encoding

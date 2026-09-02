@@ -134,6 +134,28 @@ func TestTransportAddrStringRoundTrip(t *testing.T) {
 	}
 }
 
+// TestCustomAddrStringPrefix pins the documented divergence: a CustomAddr
+// renders without the "kind:" prefix its siblings carry, because that is the
+// form on the DNS TXT wire, and both spellings parse back to the same address.
+func TestCustomAddrStringPrefix(t *testing.T) {
+	a := NewCustomAddr(7, []byte{0xde, 0xad})
+	if got, want := a.String(), "7_dead"; got != want {
+		t.Errorf("CustomAddr.String() = %q, want %q", got, want)
+	}
+	if got, want := a.Network(), "custom"; got != want {
+		t.Errorf("CustomAddr.Network() = %q, want %q", got, want)
+	}
+	for _, s := range []string{"7_dead", "custom:7_dead"} {
+		parsed, err := ParseTransportAddr(s)
+		if err != nil {
+			t.Fatalf("ParseTransportAddr(%q): %v", s, err)
+		}
+		if parsed.Compare(a) != 0 {
+			t.Errorf("ParseTransportAddr(%q) = %v, want %v", s, parsed, a)
+		}
+	}
+}
+
 func TestTransportAddrNetAddr(t *testing.T) {
 	var (
 		_ net.Addr = RelayAddr{}
