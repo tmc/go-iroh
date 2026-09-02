@@ -8,6 +8,8 @@ import (
 	"iter"
 	"net"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
@@ -18,6 +20,7 @@ import (
 	"github.com/tmc/go-iroh/internal/portmapper"
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/qng/qlog"
+	"github.com/tmc/go-iroh/internal/qng/qlogwriter"
 	"github.com/tmc/go-iroh/internal/socket"
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
@@ -110,6 +113,7 @@ type config struct {
 	natPMPGateway   netip.Addr
 	natPMPPort      uint16
 	keyLogWriter    io.Writer
+	qlogSink        func(context.Context, QLOGConnection) io.WriteCloser
 	keyExchange     KeyExchangePolicy
 	transportConfig *QUICTransportConfig
 	pathSelector    socket.PathSelector
@@ -340,6 +344,73 @@ func WithKeyLogWriter(w io.Writer) Option {
 	}
 }
 
+// QLOGConnection identifies the connection a qlog trace belongs to. It is
+// passed to the sink installed by [WithQLOG].
+type QLOGConnection struct {
+	// ConnectionID is the original destination connection ID, lowercase hex.
+	// It is the stem QLOGDIR uses for the trace's file name, so its exact
+	// form is part of this API.
+	ConnectionID string
+	// Client reports whether this endpoint dialed the connection.
+	Client bool
+}
+
+// WithQLOG sends this endpoint's qlog traces to sink instead of to the
+// directory named by the QLOGDIR environment variable. sink is called once per
+// connection, before the handshake; returning nil traces that connection not at
+// all. The returned writer receives one JSON-seq qlog trace and is closed once,
+// when the connection ends.
+//
+// The environment variable is process-wide, so several endpoints in one process
+// interleave their traces in one directory keyed only by connection id. A sink
+// is per-endpoint: give each one its own directory with [QLOGDir], or its own
+// io.WriteCloser to route traces anywhere. QLOGDIR still applies to endpoints
+// that install no sink.
+func WithQLOG(sink func(context.Context, QLOGConnection) io.WriteCloser) Option {
+	return func(c *config) error {
+		c.qlogSink = sink
+		return nil
+	}
+}
+
+// QLOGDir returns a [WithQLOG] sink that writes <connection id>_<client|server>.sqlog
+// files in dir, the layout QLOGDIR produces. It creates dir if needed, and
+// traces nothing it cannot write.
+func QLOGDir(dir string) func(context.Context, QLOGConnection) io.WriteCloser {
+	return func(_ context.Context, conn QLOGConnection) io.WriteCloser {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil
+		}
+		side := "server"
+		if conn.Client {
+			side = "client"
+		}
+		f, err := os.Create(filepath.Join(dir, fmt.Sprintf("%s_%s.sqlog", conn.ConnectionID, side)))
+		if err != nil {
+			return nil
+		}
+		return f
+	}
+}
+
+// qlogTracer adapts a WithQLOG sink to the QUIC stack's connection tracer,
+// keeping qlogwriter's event model out of the iroh API. Without a sink the
+// QLOGDIR tracer is used, exactly as before.
+func qlogTracer(sink func(context.Context, QLOGConnection) io.WriteCloser) func(context.Context, bool, quic.ConnectionID) qlogwriter.Trace {
+	if sink == nil {
+		return qlog.DefaultConnectionTracer
+	}
+	return func(ctx context.Context, isClient bool, connID quic.ConnectionID) qlogwriter.Trace {
+		w := sink(ctx, QLOGConnection{ConnectionID: connID.String(), Client: isClient})
+		if w == nil {
+			return nil
+		}
+		trace := qlogwriter.NewConnectionFileSeq(w, isClient, connID, []string{qlog.EventSchema})
+		go trace.Run()
+		return trace
+	}
+}
+
 // WithKeyExchangePolicy selects the TLS key-exchange groups used for direct
 // peer connections. The zero policy keeps the package default.
 //
@@ -437,7 +508,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		EnableDatagrams:                true,
 		InitialMaxPathID:               initialMaxPathID(),
 		MaxRemoteNATTraversalAddresses: maxRemoteNATTraversalAddresses(),
-		Tracer:                         qlog.DefaultConnectionTracer,
+		Tracer:                         qlogTracer(c.qlogSink),
 		// Accept 0-RTT early data on incoming connections that resume a prior
 		// session. Allow0RTT is ignored for dialed connections, so sharing this
 		// config with Connect is safe. Mirrors the Rust server enabling early
