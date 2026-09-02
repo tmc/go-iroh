@@ -103,6 +103,9 @@ type Gossip struct {
 	peerSenders map[PeerID]*Sender
 	metrics     gossipMetrics
 	closed      bool
+	// joinWait is closed and replaced whenever a topic's neighbor set
+	// changes or a topic closes, waking every Joined caller.
+	joinWait chan struct{}
 }
 
 // NewGossip returns a Gossip instance for ep.
@@ -173,6 +176,7 @@ func (g *Gossip) Shutdown(ctx context.Context) {
 		}
 	}
 	g.topics = make(map[TopicID]map[*Topic]struct{})
+	g.wakeJoinWaiters()
 	senders := make([]*Sender, 0, len(g.peerSenders))
 	for peer, sender := range g.peerSenders {
 		delete(g.peerSenders, peer)
@@ -335,6 +339,7 @@ func (g *Gossip) closeTopic(t *Topic) error {
 		t.closeEvents()
 	}
 	delete(g.topics[t.id], t)
+	g.wakeJoinWaiters()
 	empty := len(g.topics[t.id]) == 0
 	if empty {
 		delete(g.topics, t.id)
@@ -431,6 +436,24 @@ func (g *Gossip) connect(ctx context.Context, peer PeerID, addr netaddr.Endpoint
 	return nil
 }
 
+// joinWaiter returns a channel closed on the next neighbor-set change. Callers
+// must take it before reading the neighbor set, or they can miss the wakeup for
+// a change that lands between the read and the wait. g.mu must be held.
+func (g *Gossip) joinWaiter() chan struct{} {
+	if g.joinWait == nil {
+		g.joinWait = make(chan struct{})
+	}
+	return g.joinWait
+}
+
+// wakeJoinWaiters wakes every Joined caller. g.mu must be held.
+func (g *Gossip) wakeJoinWaiters() {
+	if g.joinWait != nil {
+		close(g.joinWait)
+		g.joinWait = nil
+	}
+}
+
 func (g *Gossip) emit(topic TopicID, ev gossipproto.TopicEvent) {
 	event, ok := publicEvent(ev)
 	if !ok {
@@ -443,9 +466,11 @@ func (g *Gossip) emit(topic TopicID, ev gossipproto.TopicEvent) {
 			g.neighbors[topic] = make(map[PeerID]struct{})
 		}
 		g.neighbors[topic][ev.Peer] = struct{}{}
+		g.wakeJoinWaiters()
 	} else if ev.Kind == gossipproto.TopicNeighborDown {
 		g.metrics.neighborDown.Add(1)
 		delete(g.neighbors[topic], ev.Peer)
+		g.wakeJoinWaiters()
 	}
 	subs := make([]*Topic, 0, len(g.topics[topic]))
 	for t := range g.topics[topic] {
@@ -597,7 +622,9 @@ func (s *Sender) JoinPeers(ctx context.Context, peers []netaddr.EndpointAddr) er
 	return s.topic.JoinPeers(ctx, peers)
 }
 
-// Joined waits until the topic has at least one direct neighbor.
+// Joined waits until the topic has at least one direct neighbor. It observes
+// the neighbor set, not the event stream, so it can run alongside
+// [Topic.Events].
 func (t *Topic) Joined(ctx context.Context) error {
 	_, r := t.Split()
 	return r.Joined(ctx)
@@ -650,24 +677,31 @@ func (r *Receiver) Events() iter.Seq2[Event, error] {
 }
 
 // Joined waits until the receiver's topic has at least one direct neighbor.
+//
+// Joined observes the topic's neighbor set, not its event stream, so it can run
+// alongside [Receiver.Events] without either one taking the other's events.
 func (r *Receiver) Joined(ctx context.Context) error {
-	if r == nil || r.topic == nil {
+	if r == nil || r.topic == nil || r.topic.g == nil {
 		return errors.New("gossip: nil receiver")
 	}
-	if r.IsJoined() {
-		return nil
-	}
+	g := r.topic.g
 	for {
+		// Take the waiter before reading the state it reports on, so a
+		// neighbor arriving in between wakes this call instead of being
+		// missed until the next change.
+		g.mu.Lock()
+		wait := g.joinWaiter()
+		g.mu.Unlock()
+		if r.IsJoined() {
+			return nil
+		}
+		if r.topic.isClosed() {
+			return errors.New("gossip: topic closed")
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case ev, ok := <-r.topic.events:
-			if !ok {
-				return errors.New("gossip: topic closed")
-			}
-			if ev.Kind == NeighborUp || r.IsJoined() {
-				return nil
-			}
+		case <-wait:
 		}
 	}
 }
