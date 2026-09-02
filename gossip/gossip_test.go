@@ -394,3 +394,67 @@ func nextEvent(ctx context.Context, t *testing.T, topic *gossip.Topic) gossip.Ev
 	}
 	return gossip.Event{}
 }
+
+// TestGossipTopicEventsBufferedBeforeFirstRead checks that the event stream
+// starts at Subscribe and not at the first call to Events: a caller that joins
+// the topic and only then reads still sees the NeighborUp it missed.
+func TestGossipTopicEventsBufferedBeforeFirstRead(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	var topic gossip.TopicID
+	copy(topic[:], "buffered")
+
+	server, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatalf("bind server: %v", err)
+	}
+	serverGossip := gossip.NewGossip(server)
+	serverRouter, err := iroh.NewRouter(server, map[string]iroh.ProtocolHandler{
+		gossip.ALPN: serverGossip.Handler(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("new server router: %v", err)
+	}
+	defer serverRouter.Shutdown(ctx)
+
+	client, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatalf("bind client: %v", err)
+	}
+	clientGossip := gossip.NewGossip(client)
+	clientRouter, err := iroh.NewRouter(client, map[string]iroh.ProtocolHandler{
+		gossip.ALPN: clientGossip.Handler(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("new client router: %v", err)
+	}
+	defer clientRouter.Shutdown(ctx)
+
+	serverTopic, err := serverGossip.Subscribe(ctx, topic, nil)
+	if err != nil {
+		t.Fatalf("server subscribe: %v", err)
+	}
+	defer serverTopic.Close()
+
+	serverAddr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	clientTopic, err := clientGossip.Subscribe(ctx, topic, []netaddr.EndpointAddr{serverAddr})
+	if err != nil {
+		t.Fatalf("client subscribe: %v", err)
+	}
+	defer clientTopic.Close()
+
+	// Wait for the join with the state-based accessor, which does not consume
+	// events, so nothing has read the stream by the time Events is called.
+	for len(clientTopic.Neighbors()) == 0 {
+		select {
+		case <-ctx.Done():
+			t.Fatal("client never joined")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	if ev := nextEvent(ctx, t, clientTopic); ev.Kind != gossip.NeighborUp {
+		t.Fatalf("first event after join = %+v, want NeighborUp", ev)
+	}
+}

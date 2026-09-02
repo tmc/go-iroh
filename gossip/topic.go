@@ -18,7 +18,11 @@ const defaultTopicEventCap = 2048
 
 // JoinOptions configures a topic subscription.
 type JoinOptions struct {
-	Bootstrap            []netaddr.EndpointAddr
+	// Bootstrap are the peers dialed to join the topic's overlay.
+	Bootstrap []netaddr.EndpointAddr
+
+	// SubscriptionCapacity is the number of events the subscription buffers
+	// for a receiver that is not reading yet. Zero means 2048.
 	SubscriptionCapacity int
 }
 
@@ -612,6 +616,13 @@ func (t *Topic) Neighbors() []key.EndpointID {
 }
 
 // Events returns the topic event stream.
+//
+// The stream starts at Subscribe, not at the call to Events: events that
+// arrive before the first call are buffered, so a caller that joins peers and
+// only then reads still sees the NeighborUp events for that join. The buffer
+// holds [JoinOptions.SubscriptionCapacity] events; a receiver that falls
+// further behind loses events and sees a single [Lagged] event marking the
+// gap, but keeps the stream. Only [Topic.Close] ends it.
 func (t *Topic) Events() iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
 		for ev := range t.events {
