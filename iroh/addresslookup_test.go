@@ -585,6 +585,28 @@ func TestServicesAddPublishesHistorical(t *testing.T) {
 	}
 }
 
+// TestAddrFilterComplement pins IPOnlyFilter as the exact complement of
+// RelayOnlyFilter: it keeps custom transport addresses, which its name does not
+// suggest, and together the two partition the address set.
+func TestAddrFilterComplement(t *testing.T) {
+	addrs := []netaddr.TransportAddr{
+		netaddr.RelayAddr{URL: relayURL(t, "https://relay.example/")},
+		netaddr.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:1")},
+		netaddr.NewCustomAddr(7, []byte{0xde, 0xad}),
+	}
+	relays := RelayOnlyFilter(addrs)
+	rest := IPOnlyFilter(addrs)
+	if len(relays) != 1 || len(rest) != 2 {
+		t.Fatalf("RelayOnlyFilter kept %d, IPOnlyFilter kept %d; want 1 and 2", len(relays), len(rest))
+	}
+	if _, ok := rest[1].(netaddr.CustomAddr); !ok {
+		t.Errorf("IPOnlyFilter dropped the custom address: %v", rest)
+	}
+	if got, want := len(relays)+len(rest), len(addrs); got != want {
+		t.Errorf("filters kept %d addresses in total, want %d", got, want)
+	}
+}
+
 func TestFilteredAddressPublisher(t *testing.T) {
 	rec := &recordingLookup{}
 	f := NewFilteredAddressPublisher(rec, IPOnlyFilter)

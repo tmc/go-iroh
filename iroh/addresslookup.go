@@ -172,7 +172,14 @@ func RelayOnlyFilter(addrs []netaddr.TransportAddr) []netaddr.TransportAddr {
 	return out
 }
 
-// IPOnlyFilter keeps only direct IP and custom addresses, dropping relays.
+// IPOnlyFilter drops relay addresses and keeps everything else. Despite the
+// name it is not an IP allowlist: [netaddr.CustomAddr] transport addresses are
+// kept too, because IPOnlyFilter is defined as the exact complement of
+// [RelayOnlyFilter].
+//
+// A caller filtering for privacy should read this as "no relays". To publish
+// nothing but IP addresses, write a filter that tests for [netaddr.IPAddr]
+// positively.
 func IPOnlyFilter(addrs []netaddr.TransportAddr) []netaddr.TransportAddr {
 	out := make([]netaddr.TransportAddr, 0, len(addrs))
 	for _, a := range addrs {
