@@ -2,10 +2,12 @@ package iroh
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"testing"
 	"time"
 
+	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 )
 
@@ -68,22 +70,64 @@ func TestKeyExchangePolicyNegotiation(t *testing.T) {
 	}
 }
 
-func TestKeyExchangePQOnlyRefusesClassical(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	server, err := Bind(ctx, WithALPNs("iroh-kx-test/0"), WithBindAddr(netip.MustParseAddrPort("127.0.0.1:0")), WithKeyExchangePolicy(KeyExchangePQOnly))
-	if err != nil {
-		t.Fatal(err)
+// TestKeyExchangeMismatchIsReported checks that a dial refused for want of a
+// common key-exchange group is reported as ErrTLSHandshakeFailure, in both
+// directions: the alert reaches the dialer whether its own policy or the
+// server's is the narrower one.
+func TestKeyExchangeMismatchIsReported(t *testing.T) {
+	tests := []struct {
+		name           string
+		server, client KeyExchangePolicy
+	}{
+		{name: "pq only server", server: KeyExchangePQOnly, client: KeyExchangeClassical},
+		{name: "pq only client", server: KeyExchangeClassical, client: KeyExchangePQOnly},
 	}
-	defer server.Shutdown(context.Background())
-	client, err := Bind(ctx, WithBindAddr(netip.MustParseAddrPort("127.0.0.1:0")), WithKeyExchangePolicy(KeyExchangeClassical))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			server, err := Bind(ctx, WithALPNs("iroh-kx-test/0"), WithBindAddr(netip.MustParseAddrPort("127.0.0.1:0")), WithKeyExchangePolicy(tt.server))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer server.Shutdown(context.Background())
+			client, err := Bind(ctx, WithBindAddr(netip.MustParseAddrPort("127.0.0.1:0")), WithKeyExchangePolicy(tt.client))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Shutdown(context.Background())
+			addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+			_, err = client.Connect(ctx, addr, "iroh-kx-test/0")
+			if err == nil {
+				t.Fatal("connected despite incompatible key exchange policies")
+			}
+			if !errors.Is(err, ErrTLSHandshakeFailure) {
+				t.Errorf("Connect error = %v, want one matching ErrTLSHandshakeFailure", err)
+			}
+		})
+	}
+}
+
+// TestKeyExchangeMatchIsNotHandshakeFailure guards against ErrTLSHandshakeFailure
+// being attached to failures that are not TLS alerts.
+func TestKeyExchangeMatchIsNotHandshakeFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	client, err := Bind(ctx, WithBindAddr(netip.MustParseAddrPort("127.0.0.1:0")), WithKeyExchangePolicy(KeyExchangePQOnly))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer client.Shutdown(context.Background())
-	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
-	if _, err := client.Connect(ctx, addr, "iroh-kx-test/0"); err == nil {
-		t.Fatal("classical client connected to PQ-only server")
+	// Nothing is listening, so the dial times out rather than being refused.
+	sk, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead := netaddr.NewEndpointAddr(sk.Public().EndpointID()).WithIP(netip.MustParseAddrPort("127.0.0.1:1"))
+	if _, err := client.Connect(ctx, dead, "iroh-kx-test/0"); err == nil {
+		t.Fatal("dial to a dead address succeeded")
+	} else if errors.Is(err, ErrTLSHandshakeFailure) {
+		t.Errorf("Connect error = %v, want no ErrTLSHandshakeFailure match", err)
 	}
 }
 

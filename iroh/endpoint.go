@@ -338,6 +338,10 @@ func WithKeyLogWriter(w io.Writer) Option {
 
 // WithKeyExchangePolicy selects the TLS key-exchange groups used for direct
 // peer connections. The zero policy keeps the package default.
+//
+// Both peers must offer a group the other accepts. A dial to a peer with no
+// group in common fails with [ErrTLSHandshakeFailure], whichever side's policy
+// is the narrower one.
 func WithKeyExchangePolicy(policy KeyExchangePolicy) Option {
 	return func(c *config) error {
 		if !policy.valid() {
@@ -1298,7 +1302,7 @@ func (e *Endpoint) connectEarly(ctx context.Context, addr netaddr.EndpointAddr, 
 		}
 		return &Connecting{ep: e, qc: qc, remoteID: addr.ID, addr: addr, alpn: alpn}, nil
 	}
-	return nil, fmt.Errorf("iroh: connect to %s: %w", addr.ID, firstErr)
+	return nil, fmt.Errorf("iroh: connect to %s: %w", addr.ID, tlsHandshakeFailure(firstErr))
 }
 
 // Dial dials addr, negotiates alpn, opens a bidirectional stream, and returns it
