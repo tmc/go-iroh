@@ -25,5 +25,16 @@
 // This package wraps a fork of quic-go (internal/qng) that drives a vendored
 // crypto/tls with RFC 7250 support (internal/itls/tls).
 //
+// # Tracing
+//
+// Every endpoint installs the qlog connection tracer, so setting the QLOGDIR
+// environment variable records a qlog trace of each QUIC connection the process
+// opens or accepts, with no code change. Each connection writes
+// <odcid>_client.sqlog or <odcid>_server.sqlog under that directory, in
+// JSON-seq; the two ends of one connection share the original destination
+// connection id. Traces carry frame metadata, loss and congestion events, and
+// the handshake, but no payload bytes. QLOGDIR is process-wide, so several
+// endpoints in one process interleave their traces in one directory.
+//
 // The Go API is not stable before v1 and may change in any v0 release.
 package iroh

@@ -163,6 +163,30 @@ git checkout compat-harness
 cd iroh-compat-harness && make parity
 ```
 
+## Debugging
+
+Every endpoint installs the qlog connection tracer, so setting `QLOGDIR` records
+a [qlog](https://quicwg.org/qlog/draft-ietf-quic-qlog-main-schema.html) trace of
+every QUIC connection the process opens or accepts, with no code change:
+
+```sh
+QLOGDIR=./qlog go run ./cmd/...
+```
+
+Each connection writes `<odcid>_client.sqlog` or `<odcid>_server.sqlog`, in
+JSON-seq, one event per line. The two files for a single connection share the
+original destination connection id, so a dial and the accept that answers it
+pair up by filename. Traces carry frame metadata, loss and congestion events,
+and the handshake — not payload bytes:
+
+```sh
+jq -c 'select(.name == "quic:packet_sent") | .data.frames[]' qlog/*_client.sqlog
+```
+
+`QLOGDIR` is read once per connection and applies process-wide, so a process
+running several endpoints interleaves their traces in one directory, keyed only
+by connection id.
+
 ## Status
 
 The connectivity layer is a wire-compatible iroh endpoint. The protocol packages
