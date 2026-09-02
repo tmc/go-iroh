@@ -238,3 +238,77 @@ func TestUnmarshalErrors(t *testing.T) {
 		t.Fatal("Unmarshal accepted invalid option")
 	}
 }
+
+type eightBit struct {
+	U8  uint8
+	U16 uint16
+	OK  bool
+	I8  int8
+}
+
+// TestByteSizedRustVectors pins the u8/i8 encoding against Rust postcard, which
+// writes both as one raw byte rather than a varint or a zigzag varint. No type
+// in this module has an 8-bit field, so nothing else guards it.
+func TestByteSizedRustVectors(t *testing.T) {
+	tests := []struct {
+		name string
+		v    any
+		hex  string
+	}{
+		{name: "u8 small", v: uint8(1), hex: "01"},
+		{name: "u8 high bit", v: uint8(200), hex: "c8"},
+		{name: "u8 max", v: uint8(255), hex: "ff"},
+		{name: "i8 zero", v: int8(0), hex: "00"},
+		{name: "i8 negative", v: int8(-2), hex: "fe"},
+		{name: "i8 min", v: int8(-128), hex: "80"},
+		{name: "i8 max", v: int8(127), hex: "7f"},
+		{
+			name: "mixed struct",
+			v:    eightBit{U8: 200, U16: 300, OK: true, I8: -2},
+			hex:  "c8ac0201fe",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Marshal(tt.v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if hex.EncodeToString(got) != tt.hex {
+				t.Fatalf("Marshal = %s, want %s", hex.EncodeToString(got), tt.hex)
+			}
+			raw, err := hex.DecodeString(tt.hex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := reflect.New(reflect.TypeOf(tt.v))
+			if err := Unmarshal(raw, out.Interface()); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(out.Elem().Interface(), tt.v) {
+				t.Fatalf("Unmarshal = %#v, want %#v", out.Elem().Interface(), tt.v)
+			}
+		})
+	}
+}
+
+// TestEncoderByteSizedHelpers checks that the hand-written codec path agrees
+// with the reflection path on u8 and i8.
+func TestEncoderByteSizedHelpers(t *testing.T) {
+	var e Encoder
+	e.Uint8(200)
+	e.Int8(-2)
+	if got := hex.EncodeToString(e.Bytes()); got != "c8fe" {
+		t.Fatalf("Encoder = %s, want c8fe", got)
+	}
+	d := NewDecoder(e.Bytes())
+	if u, err := d.Uint8(); err != nil || u != 200 {
+		t.Fatalf("Uint8 = %d, %v", u, err)
+	}
+	if i, err := d.Int8(); err != nil || i != -2 {
+		t.Fatalf("Int8 = %d, %v", i, err)
+	}
+	if !d.Done() {
+		t.Fatal("decoder did not consume all input")
+	}
+}
