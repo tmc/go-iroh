@@ -1026,3 +1026,80 @@ func ExampleAsApplicationError() {
 	// Output:
 	// true 7 done true
 }
+
+// TestStreamCloseWrite checks the half-close contract blobs.BidiStream asserts:
+// after CloseWrite the peer reads EOF, and the closing side can still read the
+// reply it sends back.
+func TestStreamCloseWrite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	server, err := Bind(ctx, WithALPNs("iroh-halfclose/0"), WithBindAddr(netip.MustParseAddrPort("127.0.0.1:0")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Shutdown(context.Background())
+
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- func() error {
+			conn, err := server.Accept(ctx)
+			if err != nil {
+				return err
+			}
+			s, err := conn.AcceptStream(ctx)
+			if err != nil {
+				return err
+			}
+			// Returns only once the peer half-closes; a full close would
+			// instead reset the stream before the reply is written.
+			req, err := io.ReadAll(s)
+			if err != nil {
+				return err
+			}
+			if string(req) != "ping" {
+				return fmt.Errorf("server read %q, want ping", req)
+			}
+			if _, err := s.Write([]byte("pong")); err != nil {
+				return err
+			}
+			return s.Close()
+		}()
+	}()
+
+	client, err := Bind(ctx, WithBindAddr(netip.MustParseAddrPort("127.0.0.1:0")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Shutdown(context.Background())
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, "iroh-halfclose/0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseWithError(0, "")
+	s, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := io.ReadAll(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(reply) != "pong" {
+		t.Fatalf("client read %q, want pong", reply)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
+	}
+
+	// The blobs helpers probe for the name; satisfying the probe is the point.
+	if _, ok := any(s).(interface{ CloseWrite() error }); !ok {
+		t.Error("*Stream does not implement CloseWrite() error")
+	}
+}
