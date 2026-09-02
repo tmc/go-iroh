@@ -312,3 +312,50 @@ func TestEncoderByteSizedHelpers(t *testing.T) {
 		t.Fatal("decoder did not consume all input")
 	}
 }
+
+// TestOverlongVarintRejected checks that a padded varint is rejected. Accepting
+// one would let two byte strings decode to the same value, so a record
+// identified by a digest of its encoding would have two valid ids.
+func TestOverlongVarintRejected(t *testing.T) {
+	tests := []struct {
+		name string
+		hex  string
+		into func() any
+	}{
+		{name: "u16 padded", hex: "ac8200", into: func() any { return new(uint16) }},
+		{name: "zero padded", hex: "8000", into: func() any { return new(uint64) }},
+		{name: "max padding", hex: "80808080808080808000", into: func() any { return new(uint64) }},
+		{name: "sequence length", hex: "810041", into: func() any { return new([]byte) }},
+		{name: "string length", hex: "810061", into: func() any { return new(string) }},
+		{name: "zigzag int", hex: "038000", into: func() any { return new([2]int64) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, err := hex.DecodeString(tt.hex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := Unmarshal(raw, tt.into()); !errors.Is(err, ErrOverlongVarint) {
+				t.Fatalf("Unmarshal(%s) error = %v, want ErrOverlongVarint", tt.hex, err)
+			}
+		})
+	}
+}
+
+// TestCanonicalVarintsStillDecode guards the rejection against overreach: the
+// shortest encoding of each value must keep decoding.
+func TestCanonicalVarintsStillDecode(t *testing.T) {
+	for _, want := range []uint64{0, 1, 127, 128, 300, 624485, 1 << 62, ^uint64(0)} {
+		b, err := Marshal(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got uint64
+		if err := Unmarshal(b, &got); err != nil {
+			t.Fatalf("Unmarshal(%x): %v", b, err)
+		}
+		if got != want {
+			t.Fatalf("round trip = %d, want %d", got, want)
+		}
+	}
+}
