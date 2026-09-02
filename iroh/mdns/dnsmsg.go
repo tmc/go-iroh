@@ -18,6 +18,7 @@ const (
 	dnsTypeTXT  uint16 = 16
 	dnsTypeAAAA uint16 = 28
 	dnsTypeSRV  uint16 = 33
+	dnsTypeANY  uint16 = 255
 	dnsClassIN  uint16 = 1
 )
 
@@ -247,6 +248,43 @@ func parseAnnouncement(packet []byte, service string) (dns.EndpointInfo, bool) {
 		return infoFromAnnouncement(data), true
 	}
 	return dns.EndpointInfo{}, false
+}
+
+// dnsQuestion is one question from a multicast query.
+type dnsQuestion struct {
+	name string
+	typ  uint16
+}
+
+// parseQuestions returns the questions in packet. It reports false for a
+// response, a packet with no questions, and a malformed one: only a query is
+// worth answering.
+func parseQuestions(packet []byte) ([]dnsQuestion, bool) {
+	if len(packet) < 12 {
+		return nil, false
+	}
+	if binary.BigEndian.Uint16(packet[2:4])&0x8000 != 0 {
+		return nil, false // a response
+	}
+	qd := int(binary.BigEndian.Uint16(packet[4:6]))
+	if qd == 0 {
+		return nil, false
+	}
+	off := 12
+	questions := make([]dnsQuestion, 0, qd)
+	for i := 0; i < qd; i++ {
+		name, next, err := readName(packet, off)
+		if err != nil {
+			return nil, false
+		}
+		off = next
+		if off+4 > len(packet) {
+			return nil, false
+		}
+		questions = append(questions, dnsQuestion{name: name, typ: binary.BigEndian.Uint16(packet[off : off+2])})
+		off += 4
+	}
+	return questions, true
 }
 
 type dnsMessage struct {

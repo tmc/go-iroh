@@ -265,3 +265,129 @@ func TestPublishLogsWhatItCannotAnnounce(t *testing.T) {
 		})
 	}
 }
+
+// TestAnswerForQuery checks the responder's decision: a Discovery answers a PTR
+// query for its service or its own instance with its last announcement, and
+// answers nothing else.
+func TestAnswerForQuery(t *testing.T) {
+	sk, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sk.Public().EndpointID()
+	other, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := dns.NewEndpointData().WithIPAddrs(netip.MustParseAddrPort("192.0.2.1:7777"))
+
+	serviceQuery, err := buildQuery(serviceName(DefaultServiceName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownQuery, err := buildQuery(instanceName(DefaultServiceName, id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherQuery, err := buildQuery(instanceName(DefaultServiceName, other.Public().EndpointID()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		name      string
+		published bool
+		passive   bool
+		packet    []byte
+		want      bool
+	}{
+		{name: "service query", published: true, packet: serviceQuery, want: true},
+		{name: "own instance query", published: true, packet: ownQuery, want: true},
+		{name: "another instance query", published: true, packet: otherQuery},
+		{name: "nothing published yet", packet: serviceQuery},
+		{name: "passive", published: true, passive: true, packet: serviceQuery},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := New(id, WithPassive(tt.passive))
+			if tt.published {
+				if _, err := d.announcement(data); err != nil {
+					t.Fatalf("announcement: %v", err)
+				}
+			}
+			answer, ok := d.answerFor(tt.packet)
+			if ok != tt.want {
+				t.Fatalf("answerFor = %v, want %v", ok, tt.want)
+			}
+			if !ok {
+				return
+			}
+			info, ok := parseAnnouncement(answer, DefaultServiceName)
+			if !ok {
+				t.Fatal("answer is not a parseable announcement")
+			}
+			if !info.ID.Equal(id) {
+				t.Fatalf("answer announces %s, want %s", info.ID, id)
+			}
+		})
+	}
+
+	// An announcement must not be answered, or two listeners would answer each
+	// other forever.
+	d := New(id)
+	if _, err := d.announcement(data); err != nil {
+		t.Fatal(err)
+	}
+	announcement, err := d.announcement(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.answerFor(announcement); ok {
+		t.Fatal("answered an announcement")
+	}
+}
+
+// TestHandlePacketAnswersQueries checks that the read loop routes a query to
+// the responder and an announcement to the cache. The response delay is set
+// past the end of the test so nothing is multicast from here.
+func TestHandlePacketAnswersQueries(t *testing.T) {
+	sk, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sk.Public().EndpointID()
+	d := New(id)
+	d.responseDelay = func() time.Duration { return time.Hour }
+	if _, err := d.announcement(dns.NewEndpointData().WithIPAddrs(netip.MustParseAddrPort("192.0.2.1:7777"))); err != nil {
+		t.Fatal(err)
+	}
+
+	query, err := buildQuery(serviceName(DefaultServiceName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.answerQuery(query) {
+		t.Fatal("a service query was not answered")
+	}
+	d.handlePacket(query)
+	if _, ok := d.item(id); ok {
+		t.Fatal("a query was cached as an announcement")
+	}
+
+	peer, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerID := peer.Public().EndpointID()
+	peerDiscovery := New(peerID)
+	announcement, err := peerDiscovery.announcement(dns.NewEndpointData().WithIPAddrs(netip.MustParseAddrPort("192.0.2.9:7777")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.handlePacket(announcement)
+	if _, ok := d.item(peerID); !ok {
+		t.Fatal("an announcement was not cached")
+	}
+	if d.answerQuery(announcement) {
+		t.Fatal("an announcement was answered")
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"iter"
 	"log/slog"
 	"maps"
+	"math/rand/v2"
 	"net"
 	"net/netip"
 	"runtime"
@@ -57,10 +58,15 @@ type Discovery struct {
 	passive     bool
 	timeout     time.Duration
 	logger      *slog.Logger
+	// responseDelay is how long to wait before answering a query. RFC 6762
+	// section 6 asks for a random 20-120ms so that simultaneous responders
+	// do not collide. Tests replace it.
+	responseDelay func() time.Duration
 
-	mu    sync.RWMutex
-	peers map[key.EndpointID]peerInfo
-	conn  *net.UDPConn
+	mu        sync.RWMutex
+	peers     map[key.EndpointID]peerInfo
+	conn      *net.UDPConn
+	announced []byte // last announcement built by Publish, replayed to queries
 }
 
 type peerInfo struct {
@@ -117,7 +123,10 @@ func New(id key.EndpointID, opts ...Option) *Discovery {
 		serviceName: DefaultServiceName,
 		timeout:     defaultLookupTimeout,
 		logger:      slog.Default(),
-		peers:       make(map[key.EndpointID]peerInfo),
+		responseDelay: func() time.Duration {
+			return 20*time.Millisecond + time.Duration(rand.Int64N(int64(100*time.Millisecond)))
+		},
+		peers: make(map[key.EndpointID]peerInfo),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -125,9 +134,12 @@ func New(id key.EndpointID, opts ...Option) *Discovery {
 	return d
 }
 
-// Start listens for mDNS packets until ctx is cancelled. It is safe to call
-// Publish before Start, but Resolve only observes remote responses while Start
-// is running.
+// Start listens for mDNS packets until ctx is cancelled. It caches the
+// announcements it sees and answers queries for the service, or for this
+// endpoint's instance, with the endpoint's most recent announcement, after the
+// random delay RFC 6762 section 6 requires. It is safe to call Publish before
+// Start, but a Discovery answers queries and observes remote responses only
+// while Start is running.
 func (d *Discovery) Start(ctx context.Context) error {
 	if d == nil {
 		return errors.New("mdns: nil Discovery")
@@ -248,7 +260,9 @@ func (d *Discovery) log() *slog.Logger {
 
 // Resolve returns the cached item for id, if present, and otherwise sends a
 // multicast query and waits for a matching response until ctx or the lookup
-// timeout fires.
+// timeout fires. The response comes from the peer's own [Discovery.Start] loop,
+// so the peer must be running one; a peer that only published once and stopped
+// listening cannot answer.
 func (d *Discovery) Resolve(ctx context.Context, id key.EndpointID) iter.Seq2[iroh.Item, error] {
 	if d == nil {
 		return nil
@@ -294,6 +308,7 @@ func (d *Discovery) item(id key.EndpointID) (iroh.Item, bool) {
 func (d *Discovery) handlePacket(packet []byte) {
 	info, ok := parseAnnouncement(packet, d.serviceName)
 	if !ok {
+		d.answerQuery(packet)
 		return
 	}
 	d.mu.Lock()
@@ -305,6 +320,56 @@ func (d *Discovery) handlePacket(packet []byte) {
 		lastUpdated: uint64(time.Now().UnixMicro()),
 	}
 	d.mu.Unlock()
+}
+
+// answerFor returns the announcement to multicast in reply to packet, and
+// whether packet is a query this Discovery should answer: one asking for the
+// service, or for this endpoint's own instance. A Discovery that publishes
+// nothing answers nothing.
+func (d *Discovery) answerFor(packet []byte) ([]byte, bool) {
+	if d.passive {
+		return nil, false
+	}
+	d.mu.RLock()
+	announced := d.announced
+	d.mu.RUnlock()
+	if len(announced) == 0 {
+		return nil, false
+	}
+	questions, ok := parseQuestions(packet)
+	if !ok {
+		return nil, false
+	}
+	service := serviceName(d.serviceName)
+	instance := instanceName(d.serviceName, d.id)
+	for _, q := range questions {
+		if q.typ != dnsTypePTR && q.typ != dnsTypeANY {
+			continue
+		}
+		if strings.EqualFold(q.name, service) || strings.EqualFold(q.name, instance) {
+			return announced, true
+		}
+	}
+	return nil, false
+}
+
+// answerQuery multicasts this endpoint's announcement if packet is a query it
+// should answer, and reports whether it started a response.
+func (d *Discovery) answerQuery(packet []byte) bool {
+	answer, ok := d.answerFor(packet)
+	if !ok {
+		return false
+	}
+	go d.respond(answer)
+	return true
+}
+
+// respond multicasts answer after the response delay.
+func (d *Discovery) respond(answer []byte) {
+	timer := time.NewTimer(d.responseDelay())
+	defer timer.Stop()
+	<-timer.C
+	d.writeMulticast(answer)
 }
 
 func (d *Discovery) query(id key.EndpointID) {
@@ -335,12 +400,21 @@ func (d *Discovery) writeMulticast(packet []byte) {
 	_, _ = conn.WriteToUDPAddrPort(packet, ipv4Multicast)
 }
 
+// announcement builds the announcement packet for data and records it as the
+// answer to later queries.
 func (d *Discovery) announcement(data dns.EndpointData) ([]byte, error) {
 	info, err := d.announcementInfo(data)
 	if err != nil {
 		return nil, err
 	}
-	return buildAnnouncement(d.serviceName, info)
+	packet, err := buildAnnouncement(d.serviceName, info)
+	if err != nil {
+		return nil, err
+	}
+	d.mu.Lock()
+	d.announced = packet
+	d.mu.Unlock()
+	return packet, nil
 }
 
 type announcementData struct {
