@@ -214,3 +214,33 @@ func testSignedEntry(namespace NamespaceSecret, author Author, key string, recor
 func testRecord(seed string, length, timestamp uint64) Record {
 	return NewRecord(blobs.NewHash([]byte(seed)), length, timestamp)
 }
+
+// TestMemoryStorePrefixShadowing pins the documented surprise: a plain write to
+// a key that is a prefix of an existing key from the same author deletes the
+// longer entry, so the two cannot coexist. TestMemoryStorePrefixDeletion covers
+// the deliberate tombstone use of the same rule; this covers the accident.
+func TestMemoryStorePrefixShadowing(t *testing.T) {
+	namespace := NewNamespaceSecret(repeat32(0xb2))
+	author := NewAuthor(repeat32(0xa1))
+	store := NewMemoryStore()
+
+	store.Put(testSignedEntry(namespace, author, "menu/tea", testRecord("tea", 1, 1)))
+	got := store.Put(testSignedEntry(namespace, author, "menu", testRecord("menu", 1, 2)))
+	if !got.Inserted() || got.Removed() != 1 {
+		t.Fatalf("Put(menu) = inserted %v removed %d, want true 1", got.Inserted(), got.Removed())
+	}
+	if _, ok := store.GetExact(namespace.ID(), author.ID(), []byte("menu/tea"), false); ok {
+		t.Fatal("menu/tea survived a write to menu")
+	}
+
+	// A trailing separator does not avoid it: "menu/" is still a prefix.
+	store.Put(testSignedEntry(namespace, author, "menu/tea", testRecord("tea", 1, 3)))
+	if got := store.Put(testSignedEntry(namespace, author, "menu/", testRecord("menu", 1, 4))); got.Removed() != 1 {
+		t.Fatalf("Put(menu/) removed %d, want 1", got.Removed())
+	}
+
+	// The write is dropped outright when the ancestor is the newer entry.
+	if got := store.Put(testSignedEntry(namespace, author, "menu/coffee", testRecord("coffee", 1, 2))); got.Inserted() {
+		t.Fatal("insert under a newer ancestor was accepted")
+	}
+}
