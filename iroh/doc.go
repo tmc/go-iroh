@@ -34,7 +34,15 @@
 // JSON-seq; the two ends of one connection share the original destination
 // connection id. Traces carry frame metadata, loss and congestion events, and
 // the handshake, but no payload bytes. QLOGDIR is process-wide, so several
-// endpoints in one process interleave their traces in one directory.
+// endpoints in one process interleave their traces in one directory;
+// [WithQLOG] replaces it for a single endpoint, and [QLOGDir] reproduces its
+// file layout.
+//
+// To see payload bytes, log the TLS traffic secrets with [WithKeyLogWriter],
+// capture the UDP flow, and decrypt the capture with Wireshark. Writing those
+// secrets compromises the confidentiality of every connection the endpoint
+// makes, so it is a debugging tool only. Relayed traffic, 0-RTT early data,
+// and the reverse direction after a connection-id rotation are not covered.
 //
 // The Go API is not stable before v1 and may change in any v0 release.
 package iroh
