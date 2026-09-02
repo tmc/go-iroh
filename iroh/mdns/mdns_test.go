@@ -3,8 +3,11 @@
 package mdns
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -178,4 +181,87 @@ func sameAddrPorts(a, b []netip.AddrPort) bool {
 		seen[addr]--
 	}
 	return true
+}
+
+func TestAnnouncementPort(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		addrs []string
+		want  uint16
+	}{
+		{name: "single", addrs: []string{"192.0.2.1:7777"}, want: 7777},
+		{
+			name:  "majority wins over first",
+			addrs: []string{"192.0.2.1:1111", "192.0.2.2:7777", "[2001:db8::1]:7777"},
+			want:  7777,
+		},
+		{
+			name:  "lowest port breaks a tie",
+			addrs: []string{"192.0.2.1:9999", "192.0.2.2:7777"},
+			want:  7777,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var addrs []netip.AddrPort
+			for _, a := range tt.addrs {
+				addrs = append(addrs, netip.MustParseAddrPort(a))
+			}
+			if got := announcementPort(addrs); got != tt.want {
+				t.Fatalf("announcementPort(%v) = %d, want %d", tt.addrs, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPublishLogsWhatItCannotAnnounce checks that the two things Publish cannot
+// tell its fire-and-forget caller reach the logger instead.
+func TestPublishLogsWhatItCannotAnnounce(t *testing.T) {
+	sk, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := netaddr.ParseRelayURL("https://relay.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name string
+		data dns.EndpointData
+		// announce reaches the same code Publish does without the multicast
+		// write, for the case where an announcement is actually built.
+		announce bool
+		want     string
+	}{
+		{
+			name: "relay only",
+			data: dns.NewEndpointData().WithRelayURL(relay),
+			want: "not announcing endpoint data",
+		},
+		{
+			name: "addresses on another port",
+			data: dns.NewEndpointData().WithIPAddrs(
+				netip.MustParseAddrPort("192.0.2.1:7777"),
+				netip.MustParseAddrPort("192.0.2.2:7777"),
+				netip.MustParseAddrPort("192.0.2.3:9999"),
+			),
+			announce: true,
+			want:     "dropping addresses on others",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logs, nil))
+			d := New(sk.Public().EndpointID(), WithLogger(logger))
+			if tt.announce {
+				if _, err := d.announcement(tt.data); err != nil {
+					t.Fatalf("announcement: %v", err)
+				}
+			} else {
+				d.Publish(tt.data)
+			}
+			if !strings.Contains(logs.String(), tt.want) {
+				t.Fatalf("logged %q, want it to mention %q", logs.String(), tt.want)
+			}
+		})
+	}
 }

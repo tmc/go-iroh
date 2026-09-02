@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"log/slog"
 	"time"
 
 	"github.com/tmc/go-iroh/dns"
@@ -29,6 +30,7 @@ type Discovery struct {
 	serviceName string
 	passive     bool
 	timeout     time.Duration
+	logger      *slog.Logger
 }
 
 // Option configures a Discovery.
@@ -57,6 +59,17 @@ func WithLookupTimeout(timeout time.Duration) Option {
 	return func(d *Discovery) {
 		if timeout > 0 {
 			d.timeout = timeout
+		}
+	}
+}
+
+// WithLogger sets the logger for events a fire-and-forget [Discovery.Publish]
+// cannot report to its caller. Nothing is published in js/wasm, so nothing is
+// logged; the option exists so code builds for both targets.
+func WithLogger(logger *slog.Logger) Option {
+	return func(d *Discovery) {
+		if logger != nil {
+			d.logger = logger
 		}
 	}
 }
