@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
+	"io"
 	"net"
 	"net/netip"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1587,5 +1591,240 @@ func TestEndpointRemoteInfoNil(t *testing.T) {
 	id, _ := key.GenerateSecretKey()
 	if _, ok := ep.RemoteInfo(id.Public().EndpointID()); ok {
 		t.Fatal("nil Endpoint RemoteInfo = true, want false")
+	}
+}
+
+// countingSink is a WithQLOG sink that records what it was asked for and how
+// often each writer was closed.
+type countingSink struct {
+	mu     sync.Mutex
+	conns  []QLOGConnection
+	closes map[string]int
+	bufs   map[string]*bytes.Buffer
+	nilFor func(QLOGConnection) bool
+}
+
+type countingSinkWriter struct {
+	s  *countingSink
+	id string
+}
+
+func (w countingSinkWriter) Write(p []byte) (int, error) {
+	w.s.mu.Lock()
+	defer w.s.mu.Unlock()
+	return w.s.bufs[w.id].Write(p)
+}
+
+func (w countingSinkWriter) Close() error {
+	w.s.mu.Lock()
+	defer w.s.mu.Unlock()
+	w.s.closes[w.id]++
+	return nil
+}
+
+func (s *countingSink) sink(_ context.Context, conn QLOGConnection) io.WriteCloser {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.conns = append(s.conns, conn)
+	if s.nilFor != nil && s.nilFor(conn) {
+		return nil
+	}
+	if s.bufs == nil {
+		s.bufs = make(map[string]*bytes.Buffer)
+		s.closes = make(map[string]int)
+	}
+	id := conn.ConnectionID
+	s.bufs[id] = &bytes.Buffer{}
+	return countingSinkWriter{s: s, id: id}
+}
+
+func (s *countingSink) snapshot() ([]QLOGConnection, map[string]int, map[string]int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sizes := make(map[string]int, len(s.bufs))
+	for id, buf := range s.bufs {
+		sizes[id] = buf.Len()
+	}
+	closes := make(map[string]int, len(s.closes))
+	for id, n := range s.closes {
+		closes[id] = n
+	}
+	return slices.Clone(s.conns), sizes, closes
+}
+
+// TestWithQLOGSink checks that a per-endpoint qlog sink receives that
+// endpoint's traces and nobody else's, that its connection ids are hex, and
+// that each writer is closed exactly once when the endpoint shuts down without
+// closing the connection first.
+func TestWithQLOGSink(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-qlog-sink/0"
+	serverSink := &countingSink{}
+	server, err := Bind(ctx,
+		WithALPNs(alpn),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
+		WithQLOG(serverSink.sink),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := make(chan error, 1)
+	go func() {
+		_, err := server.Accept(ctx)
+		accepted <- err
+	}()
+
+	clientSink := &countingSink{}
+	client, err := Bind(ctx,
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
+		WithQLOG(clientSink.sink),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), alpn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-accepted; err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	_ = conn
+
+	clientConns, clientSizes, _ := clientSink.snapshot()
+	if len(clientConns) != 1 {
+		t.Fatalf("client sink called %d times, want 1", len(clientConns))
+	}
+	if !clientConns[0].Client {
+		t.Error("client sink saw Client = false")
+	}
+	if _, err := hex.DecodeString(clientConns[0].ConnectionID); err != nil {
+		t.Errorf("connection id %q is not hex: %v", clientConns[0].ConnectionID, err)
+	}
+	if n := clientSizes[clientConns[0].ConnectionID]; n == 0 {
+		t.Error("client sink writer received no trace")
+	}
+	serverConns, _, _ := serverSink.snapshot()
+	if len(serverConns) != 1 {
+		t.Fatalf("server sink called %d times, want 1", len(serverConns))
+	}
+	if serverConns[0].Client {
+		t.Error("server sink saw Client = true")
+	}
+	// Each endpoint's traces go to its own sink: the two sides of one
+	// connection share an original destination connection id.
+	if serverConns[0].ConnectionID != clientConns[0].ConnectionID {
+		t.Errorf("server odcid %q, client odcid %q, want the same", serverConns[0].ConnectionID, clientConns[0].ConnectionID)
+	}
+
+	// Shut the endpoints down without closing the connection first.
+	server.Shutdown(ctx)
+	client.Shutdown(ctx)
+	for _, s := range []*countingSink{clientSink, serverSink} {
+		conns, _, _ := s.snapshot()
+		id := conns[0].ConnectionID
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			_, _, closes := s.snapshot()
+			if closes[id] > 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("qlog writer for %s was never closed", id)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		// Once is once: give a second close time to arrive before asserting.
+		time.Sleep(200 * time.Millisecond)
+		if _, _, closes := s.snapshot(); closes[id] != 1 {
+			t.Errorf("qlog writer for %s closed %d times, want exactly 1", id, closes[id])
+		}
+	}
+}
+
+// TestWithQLOGSinkNil checks that a sink returning nil traces nothing and does
+// not break the connection.
+func TestWithQLOGSinkNil(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-qlog-nil/0"
+	sink := &countingSink{nilFor: func(QLOGConnection) bool { return true }}
+	server, err := Bind(ctx, WithALPNs(alpn), WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)), WithQLOG(sink.sink))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Shutdown(ctx)
+	accepted := make(chan error, 1)
+	go func() {
+		_, err := server.Accept(ctx)
+		accepted <- err
+	}()
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)), WithQLOG(sink.sink))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Shutdown(ctx)
+
+	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), alpn)
+	if err != nil {
+		t.Fatalf("connect with a nil qlog sink: %v", err)
+	}
+	defer conn.CloseWithError(0, "")
+	if err := <-accepted; err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	conns, sizes, closes := sink.snapshot()
+	if len(conns) == 0 {
+		t.Fatal("sink was never called")
+	}
+	if len(sizes) != 0 || len(closes) != 0 {
+		t.Fatalf("a nil sink produced writers: sizes=%v closes=%v", sizes, closes)
+	}
+}
+
+// TestQLOGDir checks that the QLOGDir sink writes the file layout its doc
+// promises: <connection id>_<client|server>.sqlog under the given directory.
+func TestQLOGDir(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-qlog-dir/0"
+	serverDir, clientDir := t.TempDir(), t.TempDir()
+	server, err := Bind(ctx, WithALPNs(alpn), WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)), WithQLOG(QLOGDir(serverDir)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Shutdown(ctx)
+	go server.Accept(ctx)
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)), WithQLOG(QLOGDir(clientDir)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Shutdown(ctx)
+
+	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), alpn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseWithError(0, "")
+
+	for _, tc := range []struct{ dir, side string }{{clientDir, "client"}, {serverDir, "server"}} {
+		names, err := filepath.Glob(filepath.Join(tc.dir, "*_"+tc.side+".sqlog"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(names) != 1 {
+			t.Fatalf("%s traces = %v, want exactly one", tc.side, names)
+		}
+		stem := strings.TrimSuffix(filepath.Base(names[0]), "_"+tc.side+".sqlog")
+		if _, err := hex.DecodeString(stem); err != nil {
+			t.Errorf("trace name stem %q is not hex: %v", stem, err)
+		}
 	}
 }
