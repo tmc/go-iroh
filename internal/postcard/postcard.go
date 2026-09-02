@@ -4,6 +4,10 @@
 // zigzagged first, except for u8 and i8: postcard writes those as one raw byte.
 // Go values of kind uint8 and int8 follow that rule, so uint8(200) encodes as
 // "c8" and int8(-2) as "fe".
+//
+// Decoding accepts only canonical varints: a padded encoding such as "ac8200"
+// for 300 is rejected with [ErrOverlongVarint], so distinct byte strings never
+// decode to the same value.
 package postcard
 
 import (
@@ -33,7 +37,11 @@ type DecoderFrom interface {
 var (
 	// ErrTrailingBytes is returned when Unmarshal does not consume all input.
 	ErrTrailingBytes = errors.New("postcard: trailing bytes")
-	errShort         = errors.New("postcard: truncated input")
+	// ErrOverlongVarint is returned for a varint that is not canonically
+	// encoded: one padded with continuation bytes past the shortest form, or
+	// one whose value does not fit in 64 bits.
+	ErrOverlongVarint = errors.New("postcard: overlong varint")
+	errShort          = errors.New("postcard: truncated input")
 )
 
 // Marshal encodes v in postcard format.
@@ -470,6 +478,12 @@ func appendVarint(dst []byte, v uint64) []byte {
 	return append(dst, byte(v))
 }
 
+// readVarint decodes one little-endian base-128 varint from the front of buf,
+// returning its value and length. Only the canonical encoding is accepted: a
+// final byte of zero after a continuation byte means the value was padded and
+// could have been written in fewer bytes. Rejecting those keeps the mapping
+// from bytes to values injective, which any protocol that identifies a record
+// by a digest of its encoding depends on.
 func readVarint(buf []byte) (uint64, int, error) {
 	var v uint64
 	for i := 0; i < len(buf); i++ {
@@ -478,10 +492,13 @@ func readVarint(buf []byte) (uint64, int, error) {
 		}
 		b := buf[i]
 		if i == 9 && b > 1 {
-			return 0, 0, fmt.Errorf("postcard: varint overflow")
+			return 0, 0, ErrOverlongVarint
 		}
 		v |= uint64(b&0x7f) << (7 * i)
 		if b < 0x80 {
+			if i > 0 && b == 0 {
+				return 0, 0, ErrOverlongVarint
+			}
 			return v, i + 1, nil
 		}
 	}
