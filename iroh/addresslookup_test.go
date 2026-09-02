@@ -60,8 +60,12 @@ func TestMemoryLookup(t *testing.T) {
 	if _, ok := m.GetEndpointInfo(id); ok {
 		t.Fatal("empty lookup returned an entry")
 	}
-	if ch := m.Resolve(context.Background(), id); ch != nil {
-		t.Fatal("Resolve of unknown id should return nil channel")
+	seq := m.Resolve(context.Background(), id)
+	if seq == nil {
+		t.Fatal("Resolve of unknown id returned a nil sequence")
+	}
+	if got := drain(seq); len(got) != 0 {
+		t.Fatalf("Resolve of unknown id = %+v, want no results", got)
 	}
 
 	addr := netaddr.NewEndpointAddr(id).WithRelayURL(relayURL(t, "https://relay.example/"))
@@ -600,5 +604,47 @@ func TestFilteredAddressPublisher(t *testing.T) {
 	}
 	if len(rec.published[0].IPAddrs()) != 1 {
 		t.Errorf("IP address should be kept, got %v", rec.published[0].IPAddrs())
+	}
+}
+
+// nilLookup is an AddressResolver that reports nothing by returning a nil
+// sequence, the shape [MemoryLookup] used before it returned an empty one.
+type nilLookup struct{}
+
+func (nilLookup) Resolve(context.Context, key.EndpointID) iter.Seq2[Item, error] { return nil }
+
+// TestServicesResolveNilSequence checks that a resolver returning a nil
+// sequence is skipped rather than ranged over, which panicked.
+func TestServicesResolveNilSequence(t *testing.T) {
+	sk, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sk.Public().EndpointID()
+	info := endpointInfoWithIP(id, netip.MustParseAddrPort("192.0.2.1:1234"))
+
+	var svcs AddressLookupServices
+	svcs.AddResolver(nilLookup{})
+	svcs.AddResolver(staticLookup{provenance: "ok", info: &info})
+
+	var got bool
+	for item, err := range svcs.Resolve(context.Background(), id) {
+		if err == nil && item.EndpointID().Equal(id) {
+			got = true
+		}
+	}
+	if !got {
+		t.Error("expected the second resolver's item, got none")
+	}
+
+	// A nil-only set of resolvers must report ErrNoResults, not hang or panic.
+	var only AddressLookupServices
+	only.AddResolver(nilLookup{})
+	results := drain(only.Resolve(context.Background(), id))
+	if len(results) == 0 {
+		t.Fatal("nil-only resolve produced no results, want ErrNoResults")
+	}
+	if last := results[len(results)-1]; !errors.Is(last.err, ErrNoResults) {
+		t.Fatalf("final result = %+v, want ErrNoResults", last)
 	}
 }

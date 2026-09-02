@@ -42,7 +42,8 @@ func (f AddressPublisherFunc) Publish(data dns.EndpointData) {
 type AddressResolver interface {
 	// Resolve looks up addressing information for id. It returns a sequence of
 	// discovered [Item] values and per-service errors. Cancel ctx to stop
-	// pending work.
+	// pending work. Implementations should return an empty sequence rather
+	// than nil when there is nothing to report; callers must tolerate nil.
 	Resolve(ctx context.Context, id key.EndpointID) iter.Seq2[Item, error]
 }
 
@@ -297,6 +298,9 @@ func (s *AddressLookupServices) Resolve(ctx context.Context, id key.EndpointID) 
 		merged := make(chan lookupResult)
 		for _, resolver := range resolvers {
 			seq := resolver.Resolve(iterCtx, id)
+			if seq == nil {
+				continue
+			}
 			wg.Add(1)
 			go func(seq iter.Seq2[Item, error]) {
 				defer wg.Done()

@@ -113,13 +113,14 @@ func (m *MemoryLookup) RemoveEndpointInfo(id key.EndpointID) (dns.EndpointInfo, 
 	return dns.EndpointInfo{ID: id, Data: info.data}, true
 }
 
-// Resolve returns the stored info for id, or nil if there is no entry.
+// Resolve returns the stored info for id, or an empty sequence if there is no
+// entry.
 func (m *MemoryLookup) Resolve(ctx context.Context, id key.EndpointID) iter.Seq2[Item, error] {
 	m.mu.RLock()
 	info, ok := m.endpoints[id]
 	m.mu.RUnlock()
 	if !ok {
-		return nil
+		return func(yield func(Item, error) bool) {}
 	}
 	lastUpdated := uint64(info.lastUpdated.UnixMicro())
 	item := NewItem(dns.EndpointInfo{ID: id, Data: info.data}, m.provenance, &lastUpdated)
