@@ -359,3 +359,85 @@ func TestCanonicalVarintsStillDecode(t *testing.T) {
 		}
 	}
 }
+
+// legacyUint8 and legacyInt8 are the pre-v0 8-bit encodings: uint8 as a varint
+// and int8 as a zigzag varint. They exist so the compatibility boundary below
+// is stated in code rather than in a comment.
+func legacyUint8(v uint8) []byte { return appendVarint(nil, uint64(v)) }
+
+func legacyInt8(v int8) []byte { return appendVarint(nil, zigzag(int64(v))) }
+
+// TestByteSizedCompatibilityBoundary pins exactly which values the switch to
+// raw-byte u8/i8 changed. Records that carry only small u8 tags — every 8-bit
+// field shipped so far is a tag in 1..7 — encode identically before and after,
+// so they stay readable; a u8 of 128 or more does not, and neither does any
+// nonzero i8. A later 8-bit field that can exceed 127 has to break this test
+// before it can silently break stored records.
+func TestByteSizedCompatibilityBoundary(t *testing.T) {
+	for v := 0; v < 128; v++ {
+		got, err := Marshal(uint8(v))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := legacyUint8(uint8(v)); !reflect.DeepEqual(got, want) {
+			t.Fatalf("uint8(%d) = %x, want %x: small tags must encode as before", v, got, want)
+		}
+		if len(got) != 1 {
+			t.Fatalf("uint8(%d) = %x, want one byte", v, got)
+		}
+	}
+	for v := 128; v < 256; v++ {
+		got, err := Marshal(uint8(v))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reflect.DeepEqual(got, legacyUint8(uint8(v))) {
+			t.Fatalf("uint8(%d) = %x, want a change from the two-byte varint", v, got)
+		}
+	}
+	// i8 is the dangerous half: zigzag moves every nonzero value.
+	if got, err := Marshal(int8(0)); err != nil || !reflect.DeepEqual(got, legacyInt8(0)) {
+		t.Fatalf("int8(0) = %x, %v, want %x", got, err, legacyInt8(0))
+	}
+	for v := -128; v < 128; v++ {
+		if v == 0 {
+			continue
+		}
+		got, err := Marshal(int8(v))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reflect.DeepEqual(got, legacyInt8(int8(v))) {
+			t.Fatalf("int8(%d) = %x, want a change from the zigzag varint", v, got)
+		}
+	}
+}
+
+// TestSmallTagRecordsUnchanged pins the shape the landed experiment records use:
+// a small u8 tag followed by the rest of the struct. Every such record encodes
+// the same before and after the 8-bit change.
+func TestSmallTagRecordsUnchanged(t *testing.T) {
+	type tagged struct {
+		Kind    uint8
+		Version uint8
+		Payload []byte
+	}
+	for kind := uint8(1); kind <= 7; kind++ {
+		v := tagged{Kind: kind, Version: 1, Payload: []byte{0xde, 0xad}}
+		got, err := Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := append(append(legacyUint8(kind), legacyUint8(1)...), 0x02, 0xde, 0xad)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("kind %d: Marshal = %x, want %x", kind, got, want)
+		}
+		var back tagged
+		if err := Unmarshal(got, &back); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(back, v) {
+			t.Fatalf("kind %d: round trip = %#v, want %#v", kind, back, v)
+		}
+	}
+}
