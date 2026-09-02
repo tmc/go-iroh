@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"net"
 	"net/netip"
 	"sync/atomic"
@@ -956,4 +957,97 @@ func TestEndpointNoAddress(t *testing.T) {
 	if err != ErrNoAddress {
 		t.Errorf("Connect(no addr) err = %v, want ErrNoAddress", err)
 	}
+}
+
+// TestConnectByIDUsesAddressLookup checks that a dial by endpoint ID alone
+// resolves through the configured address-lookup services, that the failure
+// mode without an answer is unchanged, and that a dial with an address does not
+// consult them.
+func TestConnectByIDUsesAddressLookup(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-lookup-dial/0"
+
+	newServer := func(t *testing.T) *Endpoint {
+		t.Helper()
+		server, err := Bind(ctx, WithALPNs(alpn), WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { server.Shutdown(ctx) })
+		go func() {
+			for {
+				conn, err := server.Accept(ctx)
+				if err != nil {
+					return
+				}
+				conn.CloseWithError(0, "")
+			}
+		}()
+		return server
+	}
+
+	t.Run("bare id resolves", func(t *testing.T) {
+		server := newServer(t)
+		lookup := NewMemoryLookup()
+		lookup.AddEndpointAddr(netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()))
+
+		var services AddressLookupServices
+		services.AddResolver(lookup)
+		client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)), WithAddressLookup(&services))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Shutdown(ctx)
+
+		conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()), alpn)
+		if err != nil {
+			t.Fatalf("connect by id: %v", err)
+		}
+		defer conn.CloseWithError(0, "")
+		if !conn.RemoteID().Equal(server.ID()) {
+			t.Fatalf("remote id = %s, want %s", conn.RemoteID(), server.ID())
+		}
+	})
+
+	t.Run("no answer still returns ErrNoAddress", func(t *testing.T) {
+		var services AddressLookupServices
+		services.AddResolver(NewMemoryLookup())
+		client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)), WithAddressLookup(&services))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Shutdown(ctx)
+
+		other, _ := key.GenerateSecretKey()
+		if _, err := client.Connect(ctx, netaddr.NewEndpointAddr(other.Public().EndpointID()), alpn); err != ErrNoAddress {
+			t.Fatalf("connect with an empty lookup = %v, want ErrNoAddress", err)
+		}
+	})
+
+	// A dial that already has an address must not wait on the lookup. The
+	// per-remote state machine still consults it in the background, so the
+	// resolver is not counted; it is made to block instead, which fails the
+	// test by timeout if Connect starts waiting on it.
+	t.Run("address present does not wait on the lookup", func(t *testing.T) {
+		server := newServer(t)
+		var services AddressLookupServices
+		services.AddResolver(AddressResolverFunc(func(ctx context.Context, id key.EndpointID) iter.Seq2[Item, error] {
+			return func(yield func(Item, error) bool) { <-ctx.Done() }
+		}))
+		client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)), WithAddressLookup(&services))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Shutdown(ctx)
+
+		dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		conn, err := client.Connect(dialCtx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), alpn)
+		if err != nil {
+			t.Fatalf("connect with an address and a blocking lookup: %v", err)
+		}
+		conn.CloseWithError(0, "")
+	})
 }
