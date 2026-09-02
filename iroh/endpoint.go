@@ -32,6 +32,9 @@ import (
 type Endpoint struct {
 	secretKey key.SecretKey
 	alpns     []string
+	// bindALPNs is the ALPN set WithALPNs configured at Bind. It is fixed for
+	// the endpoint's lifetime, unlike alpns, which SetALPNs replaces.
+	bindALPNs []string
 
 	udp          *net.UDPConn
 	sock         *socket.Socket
@@ -488,6 +491,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	ep := &Endpoint{
 		secretKey: c.secretKey,
 		alpns:     slices.Clone(c.alpns),
+		bindALPNs: slices.Clone(c.alpns),
 		udp:       udp,
 		sock:      sock,
 		magic:     magic,
@@ -651,6 +655,13 @@ func (e *Endpoint) startListener() error {
 // byte string represented as a Go string; see [WithALPNs].
 func (e *Endpoint) SetALPNs(alpns []string) error {
 	return e.setALPNs(alpns, acceptOwnerNone)
+}
+
+// boundALPNs returns the ALPNs [WithALPNs] configured at [Bind], not the set
+// the endpoint accepts now: [SetALPNs] and [Router] both replace that set by
+// design, so the current one says nothing about the caller's intent.
+func (e *Endpoint) boundALPNs() []string {
+	return slices.Clone(e.bindALPNs)
 }
 
 func (e *Endpoint) setALPNs(alpns []string, allowedOwner acceptOwner) error {

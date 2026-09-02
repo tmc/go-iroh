@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -595,4 +596,88 @@ func TestRouterOnAccepting(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
+}
+
+// TestRouterALPNsWithoutHandler checks the four combinations of a bound ALPN
+// set and a handler map. NewRouter replaces the endpoint's ALPN set with the
+// handler keys, so an ALPN the endpoint was bound with and the router cannot
+// dispatch used to be dropped silently; it is now an error.
+func TestRouterALPNsWithoutHandler(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const (
+		alpnA = "iroh-router-alpn/a"
+		alpnB = "iroh-router-alpn/b"
+	)
+	for _, tt := range []struct {
+		name     string
+		bound    []string
+		handlers []string
+		wantErr  string
+	}{
+		{name: "no bound alpns", handlers: []string{alpnA, alpnB}},
+		{name: "identical sets", bound: []string{alpnA}, handlers: []string{alpnA}},
+		{name: "router widens", bound: []string{alpnA}, handlers: []string{alpnA, alpnB}},
+		{name: "bound alpn has no handler", bound: []string{alpnA, alpnB}, handlers: []string{alpnA}, wantErr: alpnB},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := []Option{WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0))}
+			if len(tt.bound) > 0 {
+				opts = append(opts, WithALPNs(tt.bound...))
+			}
+			ep, err := Bind(ctx, opts...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ep.Shutdown(ctx)
+
+			handlers := make(map[string]ProtocolHandler, len(tt.handlers))
+			for _, a := range tt.handlers {
+				handlers[a] = echoHandler{}
+			}
+			router, err := NewRouter(ep, handlers, nil)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("NewRouter: %v", err)
+				}
+				defer router.Shutdown(ctx)
+				return
+			}
+			if err == nil {
+				router.Shutdown(ctx)
+				t.Fatal("NewRouter with an unhandled endpoint ALPN succeeded")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("NewRouter error = %v, want it to name %q", err, tt.wantErr)
+			}
+			// The endpoint keeps its own accept loop available.
+			if _, err := ep.ListenStreams(); err != nil {
+				t.Fatalf("ListenStreams after a rejected router: %v", err)
+			}
+		})
+	}
+}
+
+// TestRouterAfterSetALPNs checks that the unhandled-ALPN rule reads what Bind
+// was given, not what the endpoint accepts at the time. SetALPNs documents that
+// it replaces the accepted set, so a router replacing it again is that
+// contract, not a misconfiguration.
+func TestRouterAfterSetALPNs(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	ep, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Shutdown(ctx)
+	if err := ep.SetALPNs([]string{"iroh-router-setalpns/a"}); err != nil {
+		t.Fatal(err)
+	}
+	router, err := NewRouter(ep, map[string]ProtocolHandler{"iroh-router-setalpns/b": echoHandler{}}, nil)
+	if err != nil {
+		t.Fatalf("NewRouter after SetALPNs: %v", err)
+	}
+	router.Shutdown(ctx)
 }

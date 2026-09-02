@@ -7,6 +7,9 @@ import (
 	"log/slog"
 	"maps"
 	"net"
+	"slices"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -83,8 +86,19 @@ type RouterConfig struct {
 }
 
 // NewRouter registers every handler ALPN on ep, starts the accept loop, and
-// returns the running router. The endpoint must not already be listening (do not
-// pass [WithALPNs] to [Bind] when using a Router).
+// returns the running router. The endpoint must not already be listening, so it
+// must not have an accept loop of its own; see [Endpoint.Accept].
+//
+// The router replaces the endpoint's accepted ALPN set with the handler keys.
+// Passing [WithALPNs] to [Bind] is therefore only useful as a subset of them:
+// NewRouter returns an error naming any ALPN the endpoint was bound with that
+// has no handler, rather than negotiating a protocol it cannot dispatch. A
+// router with more ALPNs than the endpoint was bound with is fine and widens
+// the set.
+//
+// The rule is about what [Bind] was given, not about what the endpoint accepts
+// at the time. [Endpoint.SetALPNs] documents that it replaces the accepted set,
+// so a router replacing it again is that contract, not a mistake.
 //
 // The handlers map is keyed by exact ALPN string. ALPN values are opaque byte
 // strings represented as Go strings; printable ASCII protocol names are
@@ -102,6 +116,9 @@ func NewRouter(ep *Endpoint, handlers map[string]ProtocolHandler, cfg *RouterCon
 	}()
 
 	handlers = maps.Clone(handlers)
+	if orphans := alpnsWithoutHandler(ep.boundALPNs(), handlers); len(orphans) > 0 {
+		return nil, fmt.Errorf("iroh: new router: endpoint was bound with %s, which no handler serves", strings.Join(orphans, ", "))
+	}
 	logger := slog.Default()
 	filter := IncomingFilter(nil)
 	if cfg != nil {
@@ -342,4 +359,18 @@ func (r *Router) Shutdown(ctx context.Context) error {
 		return ctx.Err()
 	}
 	return closeErr
+}
+
+// alpnsWithoutHandler returns the ALPNs in alpns that handlers does not cover,
+// sorted and quoted for an error message. An ALPN with no handler would still
+// negotiate, then reach an accept loop with nothing to dispatch it to.
+func alpnsWithoutHandler(alpns []string, handlers map[string]ProtocolHandler) []string {
+	var orphans []string
+	for _, a := range alpns {
+		if _, ok := handlers[a]; !ok {
+			orphans = append(orphans, strconv.Quote(a))
+		}
+	}
+	slices.Sort(orphans)
+	return slices.Compact(orphans)
 }
