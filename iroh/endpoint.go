@@ -264,9 +264,10 @@ func WithRelayFirstDial() Option {
 
 // WithAddressLookup sets the address-lookup services the endpoint uses to
 // resolve additional addresses for a remote endpoint (pkarr, DNS, in-memory).
-// The per-remote state machine consults them through its resolve hook. When
+// The per-remote state machine consults them through its resolve hook, and
+// [Endpoint.Connect] consults them to seed a dial by endpoint ID alone. When
 // unset, the endpoint does no lookup-driven address resolution and connects only
-// to the addresses passed to [Endpoint.Connect].
+// to the addresses passed to Connect.
 func WithAddressLookup(s *AddressLookupServices) Option {
 	return func(c *config) error {
 		c.lookup = s
@@ -1196,6 +1197,14 @@ var ErrConnClosedDuringHandshake = errors.New("iroh: connection closed during ha
 // (if relays are enabled) the relay URLs in addr. A relay path carries the QUIC
 // handshake over a relay mapped address that routes through the relay transport.
 //
+// When addr carries no usable address at all - a dial by endpoint ID alone -
+// Connect resolves one through the services given to [WithAddressLookup] and
+// dials the first answer that has any. Such a call waits on the lookup, so it
+// blocks where it would once have failed at once; it still returns
+// [ErrNoAddress] when no service is configured or none answers before the
+// deadline. Connect does not consult the lookup when addr already has an
+// address, even if none of them work.
+//
 // Connect blocks until the handshake completes and the peer identity is
 // verified. To send 0-RTT early data before the handshake completes, use
 // [Endpoint.ConnectEarly] and [Connecting.Into0RTT].
@@ -1266,6 +1275,14 @@ func (e *Endpoint) connectEarly(ctx context.Context, addr netaddr.EndpointAddr, 
 	}
 
 	dials := e.dialTargets(addr)
+	if len(dials) == 0 {
+		// Nothing to dial: this is the bare-ID case WithAddressLookup exists
+		// for. Ask the lookup services for a path before giving up.
+		if found, ok := e.lookupAddr(ctx, addr); ok {
+			addr = found
+			dials = e.dialTargets(addr)
+		}
+	}
 	if len(dials) == 0 {
 		return nil, ErrNoAddress
 	}
@@ -1634,6 +1651,32 @@ func (e *Endpoint) removeStableIDWhenClosed(qc *quic.Conn) {
 	e.mu.Lock()
 	delete(e.stableIDs, qc)
 	e.mu.Unlock()
+}
+
+// lookupAddr asks the endpoint's address-lookup services for addresses for
+// addr.ID and returns addr merged with the first answer that carries any,
+// reporting whether it found one. It is bounded by ctx, and stops at the first
+// usable answer: a lookup is a way to start dialing, not a way to collect every
+// path a peer might have. "Usable" means the answer carried addresses, not that
+// this endpoint can dial them: a relay-only answer with relays disabled, or an
+// IP-only answer with direct paths disabled, ends the search and then leaves
+// dialTargets empty, so the dial fails with [ErrNoAddress] as it would have
+// without the lookup.
+func (e *Endpoint) lookupAddr(ctx context.Context, addr netaddr.EndpointAddr) (netaddr.EndpointAddr, bool) {
+	if e.lookup == nil || addr.ID.IsZero() {
+		return addr, false
+	}
+	for item, err := range e.lookup.Resolve(ctx, addr.ID) {
+		if err != nil {
+			continue
+		}
+		found := item.Addr()
+		if !found.ID.Equal(addr.ID) || found.IsEmpty() {
+			continue
+		}
+		return addr.WithAddrs(found.Addrs()...), true
+	}
+	return addr, false
 }
 
 // resolveFunc returns the address-lookup hook the RemoteMap actors use to
