@@ -34,7 +34,14 @@ const (
 	Received
 	// PeerData reports metadata propagated by the topic membership overlay.
 	PeerData
-	// Lagged reports that a slow receiver missed one or more events.
+	// Lagged reports that a slow receiver missed events; [Event.Dropped]
+	// says how many. The stream continues after it; the receiver has lost
+	// the dropped events, not the subscription.
+	//
+	// A full subscription queue drops the newest event, not the oldest, so
+	// the marker is delivered in the position the loss happened. Rust
+	// iroh-gossip rides a tokio broadcast channel and drops the oldest
+	// instead; the divergence is deliberate, not a porting mistake.
 	Lagged
 )
 
@@ -59,6 +66,9 @@ type Event struct {
 	// Round is the PlumTree delivery round for DeliverySwarm messages.
 	// It is zero for direct-neighbor delivery.
 	Round uint16
+	// Dropped is the number of events lost before a [Lagged] event. It is
+	// zero for every other kind.
+	Dropped uint64
 }
 
 // GossipOption configures a Gossip instance.
@@ -500,8 +510,9 @@ type Topic struct {
 	id     TopicID
 	events chan Event
 
-	mu     sync.Mutex
-	closed bool
+	mu      sync.Mutex
+	closed  bool
+	dropped uint64 // events dropped since the last Lagged; a marker is owed while non-zero
 }
 
 // ID returns the topic ID.
@@ -673,29 +684,31 @@ func (r *Receiver) Neighbors() []key.EndpointID {
 	return out
 }
 
+// sendEvent queues ev for the topic's subscriber. A subscriber that is not
+// keeping up loses events, not the stream: sendEvent drops ev and counts it,
+// and the next event the subscriber can accept is preceded by one Lagged event
+// reporting how many were lost. Only [Topic.closeEvents] closes the stream.
 func (t *Topic) sendEvent(ev Event) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
 		return
 	}
+	if t.dropped > 0 {
+		// Report the gap before any event that follows it, so the subscriber
+		// learns of the loss in the order it happened.
+		select {
+		case t.events <- Event{Kind: Lagged, Dropped: t.dropped}:
+			t.dropped = 0
+		default:
+			t.dropped++
+			return
+		}
+	}
 	select {
 	case t.events <- ev:
 	default:
-		select {
-		case t.events <- Event{Kind: Lagged}:
-		default:
-			select {
-			case <-t.events:
-			default:
-			}
-			select {
-			case t.events <- Event{Kind: Lagged}:
-			default:
-			}
-		}
-		t.closed = true
-		close(t.events)
+		t.dropped++
 	}
 }
 
