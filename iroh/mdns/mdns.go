@@ -40,7 +40,6 @@ const (
 
 var (
 	ipv4Multicast = netip.MustParseAddrPort("224.0.0.251:5353")
-	ipv6Multicast = netip.MustParseAddrPort("[ff02::fb]:5353")
 
 	errNoAddresses = errors.New("mdns: endpoint data has no IP addresses")
 )
@@ -536,5 +535,4 @@ func infoFromAnnouncement(a announcementData) dns.EndpointInfo {
 var (
 	_ iroh.AddressPublisher = (*Discovery)(nil)
 	_ iroh.AddressResolver  = (*Discovery)(nil)
-	_                       = ipv6Multicast
 )
