@@ -1,4 +1,9 @@
 // Package postcard encodes and decodes the Rust postcard wire format.
+//
+// Integers are varints, little-endian base-128, and signed integers are
+// zigzagged first, except for u8 and i8: postcard writes those as one raw byte.
+// Go values of kind uint8 and int8 follow that rule, so uint8(200) encodes as
+// "c8" and int8(-2) as "fe".
 package postcard
 
 import (
@@ -72,11 +77,20 @@ func (e *Encoder) Encode(v any) error {
 // Bytes returns a copy of the encoded bytes.
 func (e *Encoder) Bytes() []byte { return append([]byte(nil), e.b...) }
 
-// Uint appends v as a postcard unsigned integer.
+// Uint appends v as a postcard unsigned integer. Use [Encoder.Uint8] for a
+// Rust u8, which is not varint-encoded.
 func (e *Encoder) Uint(v uint64) { e.b = appendVarint(e.b, v) }
 
-// Int appends v as a postcard signed integer.
+// Int appends v as a postcard signed integer. Use [Encoder.Int8] for a Rust i8,
+// which is not zigzag-encoded.
 func (e *Encoder) Int(v int64) { e.b = appendVarint(e.b, zigzag(v)) }
+
+// Uint8 appends v as a postcard u8: one raw byte, not a varint.
+func (e *Encoder) Uint8(v uint8) { e.b = append(e.b, v) }
+
+// Int8 appends v as a postcard i8: one raw byte holding the two's complement,
+// not a zigzag varint.
+func (e *Encoder) Int8(v int8) { e.b = append(e.b, byte(v)) }
 
 // Bool appends v as a postcard bool.
 func (e *Encoder) Bool(v bool) {
@@ -136,9 +150,13 @@ func (e *Encoder) value(v reflect.Value) error {
 		return e.value(v.Elem())
 	case reflect.Bool:
 		e.Bool(v.Bool())
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+	case reflect.Uint8:
+		e.Uint8(uint8(v.Uint()))
+	case reflect.Int8:
+		e.Int8(int8(v.Int()))
+	case reflect.Uint, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		e.Uint(v.Uint())
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+	case reflect.Int, reflect.Int16, reflect.Int32, reflect.Int64:
 		e.Int(v.Int())
 	case reflect.String:
 		return e.bytes([]byte(v.String()))
@@ -215,10 +233,21 @@ func (d *Decoder) Decode(v any) error {
 // Done reports whether d consumed all input.
 func (d *Decoder) Done() bool { return d.off == len(d.b) }
 
-// Uint decodes a postcard unsigned integer.
+// Uint decodes a postcard unsigned integer. Use [Decoder.Uint8] for a Rust u8,
+// which is not varint-encoded.
 func (d *Decoder) Uint() (uint64, error) { return d.varint() }
 
-// Int decodes a postcard signed integer.
+// Uint8 decodes a postcard u8: one raw byte.
+func (d *Decoder) Uint8() (uint8, error) { return d.byte() }
+
+// Int8 decodes a postcard i8: one raw byte holding the two's complement.
+func (d *Decoder) Int8() (int8, error) {
+	b, err := d.byte()
+	return int8(b), err
+}
+
+// Int decodes a postcard signed integer. Use [Decoder.Int8] for a Rust i8,
+// which is not zigzag-encoded.
 func (d *Decoder) Int() (int64, error) {
 	x, err := d.varint()
 	if err != nil {
@@ -297,7 +326,19 @@ func (d *Decoder) value(v reflect.Value) error {
 			return err
 		}
 		v.SetBool(x)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+	case reflect.Uint8:
+		x, err := d.Uint8()
+		if err != nil {
+			return err
+		}
+		v.SetUint(uint64(x))
+	case reflect.Int8:
+		x, err := d.Int8()
+		if err != nil {
+			return err
+		}
+		v.SetInt(int64(x))
+	case reflect.Uint, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		x, err := d.varint()
 		if err != nil {
 			return err
@@ -306,7 +347,7 @@ func (d *Decoder) value(v reflect.Value) error {
 			return fmt.Errorf("postcard: %d overflows %s", x, v.Type())
 		}
 		v.SetUint(x)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+	case reflect.Int, reflect.Int16, reflect.Int32, reflect.Int64:
 		i, err := d.Int()
 		if err != nil {
 			return err
