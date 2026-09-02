@@ -142,6 +142,34 @@ func (t *endpointFakeCustomTransport) lastSend() (endpointFakeCustomSend, bool) 
 
 // TestEndpointSecretKey verifies SecretKey returns the configured key and that
 // its public half matches the endpoint id.
+// TestBindPacketConnFamily pins that the socket family follows the bind
+// address. net.ListenUDP("udp", "0.0.0.0:0") returns a dual-stack socket whose
+// LocalAddr reports [::], which made Endpoint.LocalAddr contradict WithBindAddr.
+func TestBindPacketConnFamily(t *testing.T) {
+	tests := []struct {
+		name    string
+		bind    string
+		wantIs4 bool
+	}{
+		{"ipv4 unspecified", "0.0.0.0:0", true},
+		{"ipv4 loopback", "127.0.0.1:0", true},
+		{"ipv6 unspecified is dual-stack", "[::]:0", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn, err := bindPacketConn(config{}, netip.MustParseAddrPort(tt.bind))
+			if err != nil {
+				t.Fatalf("bindPacketConn(%s): %v", tt.bind, err)
+			}
+			defer conn.Close()
+			got := conn.LocalAddr().(*net.UDPAddr).AddrPort().Addr()
+			if got.Is4() != tt.wantIs4 {
+				t.Errorf("bind %s: LocalAddr %v, Is4 = %v, want %v", tt.bind, got, got.Is4(), tt.wantIs4)
+			}
+		})
+	}
+}
+
 func TestEndpointSecretKey(t *testing.T) {
 	ctx := context.Background()
 	sk, _ := key.GenerateSecretKey()

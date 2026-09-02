@@ -184,7 +184,12 @@ func WithSourceAddressValidation(f func(net.Addr) bool) Option {
 }
 
 // WithBindAddr sets the local UDP address to bind. The default is an
-// OS-assigned port on the unspecified address.
+// OS-assigned port on the IPv6 unspecified address, which the OS gives a
+// dual-stack socket.
+//
+// An IPv4 address, 0.0.0.0 included, binds an IPv4-only socket, so the endpoint
+// reaches IPv4 peers only and [Endpoint.LocalAddr] reports the family that was
+// asked for. Pass an IPv6 address, or nothing, for dual-stack.
 func WithBindAddr(addr netip.AddrPort) Option {
 	return func(c *config) error {
 		c.bindAddr = addr
@@ -675,7 +680,9 @@ func (e *Endpoint) ID() key.EndpointID { return e.secretKey.Public().EndpointID(
 // SecretKey returns the endpoint's secret key.
 func (e *Endpoint) SecretKey() key.SecretKey { return e.secretKey }
 
-// LocalAddr returns the bound UDP address.
+// LocalAddr returns the bound UDP address, as reported by the socket. For a
+// dual-stack socket that is an IPv6 address whatever [WithBindAddr] was given;
+// see WithBindAddr for which bind addresses are dual-stack.
 func (e *Endpoint) LocalAddr() netip.AddrPort {
 	if e.udp == nil {
 		return netip.AddrPort{}
