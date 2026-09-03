@@ -1,8 +1,7 @@
-claude-code: 2.1.257 (Claude Code)
+claude-code: 2.1.257
 model: claude-opus-5[1m]
-tty: not a tty
-n/a
-pid: 49479
+tty: none (non-interactive)
+pid: 49625
 ITERM_SESSION_ID: w7t3p19:7948B1ED-15D9-4733-B6BF-4560992CAF21
 session: f3c4f703-a4b5-40cd-bec6-7a1179fc1f69
-date: 2026-09-03T23:24:21Z
+date: 2026-09-03T23:24:25Z
