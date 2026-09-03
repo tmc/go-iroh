@@ -10,12 +10,14 @@
 // Usage:
 //
 //	qngregen           regenerate internal/qng in place (refuses if edited)
+//	qngregen -check    report how internal/qng differs from pinned upstream
 //	qngregen -o dir    write a pristine forked tree to dir
 package main
 
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -27,6 +29,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -50,7 +53,10 @@ var importRewrites = []struct {
 	{"crypto/tls", "github.com/tmc/go-iroh/internal/itls/tls"},
 }
 
-var outDir = flag.String("o", "", "write a pristine forked tree to `dir` instead of regenerating in place")
+var (
+	outDir = flag.String("o", "", "write a pristine forked tree to `dir` instead of regenerating in place")
+	check  = flag.Bool("check", false, "report how internal/qng differs from the pinned upstream release")
+)
 
 func main() {
 	flag.Parse()
@@ -76,7 +82,7 @@ func run() error {
 		if err := generate(*outDir); err != nil {
 			return err
 		}
-		fmt.Printf("wrote pristine tree to %s\n", *outDir)
+		fmt.Fprintf(os.Stderr, "wrote pristine tree to %s\n", *outDir)
 		return nil
 	}
 
@@ -93,6 +99,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if *check {
+		delta.report(os.Stdout)
+		return nil
+	}
 	if !delta.empty() {
 		return fmt.Errorf("%s carries local edits (%s); regenerating would discard them.\n"+
 			"To take a new upstream release, generate a pristine tree with -o and merge it.\n"+
@@ -101,7 +111,7 @@ func run() error {
 	if err := replaceTree(destDir, base); err != nil {
 		return err
 	}
-	fmt.Println("done; now run: go build ./... && go test ./internal/qng/")
+	fmt.Fprintln(os.Stderr, "done; now run: go build ./... && go test ./internal/qng/")
 	return nil
 }
 
@@ -117,7 +127,7 @@ func generate(dir string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("forking quic-go from: %s\n", modDir)
+	fmt.Fprintf(os.Stderr, "forking quic-go from: %s\n", modDir)
 	if err := os.RemoveAll(dir); err != nil {
 		return err
 	}
@@ -149,7 +159,7 @@ func generate(dir string) error {
 			count++
 		}
 	}
-	fmt.Printf("copied %d files\n", count)
+	fmt.Fprintf(os.Stderr, "copied %d files\n", count)
 
 	if err := rewriteGoFiles(dir); err != nil {
 		return err
@@ -168,6 +178,10 @@ type delta struct {
 	added    []string
 	tests    []string
 	removed  []string
+
+	// changed counts the lines a file differs from its pristine version by,
+	// keyed by path. Files added by go-iroh count their whole length.
+	changed map[string]int
 }
 
 func (d *delta) empty() bool {
@@ -177,6 +191,41 @@ func (d *delta) empty() bool {
 func (d *delta) summary() string {
 	return fmt.Sprintf("%d modified, %d added, %d test files, %d removed",
 		len(d.modified), len(d.added), len(d.tests), len(d.removed))
+}
+
+// report writes the delta as a file-by-file listing, most-changed first. It is
+// the fork's inventory: what go-iroh has changed in quic-go, and by how much.
+func (d *delta) report(w io.Writer) {
+	fmt.Fprintf(w, "\n%s, %d changed lines\n\n", d.summary(), d.totalChanged())
+	d.section(w, "modified", d.modified)
+	d.section(w, "added", d.added)
+	d.section(w, "tests", d.tests)
+	d.section(w, "removed", d.removed)
+}
+
+func (d *delta) totalChanged() int {
+	n := 0
+	for _, c := range d.changed {
+		n += c
+	}
+	return n
+}
+
+func (d *delta) section(w io.Writer, name string, files []string) {
+	if len(files) == 0 {
+		return
+	}
+	files = slices.SortedFunc(slices.Values(files), func(a, b string) int {
+		if n := d.changed[b] - d.changed[a]; n != 0 {
+			return n
+		}
+		return strings.Compare(a, b)
+	})
+	fmt.Fprintf(w, "%s (%d):\n", name, len(files))
+	for _, f := range files {
+		fmt.Fprintf(w, "\t%6d  %s\n", d.changed[f], f)
+	}
+	fmt.Fprintln(w)
 }
 
 // compare reports how the tree at fork differs from the pristine tree at base.
@@ -189,7 +238,10 @@ func compare(base, fork string) (*delta, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := new(delta)
+	d := &delta{changed: make(map[string]int)}
+	if err := d.countChanges(base, fork); err != nil {
+		return nil, err
+	}
 	for _, rel := range forkFiles {
 		switch {
 		case !contains(baseFiles, rel):
@@ -214,6 +266,48 @@ func compare(base, fork string) (*delta, error) {
 		}
 	}
 	return d, nil
+}
+
+// countChanges records how many lines each file differs by, using git's diff
+// over two directories outside any repository. A file present in only one tree
+// counts its whole length. Paths are read in -z form, where each record is a
+// count pair followed by the two pathnames, because git otherwise abbreviates
+// a differing directory prefix as "{base => fork}".
+func (d *delta) countChanges(base, fork string) error {
+	// --no-renames keeps the counts per path: without it git pairs a file the
+	// fork adds with one it drops and reports the difference between them.
+	cmd := exec.Command("git", "diff", "--no-index", "--numstat", "-z", "--no-renames", "--", base, fork)
+	out, err := cmd.Output()
+	if err != nil {
+		// git diff exits 1 when the trees differ, which is the expected case.
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+			return fmt.Errorf("git diff --numstat: %w", err)
+		}
+	}
+	fields := strings.Split(string(out), "\x00")
+	for i := 0; i+2 < len(fields); i += 3 {
+		counts := strings.Fields(fields[i])
+		if len(counts) != 2 {
+			continue
+		}
+		added, err1 := strconv.Atoi(counts[0])
+		deleted, err2 := strconv.Atoi(counts[1])
+		if err1 != nil || err2 != nil {
+			continue // a binary file, counted as "-"
+		}
+		src, dst := fields[i+1], fields[i+2]
+		root, path := fork, dst
+		if dst == os.DevNull {
+			root, path = base, src
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			continue
+		}
+		d.changed[filepath.ToSlash(rel)] = added + deleted
+	}
+	return nil
 }
 
 // treeFiles lists the files under dir, as slash-separated paths relative to it,
