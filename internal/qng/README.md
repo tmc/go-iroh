@@ -34,20 +34,29 @@ additions are intentionally kept in plainly named files and tests (`multipath_*`
 `observed_addr_*`, `qnt_*`, `retry_admission_test.go`) where possible, with
 small integration edits in the connection, packet, and transport-parameter paths.
 
-## Regenerating (on a quic-go bump)
+## Taking a new upstream release
 
-1. Bump the version: `go get github.com/quic-go/quic-go@<version>` and update
-   the version string in this file and `regenerate.sh`.
-2. Run `./internal/qng/regenerate.sh` from the module root.
-3. `go build ./... && go test ./internal/qng/`.
+The fork is not a pristine copy of quic-go. Alongside the mechanical import
+rewrite, go-iroh edits vendored files in place and adds files of its own, so
+regenerating over the tree would discard that work. `qngregen` refuses to do it:
+run with no arguments it reports the local edits and stops.
 
-The import-rewrite part is mechanical; the regeneration script reproduces it
-from the module cache. Re-review if quic-go changes how it constructs or clones
-`tls.Config`, since RFC 7250 fields must survive `Config.Clone` — see the
-`RawPublicKeys` line in `../itls/tls/common.go`.
+Take a new release as a merge instead. Generate the pristine tree for the
+release the fork was taken from and for the new one, and merge the difference
+into the working tree:
 
-Re-apply the n0 extension additions after regeneration, then run the focused qng
-wire tests and the root iroh interop tests.
+	go run ./internal/qng/cmd/qngregen -o /tmp/qng-old   # at the current pin
+	go get github.com/quic-go/quic-go@<version>
+	go run ./internal/qng/cmd/qngregen -o /tmp/qng-new   # at the new pin
+
+Both trees are reproducible from the module cache at any time, so the merge base
+never has to be stored. Merge `/tmp/qng-old` -> `/tmp/qng-new` onto
+`internal/qng`, resolve the conflicts, and update the version string below.
+
+Then `go build ./... && go test ./internal/qng/`, followed by the focused qng
+wire tests and the root iroh interop tests. Re-review if quic-go changes how it
+constructs or clones `tls.Config`, since RFC 7250 fields must survive
+`Config.Clone` — see the `RawPublicKeys` line in `../itls/tls/common.go`.
 
 ## When to break this fork
 

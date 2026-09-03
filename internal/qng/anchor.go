@@ -6,8 +6,8 @@
 //
 // The graph edge serves two purposes. It records which quic-go release this
 // fork derives from, so that anyone auditing go-iroh's dependencies sees the
-// provenance in go.mod without reading this directory. It also pins the
-// version that the regeneration procedure re-forks from the module cache.
+// provenance in go.mod without reading this directory. It also keeps that
+// version in the module cache, which is what qngregen re-forks from.
 package quic
 
 import _ "github.com/quic-go/quic-go"

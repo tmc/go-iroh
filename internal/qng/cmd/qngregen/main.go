@@ -1,5 +1,16 @@
 // Command qngregen regenerates internal/qng from the quic-go module pinned in
 // go.mod.
+//
+// The fork is not a pristine copy of quic-go: go-iroh modifies vendored files
+// in place and adds files of its own. Regenerating over that tree would discard
+// those edits, so regeneration refuses to run unless the tree still matches the
+// pinned upstream release. To take a new upstream release, generate a pristine
+// tree with -o and merge it; see internal/qng/README.md.
+//
+// Usage:
+//
+//	qngregen           regenerate internal/qng in place (refuses if edited)
+//	qngregen -o dir    write a pristine forked tree to dir
 package main
 
 import (
@@ -26,15 +37,6 @@ const (
 	destDir    = "internal/qng"
 )
 
-var keepPaths = []string{
-	"README.md",
-	"rawkey_quic_test.go",
-	"anchor.go",
-	"regenerate.sh",
-	"n0ext",
-	"cmd/qngregen",
-}
-
 var importRewrites = []struct {
 	old string
 	new string
@@ -48,10 +50,12 @@ var importRewrites = []struct {
 	{"crypto/tls", "github.com/tmc/go-iroh/internal/itls/tls"},
 }
 
+var outDir = flag.String("o", "", "write a pristine forked tree to `dir` instead of regenerating in place")
+
 func main() {
 	flag.Parse()
 	if flag.NArg() != 0 {
-		fmt.Fprintf(os.Stderr, "usage: go run ./internal/qng/cmd/qngregen\n")
+		flag.Usage()
 		os.Exit(2)
 	}
 	if err := run(); err != nil {
@@ -68,6 +72,43 @@ func run() error {
 	if err := os.Chdir(root); err != nil {
 		return err
 	}
+	if *outDir != "" {
+		if err := generate(*outDir); err != nil {
+			return err
+		}
+		fmt.Printf("wrote pristine tree to %s\n", *outDir)
+		return nil
+	}
+
+	tmp, err := os.MkdirTemp("", "qngregen-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	base := filepath.Join(tmp, "base")
+	if err := generate(base); err != nil {
+		return err
+	}
+	delta, err := compare(base, destDir)
+	if err != nil {
+		return err
+	}
+	if !delta.empty() {
+		return fmt.Errorf("%s carries local edits (%s); regenerating would discard them.\n"+
+			"To take a new upstream release, generate a pristine tree with -o and merge it.\n"+
+			"See %s/README.md", destDir, delta.summary(), destDir)
+	}
+	if err := replaceTree(destDir, base); err != nil {
+		return err
+	}
+	fmt.Println("done; now run: go build ./... && go test ./internal/qng/")
+	return nil
+}
+
+// generate writes a pristine forked copy of the pinned quic-go release to dir:
+// every non-test Go file of the module, with its imports rewritten. It carries
+// none of go-iroh's own files or edits.
+func generate(dir string) error {
 	modDir, err := moduleDir(modulePath)
 	if err != nil {
 		return err
@@ -77,32 +118,19 @@ func run() error {
 		return err
 	}
 	fmt.Printf("forking quic-go from: %s\n", modDir)
-
-	tmp, err := os.MkdirTemp("", "qngregen-*")
-	if err != nil {
+	if err := os.RemoveAll(dir); err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmp)
-	if err := preserveOverlays(tmp); err != nil {
-		return err
-	}
-
-	if err := os.RemoveAll(destDir); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 
 	count := 0
 	for _, pkg := range pkgs {
-		rel := strings.TrimPrefix(pkg, modulePath)
-		rel = strings.TrimPrefix(rel, "/")
-		src := filepath.Join(modDir, rel)
-		dst := filepath.Join(destDir, rel)
+		rel := strings.TrimPrefix(strings.TrimPrefix(pkg, modulePath), "/")
+		src, dst := filepath.Join(modDir, rel), filepath.Join(dir, rel)
 		if rel == "" {
-			src = modDir
-			dst = destDir
+			src, dst = modDir, dir
 		}
 		if err := os.MkdirAll(dst, 0o755); err != nil {
 			return err
@@ -123,20 +151,131 @@ func run() error {
 	}
 	fmt.Printf("copied %d files\n", count)
 
-	if err := rewriteGoFiles(destDir); err != nil {
+	if err := rewriteGoFiles(dir); err != nil {
 		return err
 	}
-	if err := copyFile(filepath.Join(modDir, "LICENSE"), filepath.Join(destDir, "LICENSE")); err != nil {
+	if err := copyFile(filepath.Join(modDir, "LICENSE"), filepath.Join(dir, "LICENSE")); err != nil {
 		return err
 	}
-	if err := restoreOverlays(tmp); err != nil {
+	return gofmt(dir)
+}
+
+// A delta describes how a fork tree differs from the pristine tree it was
+// generated from. Test files are counted separately: regeneration never copies
+// upstream tests, so every test file in the fork is go-iroh's own.
+type delta struct {
+	modified []string
+	added    []string
+	tests    []string
+	removed  []string
+}
+
+func (d *delta) empty() bool {
+	return len(d.modified) == 0 && len(d.added) == 0 && len(d.tests) == 0 && len(d.removed) == 0
+}
+
+func (d *delta) summary() string {
+	return fmt.Sprintf("%d modified, %d added, %d test files, %d removed",
+		len(d.modified), len(d.added), len(d.tests), len(d.removed))
+}
+
+// compare reports how the tree at fork differs from the pristine tree at base.
+func compare(base, fork string) (*delta, error) {
+	baseFiles, err := treeFiles(base)
+	if err != nil {
+		return nil, err
+	}
+	forkFiles, err := treeFiles(fork)
+	if err != nil {
+		return nil, err
+	}
+	d := new(delta)
+	for _, rel := range forkFiles {
+		switch {
+		case !contains(baseFiles, rel):
+			if strings.HasSuffix(rel, "_test.go") {
+				d.tests = append(d.tests, rel)
+			} else {
+				d.added = append(d.added, rel)
+			}
+		default:
+			same, err := sameFile(filepath.Join(base, rel), filepath.Join(fork, rel))
+			if err != nil {
+				return nil, err
+			}
+			if !same {
+				d.modified = append(d.modified, rel)
+			}
+		}
+	}
+	for _, rel := range baseFiles {
+		if !contains(forkFiles, rel) {
+			d.removed = append(d.removed, rel)
+		}
+	}
+	return d, nil
+}
+
+// treeFiles lists the files under dir, as slash-separated paths relative to it,
+// sorted. Version control metadata is skipped.
+func treeFiles(dir string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(dir, func(path string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if e.IsDir() {
+			if e.Name() == ".git" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		files = append(files, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+func contains(sorted []string, s string) bool {
+	i := sort.SearchStrings(sorted, s)
+	return i < len(sorted) && sorted[i] == s
+}
+
+func sameFile(a, b string) (bool, error) {
+	x, err := os.ReadFile(a)
+	if err != nil {
+		return false, err
+	}
+	y, err := os.ReadFile(b)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(x, y), nil
+}
+
+// replaceTree replaces dst with src, leaving dst untouched if the move fails.
+func replaceTree(dst, src string) error {
+	old := dst + ".old"
+	if err := os.RemoveAll(old); err != nil {
 		return err
 	}
-	if err := gofmt(destDir); err != nil {
+	if err := os.Rename(dst, old); err != nil {
 		return err
 	}
-	fmt.Println("done; now run: go build ./... && go test ./internal/qng/")
-	return nil
+	if err := copyTree(src, dst); err != nil {
+		os.RemoveAll(dst)
+		os.Rename(old, dst)
+		return err
+	}
+	return os.RemoveAll(old)
 }
 
 func moduleRoot() (string, error) {
@@ -184,42 +323,6 @@ func quicGoPackages() ([]string, error) {
 	}
 	sort.Strings(pkgs)
 	return pkgs, nil
-}
-
-func preserveOverlays(tmp string) error {
-	for _, rel := range keepPaths {
-		src := filepath.Join(destDir, rel)
-		if _, err := os.Stat(src); err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return err
-		}
-		if err := copyTree(src, filepath.Join(tmp, rel)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func restoreOverlays(tmp string) error {
-	return filepath.WalkDir(tmp, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(tmp, path)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-		dst := filepath.Join(destDir, rel)
-		if d.IsDir() {
-			return os.MkdirAll(dst, 0o755)
-		}
-		return copyFile(path, dst)
-	})
 }
 
 func copyTree(src, dst string) error {
