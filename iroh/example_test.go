@@ -5,12 +5,45 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"os"
 
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 	"github.com/tmc/go-iroh/relay"
 )
+
+// ExampleQLOGDir installs a per-endpoint qlog sink. The same sink can be
+// passed to several endpoints when their traces belong in one directory.
+func ExampleQLOGDir() {
+	dir, err := os.MkdirTemp("", "iroh-qlog-")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(dir)
+
+	sink := iroh.QLOGDir(dir)
+	w := sink(context.Background(), iroh.QLOGConnection{
+		ConnectionID: "0102",
+		Client:       true,
+	})
+	if w == nil {
+		panic("create qlog")
+	}
+	if _, err := io.WriteString(w, "trace"); err != nil {
+		panic(err)
+	}
+	if err := w.Close(); err != nil {
+		panic(err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(entries[0].Name())
+	// Output: 0102_client.sqlog
+}
 
 // ExampleEndpoint_Online binds an endpoint that uses the n0 staging relays and
 // waits until it has a connected home relay before dialing.
@@ -96,6 +129,55 @@ func ExampleEndpoint_RemoteInfo() {
 	// true true true
 }
 
+// ExampleEndpoint_Connect_addressLookup dials a peer using only its endpoint
+// ID after an address lookup service supplies its transport address.
+func ExampleEndpoint_Connect_addressLookup() {
+	ctx := context.Background()
+	const alpn = "iroh/address-lookup/1"
+
+	server, err := iroh.Bind(ctx,
+		iroh.WithALPNs(alpn),
+		iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
+	)
+	if err != nil {
+		panic(err)
+	}
+	defer server.Shutdown(ctx)
+
+	lookup := iroh.NewMemoryLookup()
+	lookup.AddEndpointAddr(netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()))
+	var services iroh.AddressLookupServices
+	services.AddResolver(lookup)
+	client, err := iroh.Bind(ctx,
+		iroh.WithAddressLookup(&services),
+		iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
+	)
+	if err != nil {
+		panic(err)
+	}
+	defer client.Shutdown(ctx)
+
+	accepted := make(chan *iroh.Conn, 1)
+	go func() {
+		conn, err := server.Accept(ctx)
+		if err != nil {
+			close(accepted)
+			return
+		}
+		accepted <- conn
+	}()
+	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()), alpn)
+	if err != nil {
+		panic(err)
+	}
+	defer conn.CloseWithError(0, "")
+	if server := <-accepted; server != nil {
+		defer server.CloseWithError(0, "")
+	}
+	fmt.Println(conn.RemoteID() == server.ID())
+	// Output: true
+}
+
 func echo(ctx context.Context, conn *iroh.Conn) error {
 	s, err := conn.AcceptStream(ctx)
 	if err != nil {
@@ -148,7 +230,9 @@ func ExampleRouter() {
 
 	s, _ := conn.OpenStreamSync(ctx)
 	s.Write([]byte("hello"))
-	s.Close()
+	// CloseWrite tells the server that the request is complete while leaving
+	// the read side open for its response.
+	s.CloseWrite()
 	got, _ := io.ReadAll(s)
 	fmt.Printf("%s\n", got)
 	// Output: hello

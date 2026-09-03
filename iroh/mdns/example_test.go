@@ -3,6 +3,8 @@ package mdns_test
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/iroh/mdns"
@@ -13,8 +15,12 @@ func ExampleDiscovery() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sk, _ := key.GenerateSecretKey()
-	discovery := mdns.New(sk.Public().EndpointID())
+	sk, err := key.GenerateSecretKey()
+	if err != nil {
+		panic(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	discovery := mdns.New(sk.Public().EndpointID(), mdns.WithLogger(logger))
 	go func() { _ = discovery.Start(ctx) }()
 
 	var services iroh.AddressLookupServices
