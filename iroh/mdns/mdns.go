@@ -13,11 +13,9 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/netip"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/tmc/go-iroh/dns"
@@ -25,7 +23,6 @@ import (
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 	"golang.org/x/net/ipv4"
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -210,24 +207,6 @@ func listenIPv4MDNS(ctx context.Context) (*net.UDPConn, error) {
 		}
 	}
 	return conn, nil
-}
-
-func reusePortControl(_, _ string, c syscall.RawConn) error {
-	var firstErr error
-	err := c.Control(func(fd uintptr) {
-		if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 1); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		if runtime.GOOS != "windows" {
-			if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil && firstErr == nil {
-				firstErr = err
-			}
-		}
-	})
-	if err != nil {
-		return err
-	}
-	return firstErr
 }
 
 // Publish advertises data on the local network. It is fire-and-forget and
