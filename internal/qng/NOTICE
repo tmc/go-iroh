@@ -1,0 +1,11 @@
+This package contains code copied from quic-go
+(https://github.com/quic-go/quic-go) at v0.62.0, used under the MIT
+license reproduced in LICENSE.
+
+	Copyright (c) 2016 the quic-go authors & Google, Inc.
+
+The copied files are modified: imports are rewritten to point at this
+repository's raw-public-key TLS implementation and at the copied packages
+themselves, and the fork carries additional changes for wire compatibility
+with iroh. README.md describes what the fork changes and how the copy is
+regenerated.

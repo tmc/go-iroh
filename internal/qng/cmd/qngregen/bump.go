@@ -74,21 +74,29 @@ func bumpTo(version string) error {
 // recordVersion updates the release named at the end of the README, which is
 // the only place the fork's provenance is written down for a reader.
 func recordVersion(version string) error {
-	path := filepath.Join(destDir, "README.md")
+	if err := replaceOnce(filepath.Join(destDir, "README.md"), "quic-go **", "quic-go **"+version+"**."); err != nil {
+		return err
+	}
+	return replaceOnce(filepath.Join(destDir, "NOTICE"), "(https://github.com/quic-go/quic-go) at ", "(https://github.com/quic-go/quic-go) at "+version+", used under the MIT")
+}
+
+// replaceOnce rewrites the remainder of the line that starts at the last
+// occurrence of prefix in the named file. It is how the version recorded in
+// prose is kept in step with the module pin.
+func replaceOnce(path, prefix, line string) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	i := strings.LastIndex(string(b), "quic-go **")
+	i := strings.LastIndex(string(b), prefix)
 	if i < 0 {
-		return fmt.Errorf("%s: no version line to update", path)
+		return fmt.Errorf("%s: no %q line to update", path, prefix)
 	}
 	j := strings.Index(string(b[i:]), "\n")
 	if j < 0 {
 		j = len(b) - i
 	}
-	updated := string(b[:i]) + "quic-go **" + version + "**." + string(b[i+j:])
-	return os.WriteFile(path, []byte(updated), 0o644)
+	return os.WriteFile(path, []byte(string(b[:i])+line+string(b[i+j:])), 0o644)
 }
 
 // A mergeResult records what taking a release did to each file.

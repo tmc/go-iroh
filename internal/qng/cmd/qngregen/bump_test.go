@@ -90,3 +90,50 @@ func TestMerge(t *testing.T) {
 		t.Errorf("orphaned.go = %q, want the fork's edit kept", got)
 	}
 }
+
+func TestReplaceOnce(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		prefix  string
+		line    string
+		want    string
+	}{{
+		name:    "readme version",
+		content: "## Forked version\n\nquic-go **v0.62.0**.\n",
+		prefix:  "quic-go **",
+		line:    "quic-go **v0.63.0**.",
+		want:    "## Forked version\n\nquic-go **v0.63.0**.\n",
+	}, {
+		name:    "notice version",
+		content: "copied from quic-go\n(https://github.com/quic-go/quic-go) at v0.62.0, used under the MIT\nlicense.\n",
+		prefix:  "(https://github.com/quic-go/quic-go) at ",
+		line:    "(https://github.com/quic-go/quic-go) at v0.63.0, used under the MIT",
+		want:    "copied from quic-go\n(https://github.com/quic-go/quic-go) at v0.63.0, used under the MIT\nlicense.\n",
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "f")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := replaceOnce(path, tt.prefix, tt.line); err != nil {
+				t.Fatal(err)
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(b) != tt.want {
+				t.Errorf("got:\n%s\nwant:\n%s", b, tt.want)
+			}
+		})
+	}
+	path := filepath.Join(t.TempDir(), "f")
+	if err := os.WriteFile(path, []byte("no version here\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceOnce(path, "quic-go **", "x"); err == nil {
+		t.Error("replaceOnce succeeded on a file with no version line")
+	}
+}
