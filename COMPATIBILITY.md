@@ -138,10 +138,11 @@ signature changed.
 `i8` as its two's complement; go-iroh varint-encoded the first and zigzagged the
 second, so `uint8(200)` was `c801` where Rust gives `c8`, and `int8(-2)` was `03`
 where Rust gives `fe`. Any cross-language protocol carrying an 8-bit field
-diverged silently. No type in this module has one, which is why nothing caught
-it. Values below 128 encode identically under both rules, so records written
-before this change are still readable. Proven against Rust output by
-`vectors/postcard-8bit`.
+diverged silently. The postcard-encoded types in this module carry their enums
+as `u64`, which is why nothing caught it. A `u8` below 128 encodes identically
+under both rules, so unsigned data written before this change is still readable;
+`i8` is not, since zigzag and two's complement agree only on zero. Proven
+against Rust output by `vectors/postcard-8bit`.
 
 Padded varints are rejected. `ac8200` and `ac02` both decoded to 300, and `8100`
 was a valid length prefix for a one-byte slice; a record identified by a digest
