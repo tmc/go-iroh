@@ -63,8 +63,12 @@ func WithClientRate(bytesPerSecond int64) Option {
 	return func(s *Server) { s.clientRate = bytesPerSecond }
 }
 
-// New returns a relay server.
-func New(opts ...Option) *Server {
+// New returns a relay server with default settings.
+// Use [NewWithOptions] to configure it.
+func New() *Server { return NewWithOptions() }
+
+// NewWithOptions returns a relay server configured by opts.
+func NewWithOptions(opts ...Option) *Server {
 	s := &Server{
 		clients:          make(map[key.EndpointID]*session),
 		establishTimeout: defaultEstablishTimeout,
