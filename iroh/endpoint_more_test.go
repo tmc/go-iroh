@@ -27,7 +27,7 @@ import (
 
 func withNetReportRunner(run netReportRunner) Option {
 	return func(c *config) error {
-		c.enableNetReport = true
+		c.disableNetReport = false
 		c.netReport = run
 		return nil
 	}

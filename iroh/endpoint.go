@@ -97,30 +97,30 @@ const (
 
 // config holds the options assembled by [Option] values before [Bind].
 type config struct {
-	secretKey       key.SecretKey
-	haveKey         bool
-	alpns           []string
-	bindAddr        netip.AddrPort
-	bindOpts        BindOpts
-	haveBindAddr    bool
-	disableIP       bool
-	relayMode       relay.Mode
-	lookup          *AddressLookupServices
-	enableNetReport bool
-	netReport       netReportRunner
-	netReportEvery  time.Duration
-	natPMP          bool
-	natPMPGateway   netip.Addr
-	natPMPPort      uint16
-	keyLogWriter    io.Writer
-	qlogSink        func(context.Context, QLOGConnection) io.WriteCloser
-	keyExchange     KeyExchangePolicy
-	transportConfig *QUICTransportConfig
-	pathSelector    socket.PathSelector
-	relayFirst      bool
-	verifySource    func(net.Addr) bool
-	hooks           []EndpointHooks
-	custom          []CustomTransport
+	secretKey        key.SecretKey
+	haveKey          bool
+	alpns            []string
+	bindAddr         netip.AddrPort
+	bindOpts         BindOpts
+	haveBindAddr     bool
+	disableIP        bool
+	relayMode        relay.Mode
+	lookup           *AddressLookupServices
+	disableNetReport bool
+	netReport        netReportRunner
+	netReportEvery   time.Duration
+	natPMP           bool
+	natPMPGateway    netip.Addr
+	natPMPPort       uint16
+	keyLogWriter     io.Writer
+	qlogSink         func(context.Context, QLOGConnection) io.WriteCloser
+	keyExchange      KeyExchangePolicy
+	transportConfig  *QUICTransportConfig
+	pathSelector     socket.PathSelector
+	relayFirst       bool
+	verifySource     func(net.Addr) bool
+	hooks            []EndpointHooks
+	custom           []CustomTransport
 }
 
 // Option configures an [Endpoint] at [Bind] time.
@@ -302,12 +302,27 @@ func WithRelayMode(mode relay.Mode) Option {
 	}
 }
 
-// WithNetReport enables background net_report refreshes after [Bind]. When
-// relays are configured, the report's QAD-derived global addresses are
-// advertised as local QNT candidates for active remotes.
+// WithNetReport enables background net_report refreshes after [Bind].
+//
+// Deprecated: net_report runs by default whenever relays are configured. Use
+// [WithoutNetReport] to turn it off.
 func WithNetReport() Option {
 	return func(c *config) error {
-		c.enableNetReport = true
+		c.disableNetReport = false
+		return nil
+	}
+}
+
+// WithoutNetReport disables background net_report refreshes.
+//
+// net_report measures relay latency and reports the QAD-derived global
+// addresses that are advertised as local QNT candidates for active remotes.
+// Without it the home relay stays whichever relay [Bind] picked to bootstrap
+// with, which is the first in the relay map rather than the nearest one, and
+// [Endpoint.NetReport] never reports a measurement.
+func WithoutNetReport() Option {
+	return func(c *config) error {
+		c.disableNetReport = true
 		return nil
 	}
 }
@@ -618,8 +633,11 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	})
 
 	// Select an initial home relay so relay connectivity starts before the first
-	// net_report finishes. applyNetReport switches to net_report's preferred
-	// relay once latency data is available.
+	// net_report finishes. This pick is the relay map's order, not a latency
+	// measurement; applyNetReport replaces it with net_report's preferred relay
+	// once one is available. [Endpoint.NetReport] reporting false means no
+	// measurement has landed yet and the home relay is still this bootstrap
+	// choice.
 	if ep.relay != nil {
 		if urls := relayMap.URLs(); len(urls) > 0 {
 			ep.relay.SetHomeRelay(urls[0])
@@ -662,7 +680,7 @@ func endpointNetReportRunner(c config, relayMap *relay.Map, dialer netreport.QAD
 	if c.netReport != nil {
 		return c.netReport
 	}
-	if !c.enableNetReport || relayMap.IsEmpty() {
+	if c.disableNetReport || relayMap.IsEmpty() {
 		return nil
 	}
 	client := netreport.NewClient(relayMap)
