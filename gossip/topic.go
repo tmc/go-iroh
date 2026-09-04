@@ -691,12 +691,13 @@ func (r *Receiver) Joined(ctx context.Context) error {
 		// missed until the next change.
 		g.mu.Lock()
 		wait := g.joinWaiter()
+		joined := len(g.neighbors[r.topic.id]) > 0
 		g.mu.Unlock()
-		if r.IsJoined() {
-			return nil
-		}
 		if r.topic.isClosed() {
 			return errors.New("gossip: topic closed")
+		}
+		if joined {
+			return nil
 		}
 		select {
 		case <-ctx.Done():
