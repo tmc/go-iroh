@@ -13,8 +13,11 @@ import (
 
 type receiveStreamTestSender struct{}
 
-func (receiveStreamTestSender) onHasConnectionData()                           {}
-func (receiveStreamTestSender) onHasStreamData(protocol.StreamID, *SendStream) {}
+func (receiveStreamTestSender) onHasConnectionData()                                      {}
+func (receiveStreamTestSender) onHasStreamData(protocol.StreamID, *SendStream)            {}
+func (receiveStreamTestSender) onHasStreamRetransmission(protocol.StreamID, *SendStream)  {}
+func (receiveStreamTestSender) updateStreamPriority(protocol.StreamID)                    {}
+func (receiveStreamTestSender) recordStreamPriorityUpdated(protocol.StreamID, int8, bool) {}
 func (receiveStreamTestSender) onHasStreamControlFrame(protocol.StreamID, streamControlFrameGetter) {
 }
 func (receiveStreamTestSender) onStreamCompleted(protocol.StreamID) {}
@@ -156,8 +159,11 @@ type receiveStreamCompletionSender struct {
 	completed chan protocol.StreamID
 }
 
-func (receiveStreamCompletionSender) onHasConnectionData()                           {}
-func (receiveStreamCompletionSender) onHasStreamData(protocol.StreamID, *SendStream) {}
+func (receiveStreamCompletionSender) onHasConnectionData()                                      {}
+func (receiveStreamCompletionSender) onHasStreamData(protocol.StreamID, *SendStream)            {}
+func (receiveStreamCompletionSender) onHasStreamRetransmission(protocol.StreamID, *SendStream)  {}
+func (receiveStreamCompletionSender) updateStreamPriority(protocol.StreamID)                    {}
+func (receiveStreamCompletionSender) recordStreamPriorityUpdated(protocol.StreamID, int8, bool) {}
 func (receiveStreamCompletionSender) onHasStreamControlFrame(protocol.StreamID, streamControlFrameGetter) {
 }
 func (s receiveStreamCompletionSender) onStreamCompleted(id protocol.StreamID) {

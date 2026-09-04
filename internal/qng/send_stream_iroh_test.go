@@ -13,8 +13,11 @@ import (
 
 type sendStreamIrohSender struct{}
 
-func (sendStreamIrohSender) onHasConnectionData()                           {}
-func (sendStreamIrohSender) onHasStreamData(protocol.StreamID, *SendStream) {}
+func (sendStreamIrohSender) onHasConnectionData()                                      {}
+func (sendStreamIrohSender) onHasStreamData(protocol.StreamID, *SendStream)            {}
+func (sendStreamIrohSender) onHasStreamRetransmission(protocol.StreamID, *SendStream)  {}
+func (sendStreamIrohSender) updateStreamPriority(protocol.StreamID)                    {}
+func (sendStreamIrohSender) recordStreamPriorityUpdated(protocol.StreamID, int8, bool) {}
 func (sendStreamIrohSender) onHasStreamControlFrame(protocol.StreamID, streamControlFrameGetter) {
 }
 func (sendStreamIrohSender) onStreamCompleted(protocol.StreamID) {}

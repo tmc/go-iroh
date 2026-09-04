@@ -106,6 +106,9 @@ func (s streamMachineSender) onHasConnectionData() { s.m.connData = true }
 func (s streamMachineSender) onHasStreamData(id protocol.StreamID, str *SendStream) {
 	s.m.framer.AddActiveStream(id, str)
 }
+func (s streamMachineSender) onHasStreamRetransmission(protocol.StreamID, *SendStream)  {}
+func (s streamMachineSender) updateStreamPriority(protocol.StreamID)                    {}
+func (s streamMachineSender) recordStreamPriorityUpdated(protocol.StreamID, int8, bool) {}
 
 func (s streamMachineSender) onHasStreamControlFrame(id protocol.StreamID, str streamControlFrameGetter) {
 	s.m.framer.AddStreamWithControlFrames(id, str)
