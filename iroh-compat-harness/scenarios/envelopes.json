@@ -19,7 +19,7 @@
       "tier": "stable",
       "upstream_version": "1.0",
       "status": "observed-divergence",
-      "detail": "go-iroh is strictly stricter: it rejects padded varint encodings that postcard 1.1.3 accepts. Upstream's serializer emits only canonical forms, so no upstream-generated traffic is affected."
+      "detail": "go-iroh is strictly stricter: it rejects padded varint encodings that postcard 1.1.3 accepts. No traffic produced by a conforming postcard serializer is affected, since both upstream's serializer and go-iroh's emit only canonical forms. Content relayed verbatim through gossip carries varints produced by the originating endpoint rather than the forwarding peer (gossip/discovery.go:269, docs/heads.go:77), so a non-conforming originator's own message is dropped by go-iroh while upstream accepts it, affecting only that originator."
     }
   ]
 }
