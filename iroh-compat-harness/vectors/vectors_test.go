@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -18,10 +19,13 @@ import (
 var corpusJSON []byte
 
 type corpus struct {
-	Schema         string       `json:"schema"`
-	Iroh           string       `json:"iroh"`
-	Keys           []keyVector  `json:"keys"`
-	PostcardUint   []uintVector `json:"postcard_uint"`
+	Schema         string               `json:"schema"`
+	Iroh           string               `json:"iroh"`
+	Keys           []keyVector          `json:"keys"`
+	PostcardUint   []uintVector         `json:"postcard_uint"`
+	PostcardU8     []u8Vector           `json:"postcard_u8"`
+	PostcardI8     []i8Vector           `json:"postcard_i8"`
+	NonCanonical   []nonCanonicalVector `json:"postcard_non_canonical"`
 	EndpointTicket struct {
 		Encoded string `json:"encoded"`
 		Bytes   string `json:"bytes"`
@@ -48,6 +52,24 @@ type uintVector struct {
 	Postcard string `json:"postcard"`
 }
 
+type u8Vector struct {
+	Value    uint8  `json:"value"`
+	Postcard string `json:"postcard"`
+}
+
+type i8Vector struct {
+	Value    int8   `json:"value"`
+	Postcard string `json:"postcard"`
+}
+
+type nonCanonicalVector struct {
+	Name         string `json:"name"`
+	Type         string `json:"type"`
+	Hex          string `json:"hex"`
+	CanonicalHex string `json:"canonical_hex"`
+	RustAccepted bool   `json:"rust_accepted"`
+}
+
 type customAddrTicketVector struct {
 	Length  int    `json:"length"`
 	Encoded string `json:"encoded"`
@@ -60,7 +82,7 @@ func load(t *testing.T) corpus {
 	if err := json.Unmarshal(corpusJSON, &c); err != nil {
 		t.Fatal(err)
 	}
-	if c.Schema != "go-iroh-l0/1" || c.Iroh != "1.0.3" {
+	if c.Schema != "go-iroh-l0/2" || c.Iroh != "1.0.3" {
 		t.Fatalf("corpus identity = %q, %q", c.Schema, c.Iroh)
 	}
 	return c
@@ -96,6 +118,38 @@ func TestPostcardUintVectors(t *testing.T) {
 		_, got = mutate("postcard-varint", "", got)
 		if want := mustHex(t, v.Postcard); !slices.Equal(got, want) {
 			t.Errorf("postcard(%d) = %x, want %x", v.Value, got, want)
+		}
+	}
+}
+
+// TestPostcard8BitVectors pins the 8-bit encodings, which postcard writes as a
+// single raw byte rather than as a varint: u8 verbatim and i8 in two's
+// complement. Values below 128 encode identically either way, so they are the
+// boundary that makes the raw encoding safe for records signed before it, and
+// the vectors carry them for that reason.
+func TestPostcard8BitVectors(t *testing.T) {
+	c := load(t)
+	if len(c.PostcardU8) != 6 || len(c.PostcardI8) != 5 {
+		t.Fatalf("8-bit vector counts = %d, %d, want 6, 5", len(c.PostcardU8), len(c.PostcardI8))
+	}
+	for _, v := range c.PostcardU8 {
+		got, err := postcard.Marshal(v.Value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, got = mutate("postcard-8bit", "", got)
+		if want := mustHex(t, v.Postcard); !slices.Equal(got, want) {
+			t.Errorf("postcard(uint8(%d)) = %x, want %x", v.Value, got, want)
+		}
+	}
+	for _, v := range c.PostcardI8 {
+		got, err := postcard.Marshal(v.Value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, got = mutate("postcard-8bit", "", got)
+		if want := mustHex(t, v.Postcard); !slices.Equal(got, want) {
+			t.Errorf("postcard(int8(%d)) = %x, want %x", v.Value, got, want)
 		}
 	}
 }
@@ -141,6 +195,47 @@ func TestCustomAddrTicketVectorsDocumentIroh103Incompatibility(t *testing.T) {
 		if slices.Equal(goTicket.EncodeBytes(), mustHex(t, v.Bytes)) {
 			t.Errorf("Rust 1.0.3 and Go CustomAddr ticket length %d unexpectedly matched", v.Length)
 		}
+	}
+}
+
+// TestPostcardVarintStrictness pins a measured divergence rather than a
+// parity claim: go-iroh rejects padded varint encodings that postcard 1.1.3
+// accepts, so it is strictly stricter than upstream. Upstream's serializer
+// emits only canonical forms, so this affects no upstream-generated traffic.
+//
+// The corpus records what Rust actually did with each byte string. If a future
+// postcard adds a canonicality check, rust_accepted flips and this test fails,
+// which is the point: the divergence should not change unnoticed.
+func TestPostcardVarintStrictness(t *testing.T) {
+	vectors := load(t).NonCanonical
+	if len(vectors) == 0 {
+		t.Fatal("corpus has no postcard_non_canonical vectors")
+	}
+	for _, v := range vectors {
+		t.Run(v.Name, func(t *testing.T) {
+			if !v.RustAccepted {
+				t.Errorf("corpus records Rust rejecting %s; upstream converged and the divergence needs re-recording", v.Hex)
+			}
+			if err := unmarshalAs(v.Type, mustHex(t, v.Hex)); err == nil {
+				t.Errorf("Go accepted non-canonical %s", v.Hex)
+			}
+			if err := unmarshalAs(v.Type, mustHex(t, v.CanonicalHex)); err != nil {
+				t.Errorf("Go rejected canonical %s: %v", v.CanonicalHex, err)
+			}
+		})
+	}
+}
+
+func unmarshalAs(kind string, data []byte) error {
+	switch kind {
+	case "u64":
+		var v uint64
+		return postcard.Unmarshal(data, &v)
+	case "bytes":
+		var v []byte
+		return postcard.Unmarshal(data, &v)
+	default:
+		return fmt.Errorf("unknown vector type %q", kind)
 	}
 }
 

@@ -23,6 +23,9 @@ struct Corpus {
     iroh: &'static str,
     keys: Vec<KeyVector>,
     postcard_uint: Vec<UintVector>,
+    postcard_u8: Vec<U8Vector>,
+    postcard_i8: Vec<I8Vector>,
+    postcard_non_canonical: Vec<NonCanonicalVector>,
     endpoint_ticket: TicketVector,
     custom_addr_tickets: Vec<CustomAddrTicketVector>,
     pkarr: PkarrVector,
@@ -41,6 +44,41 @@ struct KeyVector {
 struct UintVector {
     value: u64,
     postcard: String,
+}
+
+#[derive(Serialize)]
+struct U8Vector {
+    value: u8,
+    postcard: String,
+}
+
+#[derive(Serialize)]
+struct I8Vector {
+    value: i8,
+    postcard: String,
+}
+
+#[derive(Serialize)]
+struct NonCanonicalVector {
+    name: &'static str,
+    r#type: &'static str,
+    hex: &'static str,
+    canonical_hex: &'static str,
+    rust_accepted: bool,
+}
+
+#[derive(Deserialize)]
+struct PostcardDecodeRequest {
+    name: String,
+    r#type: String,
+    hex: String,
+}
+
+#[derive(Serialize)]
+struct PostcardDecodeResult {
+    name: String,
+    accepted: bool,
+    value: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -129,6 +167,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Err("gossip-server accepts no arguments".into());
             }
             return gossip_server().await;
+        }
+        if command == "postcard-decode" {
+            if args.next().is_some() {
+                return Err("postcard-decode accepts no arguments".into());
+            }
+            return postcard_decode();
         }
         if command == "custom-addr-decode" {
             if args.next().is_some() {
@@ -455,6 +499,27 @@ fn write_corpus() -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect();
 
+    // 0, 1, and 127 pin the boundary below which a varint and a raw byte
+    // agree; 128, 200, and 255 are where postcard writes u8 verbatim and a
+    // varint would not.
+    let postcard_u8 = [0u8, 1, 127, 128, 200, 255]
+        .into_iter()
+        .map(|value| U8Vector {
+            value,
+            postcard: HEXLOWER.encode(&postcard::to_stdvec(&value).unwrap()),
+        })
+        .collect();
+
+    // postcard writes i8 as two's complement, not zigzag, so the negative
+    // values differ from the signed varint encoding.
+    let postcard_i8 = [-128i8, -2, -1, 0, 127]
+        .into_iter()
+        .map(|value| I8Vector {
+            value,
+            postcard: HEXLOWER.encode(&postcard::to_stdvec(&value).unwrap()),
+        })
+        .collect();
+
     let ticket_key = SecretKey::from_bytes(&decode32(&seeds[1]));
     let addr = EndpointAddr::new(ticket_key.public())
         .with_ip_addr(SocketAddr::from_str("127.0.0.1:4433")?)
@@ -483,15 +548,82 @@ fn write_corpus() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let corpus = Corpus {
-        schema: "go-iroh-l0/1",
+        schema: "go-iroh-l0/2",
         iroh: "1.0.3",
         keys,
         postcard_uint,
+        postcard_u8,
+        postcard_i8,
+        postcard_non_canonical: non_canonical_vectors(),
         endpoint_ticket,
         custom_addr_tickets,
         pkarr,
     };
     serde_json::to_writer_pretty(std::io::stdout(), &corpus)?;
+    println!();
+    Ok(())
+}
+
+// NON_CANONICAL lists padded varint encodings: byte strings that decode to a
+// value whose shortest encoding is canonical_hex. A varint is canonical when
+// its final byte is non-zero, or when it is the single byte 0x00.
+//
+// postcard 1.1.3 accepts all of these. Its decoder accumulates seven bits per
+// byte and returns as soon as the continuation bit clears, with no
+// canonicality check, so go-iroh is strictly stricter here. rust_accepted is
+// filled in by actually decoding, so the corpus records what upstream does
+// rather than what we expect it to do.
+const NON_CANONICAL: &[(&str, &str, &str, &str)] = &[
+    ("overlong-300", "u64", "ac8200", "ac02"),
+    ("overlong-zero", "u64", "8000", "00"),
+    ("overlong-u64-padded", "u64", "81808080808080808000", "01"),
+    ("overlong-slice-length", "bytes", "8100aa", "01aa"),
+];
+
+fn postcard_decode_case(kind: &str, bytes: &[u8]) -> Option<String> {
+    match kind {
+        "u64" => postcard::from_bytes::<u64>(bytes).ok().map(|v| v.to_string()),
+        // postcard encodes a byte sequence as a varint length followed by the
+        // raw bytes, so Vec<u8> reads the same wire form without a new dependency.
+        "bytes" => postcard::from_bytes::<Vec<u8>>(bytes)
+            .ok()
+            .map(|v| HEXLOWER.encode(&v)),
+        _ => None,
+    }
+}
+
+fn non_canonical_vectors() -> Vec<NonCanonicalVector> {
+    NON_CANONICAL
+        .iter()
+        .map(|(name, kind, hex, canonical_hex)| NonCanonicalVector {
+            name,
+            r#type: kind,
+            hex,
+            canonical_hex,
+            // Observed, not asserted: whatever postcard does here is recorded.
+            rust_accepted: postcard_decode_case(kind, &HEXLOWER.decode(hex.as_bytes()).unwrap())
+                .is_some(),
+        })
+        .collect()
+}
+
+fn postcard_decode() -> Result<(), Box<dyn std::error::Error>> {
+    let requests: Vec<PostcardDecodeRequest> = serde_json::from_reader(std::io::stdin())?;
+    let results: Vec<PostcardDecodeResult> = requests
+        .into_iter()
+        .map(|request| {
+            let value = HEXLOWER
+                .decode(request.hex.as_bytes())
+                .ok()
+                .and_then(|bytes| postcard_decode_case(&request.r#type, &bytes));
+            PostcardDecodeResult {
+                name: request.name,
+                accepted: value.is_some(),
+                value,
+            }
+        })
+        .collect();
+    serde_json::to_writer(std::io::stdout(), &results)?;
     println!();
     Ok(())
 }

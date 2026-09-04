@@ -1,5 +1,5 @@
 {
-  "schema": "go-iroh-l0/1",
+  "schema": "go-iroh-l0/2",
   "iroh": "1.0.3",
   "keys": [
     {
@@ -63,6 +63,84 @@
     {
       "value": 18446744073709551615,
       "postcard": "ffffffffffffffffff01"
+    }
+  ],
+  "postcard_u8": [
+    {
+      "value": 0,
+      "postcard": "00"
+    },
+    {
+      "value": 1,
+      "postcard": "01"
+    },
+    {
+      "value": 127,
+      "postcard": "7f"
+    },
+    {
+      "value": 128,
+      "postcard": "80"
+    },
+    {
+      "value": 200,
+      "postcard": "c8"
+    },
+    {
+      "value": 255,
+      "postcard": "ff"
+    }
+  ],
+  "postcard_i8": [
+    {
+      "value": -128,
+      "postcard": "80"
+    },
+    {
+      "value": -2,
+      "postcard": "fe"
+    },
+    {
+      "value": -1,
+      "postcard": "ff"
+    },
+    {
+      "value": 0,
+      "postcard": "00"
+    },
+    {
+      "value": 127,
+      "postcard": "7f"
+    }
+  ],
+  "postcard_non_canonical": [
+    {
+      "name": "overlong-300",
+      "type": "u64",
+      "hex": "ac8200",
+      "canonical_hex": "ac02",
+      "rust_accepted": true
+    },
+    {
+      "name": "overlong-zero",
+      "type": "u64",
+      "hex": "8000",
+      "canonical_hex": "00",
+      "rust_accepted": true
+    },
+    {
+      "name": "overlong-u64-padded",
+      "type": "u64",
+      "hex": "81808080808080808000",
+      "canonical_hex": "01",
+      "rust_accepted": true
+    },
+    {
+      "name": "overlong-slice-length",
+      "type": "bytes",
+      "hex": "8100aa",
+      "canonical_hex": "01aa",
+      "rust_accepted": true
     }
   ],
   "endpoint_ticket": {
