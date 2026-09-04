@@ -304,6 +304,11 @@ func (d *Discovery) handlePacket(packet []byte) {
 // whether packet is a query this Discovery should answer: one asking for the
 // service, or for this endpoint's own instance. A Discovery that publishes
 // nothing answers nothing.
+//
+// The announcement carries the PTR, SRV and TXT records together, so any
+// question they answer gets the whole set. A PTR question names the service or
+// the instance; SRV and TXT name the instance alone, since they describe one
+// instance and the service name does not identify which.
 func (d *Discovery) answerFor(packet []byte) ([]byte, bool) {
 	if d.passive {
 		return nil, false
@@ -321,11 +326,15 @@ func (d *Discovery) answerFor(packet []byte) ([]byte, bool) {
 	service := serviceName(d.serviceName)
 	instance := instanceName(d.serviceName, d.id)
 	for _, q := range questions {
-		if q.typ != dnsTypePTR && q.typ != dnsTypeANY {
-			continue
-		}
-		if strings.EqualFold(q.name, service) || strings.EqualFold(q.name, instance) {
-			return announced, true
+		switch q.typ {
+		case dnsTypePTR, dnsTypeANY:
+			if strings.EqualFold(q.name, service) || strings.EqualFold(q.name, instance) {
+				return announced, true
+			}
+		case dnsTypeSRV, dnsTypeTXT:
+			if strings.EqualFold(q.name, instance) {
+				return announced, true
+			}
 		}
 	}
 	return nil, false

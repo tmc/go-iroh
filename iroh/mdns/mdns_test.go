@@ -5,6 +5,7 @@ package mdns
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"log/slog"
 	"net/netip"
 	"strings"
@@ -266,9 +267,22 @@ func TestPublishLogsWhatItCannotAnnounce(t *testing.T) {
 	}
 }
 
+// buildTypedQuery builds a one-question query of the given type, which
+// buildQuery cannot: it asks PTR for every name.
+func buildTypedQuery(typ uint16, name string) ([]byte, error) {
+	b := dnsBuilder{buf: make([]byte, 12)}
+	binary.BigEndian.PutUint16(b.buf[4:6], 1)
+	if err := b.name(name); err != nil {
+		return nil, err
+	}
+	b.u16(typ)
+	b.u16(dnsClassIN)
+	return b.buf, nil
+}
+
 // TestAnswerForQuery checks the responder's decision: a Discovery answers a PTR
-// query for its service or its own instance with its last announcement, and
-// answers nothing else.
+// query for its service or its own instance, and an SRV or TXT query for its
+// own instance, with its last announcement, and answers nothing else.
 func TestAnswerForQuery(t *testing.T) {
 	sk, err := key.GenerateSecretKey()
 	if err != nil {
@@ -293,6 +307,26 @@ func TestAnswerForQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ownSRV, err := buildTypedQuery(dnsTypeSRV, instanceName(DefaultServiceName, id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownTXT, err := buildTypedQuery(dnsTypeTXT, instanceName(DefaultServiceName, id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceSRV, err := buildTypedQuery(dnsTypeSRV, serviceName(DefaultServiceName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSRV, err := buildTypedQuery(dnsTypeSRV, instanceName(DefaultServiceName, other.Public().EndpointID()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownA, err := buildTypedQuery(dnsTypeA, instanceName(DefaultServiceName, id))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, tt := range []struct {
 		name      string
@@ -304,6 +338,11 @@ func TestAnswerForQuery(t *testing.T) {
 		{name: "service query", published: true, packet: serviceQuery, want: true},
 		{name: "own instance query", published: true, packet: ownQuery, want: true},
 		{name: "another instance query", published: true, packet: otherQuery},
+		{name: "own instance SRV query", published: true, packet: ownSRV, want: true},
+		{name: "own instance TXT query", published: true, packet: ownTXT, want: true},
+		{name: "service SRV query", published: true, packet: serviceSRV},
+		{name: "another instance SRV query", published: true, packet: otherSRV},
+		{name: "own instance A query", published: true, packet: ownA},
 		{name: "nothing published yet", packet: serviceQuery},
 		{name: "passive", published: true, passive: true, packet: serviceQuery},
 	} {
