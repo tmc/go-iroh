@@ -1,6 +1,8 @@
 package runner
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -131,5 +133,62 @@ func TestMarkdownNamesRustCounterpart(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("Markdown() does not contain %q", want)
 		}
+	}
+}
+
+// TestWritePreservesHandWrittenAppendix guards a silent loss: COMPATIBILITY.md
+// carries hand-written prose after AppendixMarker that the generator does not
+// produce, and a regeneration that dropped it would not be noticed until
+// somebody read the file.
+func TestWritePreservesHandWrittenAppendix(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "COMPATIBILITY.md")
+	base := appendixReport()
+	appendix := "\n" + AppendixMarker + "\n\n### v0.1.1\n\nHand-written prose.\n"
+	if err := os.WriteFile(path, append(base.Markdown(), appendix...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := appendixReport()
+	if err := r.Write(filepath.Join(root, "results"), root); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(string(got), appendix) {
+		t.Fatalf("regenerated file did not preserve the hand-written appendix:\n%s", got)
+	}
+	if strings.Count(string(got), AppendixMarker) != 1 {
+		t.Fatalf("appendix marker appears %d times, want 1", strings.Count(string(got), AppendixMarker))
+	}
+
+	// A file without the marker regenerates to the generated document alone.
+	plain := filepath.Join(t.TempDir(), "root")
+	if err := os.MkdirAll(plain, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Write(filepath.Join(plain, "results"), plain); err != nil {
+		t.Fatal(err)
+	}
+	got, err = os.ReadFile(filepath.Join(plain, "COMPATIBILITY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), AppendixMarker) {
+		t.Fatal("generated document invented an appendix")
+	}
+}
+
+func appendixReport() *Report {
+	return &Report{
+		Schema:    Schema,
+		Generated: time.Unix(0, 0).UTC(),
+		GoIroh:    GoIroh{Commit: "abc123"},
+		Pins:      []Pin{{Key: "1.0", Train: "1.0", Version: "1.0.3", Kind: "release"}},
+		Cells: []Cell{
+			{Scenario: "echo", Description: "Go and Rust exchange an echo, and a pass proves compatible streams.", Tier: "stable", Counterpart: "upstream CLI", Iroh: "1.0", Result: Pass, Expected: Pass, Peer: "iroh-doctor@sha256:abc", PeerDigest: "sha256:abc", PeerPID: 1},
+		},
 	}
 }

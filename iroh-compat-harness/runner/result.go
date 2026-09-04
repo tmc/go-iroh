@@ -2,6 +2,7 @@
 package runner
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -196,10 +197,40 @@ func (r *Report) Write(dir, root string) error {
 	if err := os.WriteFile(filepath.Join(dir, "badge.json"), r.Badge(), 0o644); err != nil {
 		return fmt.Errorf("write badge: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "COMPATIBILITY.md"), r.Markdown(), 0o644); err != nil {
+	path := filepath.Join(root, "COMPATIBILITY.md")
+	appendix, err := handWrittenAppendix(path)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, append(r.Markdown(), appendix...), 0o644); err != nil {
 		return fmt.Errorf("write compatibility: %w", err)
 	}
 	return r.Unexpected()
+}
+
+// AppendixMarker begins the hand-written part of COMPATIBILITY.md. Everything
+// from this heading to the end of the file is prose the generator does not
+// produce, so a regeneration carries it through untouched. A generated
+// document that silently ate a hand-written section would lose it invisibly,
+// which is why this is a copy rather than a warning.
+const AppendixMarker = "## Go API and wire changes"
+
+// handWrittenAppendix returns the text from AppendixMarker to the end of an
+// existing COMPATIBILITY.md, or nothing if the file is absent or has no
+// appendix.
+func handWrittenAppendix(path string) ([]byte, error) {
+	existing, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read compatibility: %w", err)
+	}
+	i := bytes.Index(existing, []byte("\n"+AppendixMarker))
+	if i < 0 {
+		return nil, nil
+	}
+	return existing[i+1:], nil
 }
 
 func (r *Report) Badge() []byte {
