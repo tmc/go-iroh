@@ -17,6 +17,7 @@ import (
 var ordinaryVectorScenarios = []string{
 	"vectors/keys-z32-sign",
 	"vectors/postcard-varints",
+	"vectors/postcard-8bit",
 	"vectors/endpoint-ticket-roundtrip",
 	"vectors/pkarr-txt",
 }
@@ -26,7 +27,9 @@ var customAddrScenarios = []string{
 	"vectors/custom-addr-ticket-go-to-rust",
 }
 
-var vectorScenarios = append(append([]string(nil), ordinaryVectorScenarios...), customAddrScenarios...)
+const canonicalScenario = "vectors/postcard-varint-strictness"
+
+var vectorScenarios = append(append(append([]string(nil), ordinaryVectorScenarios...), customAddrScenarios...), canonicalScenario)
 
 func RunVectorCorpus(bin, corpus, version string) []Cell {
 	if bin == "" {
@@ -64,6 +67,7 @@ func RunVectorCorpus(bin, corpus, version string) []Cell {
 		cells[i].DurationMS = duration
 	}
 	cells = append(cells, customAddrCells(bin, want, version, digest, pid, peer, duration)...)
+	cells = append(cells, canonicalVarintCell(bin, want, version, digest, peer))
 	return cells
 }
 

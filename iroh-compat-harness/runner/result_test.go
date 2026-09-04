@@ -65,7 +65,7 @@ func TestAdjudicationRendersEitherUnexpectedDirection(t *testing.T) {
 }
 
 func TestEnvelopeStatusVocabulary(t *testing.T) {
-	for _, status := range []string{"verified-interop", "observed-incompatible", "predicted-interop", "predicted-incompatible", "unsupported", "untested"} {
+	for _, status := range []string{"verified-interop", "observed-incompatible", "observed-divergence", "predicted-interop", "predicted-incompatible", "unsupported", "untested"} {
 		r := Report{
 			Schema:    Schema,
 			Pins:      []Pin{{Key: "1.0", Train: "1.0", Version: "1.0.3", Kind: "release"}},
