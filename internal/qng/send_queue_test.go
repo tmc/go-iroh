@@ -21,13 +21,12 @@ func (c *orderedSendConn) Write(p []byte, _ uint16, _ protocol.ECN) error {
 	return nil
 }
 
-func (*orderedSendConn) WriteTo([]byte, net.Addr) error                 { return nil }
-func (*orderedSendConn) WriteToInfo([]byte, net.Addr, packetInfo) error { return nil }
-func (*orderedSendConn) Close() error                                   { return nil }
-func (*orderedSendConn) LocalAddr() net.Addr                            { return &net.UDPAddr{} }
-func (*orderedSendConn) RemoteAddr() net.Addr                           { return &net.UDPAddr{} }
-func (*orderedSendConn) ChangeRemoteAddr(net.Addr, packetInfo)          {}
-func (*orderedSendConn) capabilities() connCapabilities                 { return connCapabilities{} }
+func (*orderedSendConn) WriteTo([]byte, net.Addr, packetInfo) error { return nil }
+func (*orderedSendConn) Close() error                               { return nil }
+func (*orderedSendConn) LocalAddr() net.Addr                        { return &net.UDPAddr{} }
+func (*orderedSendConn) RemoteAddr() net.Addr                       { return &net.UDPAddr{} }
+func (*orderedSendConn) ChangeRemoteAddr(net.Addr, packetInfo)      {}
+func (*orderedSendConn) capabilities() connCapabilities             { return connCapabilities{} }
 
 func TestSendQueueDoesNotInlinePastInFlightWrite(t *testing.T) {
 	conn := &orderedSendConn{writes: make(chan byte, 2), release: make(chan struct{})}

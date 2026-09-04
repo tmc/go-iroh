@@ -42,13 +42,10 @@ func TestConfigInitialRTTAppliesBeforeHandshake(t *testing.T) {
 
 type configTestSendConn struct{}
 
-func (configTestSendConn) Write([]byte, uint16, protocol.ECN) error { return nil }
-func (configTestSendConn) WriteTo([]byte, net.Addr) error           { return nil }
-func (configTestSendConn) WriteToInfo([]byte, net.Addr, packetInfo) error {
-	return nil
-}
-func (configTestSendConn) Close() error                          { return nil }
-func (configTestSendConn) LocalAddr() net.Addr                   { return &net.UDPAddr{} }
-func (configTestSendConn) RemoteAddr() net.Addr                  { return &net.UDPAddr{} }
-func (configTestSendConn) ChangeRemoteAddr(net.Addr, packetInfo) {}
-func (configTestSendConn) capabilities() connCapabilities        { return connCapabilities{} }
+func (configTestSendConn) Write([]byte, uint16, protocol.ECN) error   { return nil }
+func (configTestSendConn) WriteTo([]byte, net.Addr, packetInfo) error { return nil }
+func (configTestSendConn) Close() error                               { return nil }
+func (configTestSendConn) LocalAddr() net.Addr                        { return &net.UDPAddr{} }
+func (configTestSendConn) RemoteAddr() net.Addr                       { return &net.UDPAddr{} }
+func (configTestSendConn) ChangeRemoteAddr(net.Addr, packetInfo)      {}
+func (configTestSendConn) capabilities() connCapabilities             { return connCapabilities{} }

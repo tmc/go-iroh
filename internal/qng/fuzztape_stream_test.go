@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/internal/fuzztape"
-	"github.com/tmc/go-iroh/internal/qng/internal/flowcontrol"
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
 	"github.com/tmc/go-iroh/internal/qng/internal/qerr"
@@ -48,7 +47,7 @@ func streamMachineData(id protocol.StreamID, off protocol.ByteCount) byte {
 type streamMachineStream struct {
 	id protocol.StreamID
 	rs *ReceiveStream
-	fc flowcontrol.StreamFlowController
+	fc *streamFlowController
 
 	sendWindow protocol.ByteCount // credit granted to the peer, stream level
 	sent       protocol.ByteCount // highest offset the peer has sent
@@ -80,7 +79,7 @@ type streamMachine struct {
 	t   *fuzztape.T
 	now monotime.Time
 
-	connFC flowcontrol.ConnectionFlowController
+	connFC *connectionFlowController
 	framer *framer
 	packer *packetPacker
 
@@ -116,7 +115,7 @@ func (s streamMachineSender) onStreamCompleted(protocol.StreamID) {}
 
 func newStreamMachine(t *fuzztape.T) *streamMachine {
 	rttStats := utils.NewRTTStats()
-	connFC := flowcontrol.NewConnectionFlowController(
+	connFC := newConnectionFlowController(
 		streamMachineConnWindow,
 		streamMachineConnMaxWindow,
 		func(protocol.ByteCount) bool { return true },
@@ -128,7 +127,7 @@ func newStreamMachine(t *fuzztape.T) *streamMachine {
 		now: monotime.Now(),
 		// The framer only consults its flow controller for DATA_BLOCKED
 		// frames on the sending path, which this machine doesn't drive.
-		framer:         newFramer(noopConnectionFlowController{}),
+		framer:         newFramer(noopConnFC()),
 		connFC:         connFC,
 		connSendWindow: streamMachineConnWindow,
 	}
@@ -176,7 +175,7 @@ func streamMachineSpec() fuzztape.Machine[*streamMachine] {
 				Apply: func(t *fuzztape.T, m *streamMachine) {
 					id := m.nextID
 					m.nextID += 4
-					fc := flowcontrol.NewStreamFlowController(
+					fc := newStreamFlowController(
 						id,
 						m.connFC,
 						streamMachineStreamWindow,

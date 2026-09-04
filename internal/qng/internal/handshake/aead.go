@@ -1,6 +1,7 @@
 package handshake
 
 import (
+	"crypto/cipher"
 	"encoding/binary"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
@@ -45,14 +46,14 @@ func createAEAD(suite cipherSuite, trafficSecret []byte, v protocol.Version) *xo
 }
 
 type longHeaderSealer struct {
-	aead            *xorNonceAEAD
+	aead            cipher.AEAD
 	headerProtector headerProtector
 	nonceBuf        [12]byte
 }
 
 var _ LongHeaderSealer = &longHeaderSealer{}
 
-func newLongHeaderSealer(aead *xorNonceAEAD, headerProtector headerProtector) LongHeaderSealer {
+func newLongHeaderSealer(aead cipher.AEAD, headerProtector headerProtector) LongHeaderSealer {
 	if aead.NonceSize() != 8 {
 		panic("unexpected nonce size")
 	}
@@ -75,7 +76,7 @@ func (s *longHeaderSealer) Overhead() int {
 }
 
 type longHeaderOpener struct {
-	aead            *xorNonceAEAD
+	aead            cipher.AEAD
 	headerProtector headerProtector
 	highestRcvdPN   protocol.PacketNumber // highest packet number received (which could be successfully unprotected)
 
@@ -85,7 +86,7 @@ type longHeaderOpener struct {
 
 var _ LongHeaderOpener = &longHeaderOpener{}
 
-func newLongHeaderOpener(aead *xorNonceAEAD, headerProtector headerProtector) LongHeaderOpener {
+func newLongHeaderOpener(aead cipher.AEAD, headerProtector headerProtector) LongHeaderOpener {
 	if aead.NonceSize() != 8 {
 		panic("unexpected nonce size")
 	}

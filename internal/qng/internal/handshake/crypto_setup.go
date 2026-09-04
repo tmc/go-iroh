@@ -87,8 +87,7 @@ func NewCryptoSetupClient(
 		version,
 	)
 
-	tlsConf = tlsConf.Clone()
-	tlsConf.MinVersion = tls.VersionTLS13
+	tlsConf = setupConfigForClient(tlsConf)
 	cs.tlsConf = tlsConf
 	cs.allow0RTT = enable0RTT
 
@@ -127,10 +126,7 @@ func NewCryptoSetupServer(
 	tlsConf = setupConfigForServer(tlsConf, localAddr, remoteAddr)
 
 	cs.tlsConf = tlsConf
-	cs.conn = tls.QUICServer(&tls.QUICConfig{
-		TLSConfig:           tlsConf,
-		EnableSessionEvents: true,
-	})
+	cs.conn = tls.QUICServer(getQUICConfig(tlsConf, localAddr, remoteAddr))
 	return cs
 }
 
@@ -296,6 +292,8 @@ func (h *cryptoSetup) handleEvent(ev tls.QUICEvent) (err error) {
 			ev.SessionState.EarlyData = allowEarlyData
 		}
 		return nil
+	case quicErrorEvent:
+		return extractQUICEventError(ev)
 	default:
 		// Unknown events should be ignored.
 		// crypto/tls will ensure that this is safe to do.

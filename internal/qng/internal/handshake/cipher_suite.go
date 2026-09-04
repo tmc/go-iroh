@@ -4,6 +4,7 @@ import (
 	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/fips140"
 	"fmt"
 	tls "github.com/tmc/go-iroh/internal/itls/tls"
 
@@ -28,6 +29,11 @@ func getCipherSuite(id uint16) cipherSuite {
 	case tls.TLS_AES_128_GCM_SHA256:
 		return cipherSuite{ID: tls.TLS_AES_128_GCM_SHA256, Hash: crypto.SHA256, KeyLen: 16, AEAD: aeadAESGCMTLS13}
 	case tls.TLS_CHACHA20_POLY1305_SHA256:
+		// The usual convention is to only panic on fips140.Enforced (and not on fips140.Enabled),
+		// but this function panics in the default case anyway, so we might as well panic here.
+		if fips140.Enabled() {
+			panic("tls: TLS_CHACHA20_POLY1305_SHA256 is not allowed in FIPS 140-3 mode")
+		}
 		return cipherSuite{ID: tls.TLS_CHACHA20_POLY1305_SHA256, Hash: crypto.SHA256, KeyLen: 32, AEAD: aeadChaCha20Poly1305}
 	case tls.TLS_AES_256_GCM_SHA384:
 		return cipherSuite{ID: tls.TLS_AES_256_GCM_SHA384, Hash: crypto.SHA384, KeyLen: 32, AEAD: aeadAESGCMTLS13}
@@ -36,6 +42,18 @@ func getCipherSuite(id uint16) cipherSuite {
 	}
 }
 
+// go-iroh: upstream dispatches to a FIPS 140-3 AEAD here, reached by go:linkname
+// into crypto/tls. The fork drops that path, so FIPS 140-3 mode is unsupported.
+// Two things block it. The linkname names the standard library's crypto/tls,
+// not the RFC 7250 build this fork drives. And its nonces are the RFC 9001
+// 8-byte packet numbers, while multipath seals with the 12-byte
+// path-and-packet-number of draft-ietf-quic-multipath §2.4, which only
+// xorNonceAEAD's right-aligned XOR accepts.
+//
+// Worth revisiting: the standard library is expected to export a QUIC AEAD
+// constructor (golang/go#79219), which would remove the linkname. Restoring
+// FIPS support would still need a nonce story for multipath — either a
+// single-path-only FIPS mode, or a path nonce the FIPS AEAD accepts.
 func aeadAESGCMTLS13(key, nonceMask []byte) *xorNonceAEAD {
 	if len(nonceMask) != aeadNonceLength {
 		panic("tls: internal error: wrong nonce length")

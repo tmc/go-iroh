@@ -431,7 +431,7 @@ func TestQNTRoundQueuesReachOutFramesToFramer(t *testing.T) {
 	if err := c.AddNATTraversalAddress(local); err != nil {
 		t.Fatalf("AddNATTraversalAddress: %v", err)
 	}
-	c.framer = newFramer(noopConnectionFlowController{})
+	c.framer = newFramer(noopConnFC())
 	if err := c.addRemoteNATTraversalAddressFrame(&wire.AddAddressFrame{SeqNo: 1, Addr: remote.Addr(), Port: remote.Port()}); err != nil {
 		t.Fatalf("add remote: %v", err)
 	}

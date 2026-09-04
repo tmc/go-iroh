@@ -16,7 +16,7 @@ import (
 )
 
 func TestQNTPackerPullsQueuedAddAddressFrame(t *testing.T) {
-	f := newFramer(noopConnectionFlowController{})
+	f := newFramer(noopConnFC())
 	addr := netip.MustParseAddrPort("192.0.2.1:1234")
 	f.QueueControlFrame(&wire.AddAddressFrame{
 		SeqNo: 7,
@@ -49,7 +49,7 @@ func TestQNTPackerPullsQueuedAddAddressFrame(t *testing.T) {
 }
 
 func TestQNTPackerPullsQueuedReachOutFrame(t *testing.T) {
-	f := newFramer(noopConnectionFlowController{})
+	f := newFramer(noopConnFC())
 	addr := netip.MustParseAddrPort("[2001:db8::1]:5678")
 	f.QueueControlFrame(&wire.ReachOutFrame{
 		Round: 9,
@@ -560,7 +560,7 @@ func (s *qntProbeTestSender) Send(buf *packetBuffer, _ uint16, ecn protocol.ECN)
 	s.ecn = ecn
 }
 
-func (s *qntProbeTestSender) SendProbe(buf *packetBuffer, addr net.Addr) {
+func (s *qntProbeTestSender) SendProbe(buf *packetBuffer, addr net.Addr, _ packetInfo) {
 	s.probes++
 	s.data = append([]byte(nil), buf.Data...)
 	if udp, ok := addr.(*net.UDPAddr); ok {
@@ -587,17 +587,14 @@ func queuedPathCIDsBlockedFrames(c *Conn) []*wire.PathCIDsBlockedFrame {
 
 type qntProbeSendConn struct{}
 
-func (qntProbeSendConn) Write([]byte, uint16, protocol.ECN) error { return nil }
-func (qntProbeSendConn) WriteTo([]byte, net.Addr) error           { return nil }
-func (qntProbeSendConn) WriteToInfo([]byte, net.Addr, packetInfo) error {
-	return nil
-}
-func (qntProbeSendConn) Close() error                          { return nil }
-func (qntProbeSendConn) LocalAddr() net.Addr                   { return &net.UDPAddr{} }
-func (qntProbeSendConn) RemoteAddr() net.Addr                  { return &net.UDPAddr{} }
-func (qntProbeSendConn) ChangeRemoteAddr(net.Addr, packetInfo) {}
-func (qntProbeSendConn) capabilities() connCapabilities        { return connCapabilities{} }
-func (qntProbeSendConn) SetReadDeadline(time.Time) error       { return nil }
+func (qntProbeSendConn) Write([]byte, uint16, protocol.ECN) error   { return nil }
+func (qntProbeSendConn) WriteTo([]byte, net.Addr, packetInfo) error { return nil }
+func (qntProbeSendConn) Close() error                               { return nil }
+func (qntProbeSendConn) LocalAddr() net.Addr                        { return &net.UDPAddr{} }
+func (qntProbeSendConn) RemoteAddr() net.Addr                       { return &net.UDPAddr{} }
+func (qntProbeSendConn) ChangeRemoteAddr(net.Addr, packetInfo)      {}
+func (qntProbeSendConn) capabilities() connCapabilities             { return connCapabilities{} }
+func (qntProbeSendConn) SetReadDeadline(time.Time) error            { return nil }
 
 type noAckFrameSource struct{}
 
@@ -609,12 +606,8 @@ func (noAckFrameSource) GetAckFrameForPath(protocol.PathID, monotime.Time, bool)
 	return nil
 }
 
-type noopConnectionFlowController struct{}
-
-func (noopConnectionFlowController) SendWindowSize() protocol.ByteCount               { return 0 }
-func (noopConnectionFlowController) UpdateSendWindow(protocol.ByteCount) bool         { return false }
-func (noopConnectionFlowController) AddBytesSent(protocol.ByteCount)                  {}
-func (noopConnectionFlowController) GetWindowUpdate(monotime.Time) protocol.ByteCount { return 0 }
-func (noopConnectionFlowController) AddBytesRead(protocol.ByteCount) bool             { return false }
-func (noopConnectionFlowController) Reset() error                                     { return nil }
-func (noopConnectionFlowController) IsNewlyBlocked() (bool, protocol.ByteCount)       { return false, 0 }
+// noopConnFC is a connection flow controller with no credit, for tests that
+// never exercise the sending path.
+func noopConnFC() *connectionFlowController {
+	return newConnectionFlowController(0, 0, nil, utils.NewRTTStats(), utils.DefaultLogger)
+}

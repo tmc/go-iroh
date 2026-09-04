@@ -5,6 +5,18 @@ import (
 	"net"
 )
 
+// go-iroh: upstream selects between this file and a go1.27 variant that uses
+// tls.QUICConfig.ClientHelloInfoConn, added to the standard library in Go 1.27.
+// The fork drives internal/itls/tls, a copy of Go 1.26's crypto/tls, so the
+// toolchain version says nothing about whether that field exists: it does not,
+// at any Go version. This file is therefore unconditional and the go1.27
+// variant is dropped. Restore the split if itls gains ClientHelloInfoConn.
+func setupConfigForClient(conf *tls.Config) *tls.Config {
+	conf = conf.Clone()
+	conf.MinVersion = tls.VersionTLS13
+	return conf
+}
+
 func setupConfigForServer(conf *tls.Config, localAddr, remoteAddr net.Addr) *tls.Config {
 	// Workaround for https://github.com/golang/go/issues/60506.
 	// This initializes the session tickets _before_ cloning the config.
@@ -36,4 +48,11 @@ func setupConfigForServer(conf *tls.Config, localAddr, remoteAddr net.Addr) *tls
 		}
 	}
 	return conf
+}
+
+func getQUICConfig(tlsConf *tls.Config, _, _ net.Addr) *tls.QUICConfig {
+	return &tls.QUICConfig{
+		TLSConfig:           tlsConf,
+		EnableSessionEvents: true,
+	}
 }

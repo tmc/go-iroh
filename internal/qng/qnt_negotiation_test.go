@@ -5,7 +5,6 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/tmc/go-iroh/internal/qng/internal/flowcontrol"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
 	"github.com/tmc/go-iroh/internal/qng/internal/utils"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
@@ -176,7 +175,7 @@ func newQNTTransportParameterConn(local, peer uint8) *Conn {
 		),
 	}
 	c.peerParams.Store(&wire.TransportParameters{MaxRemoteNATTraversalAddresses: &peer})
-	c.connFlowController = flowcontrol.NewConnectionFlowController(
+	c.connFlowController = newConnectionFlowController(
 		protocol.ByteCount(cfg.InitialConnectionReceiveWindow),
 		protocol.ByteCount(cfg.MaxConnectionReceiveWindow),
 		nil,

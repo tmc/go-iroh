@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
-	"github.com/tmc/go-iroh/internal/qng/internal/flowcontrol"
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
 	"github.com/tmc/go-iroh/internal/qng/internal/utils/ringbuffer"
@@ -42,11 +41,11 @@ type framer struct {
 	pathResponses              []*wire.PathResponseFrame
 	maxDataFrame               wire.MaxDataFrame
 	hasMaxDataFrame            bool
-	connFlowController         flowcontrol.ConnectionFlowController
+	connFlowController         *connectionFlowController
 	queuedTooManyControlFrames bool
 }
 
-func newFramer(connFlowController flowcontrol.ConnectionFlowController) *framer {
+func newFramer(connFlowController *connectionFlowController) *framer {
 	return &framer{
 		activeStreams:            make(map[protocol.StreamID]streamFrameGetter),
 		streamsWithControlFrames: make(map[protocol.StreamID]streamControlFrameGetter),
@@ -115,7 +114,7 @@ func (f *framer) Append(
 	f.mutex.Lock()
 	// pop STREAM frames, until less than 128 bytes are left in the packet
 	numActiveStreams := f.streamQueue.Len()
-	for i := 0; i < numActiveStreams; i++ {
+	for range numActiveStreams {
 		if protocol.MinStreamFrameSize > maxLen {
 			break
 		}
@@ -330,6 +329,7 @@ func (f *framer) Handle0RTTRejection() {
 	for id := range f.activeStreams {
 		delete(f.activeStreams, id)
 	}
+	clear(f.streamsWithControlFrames)
 	var j int
 	for i, frame := range f.controlFrames {
 		switch frame.(type) {

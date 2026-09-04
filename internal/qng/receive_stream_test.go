@@ -7,6 +7,7 @@ import (
 
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
+	"github.com/tmc/go-iroh/internal/qng/internal/utils"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
 )
 
@@ -18,21 +19,17 @@ func (receiveStreamTestSender) onHasStreamControlFrame(protocol.StreamID, stream
 }
 func (receiveStreamTestSender) onStreamCompleted(protocol.StreamID) {}
 
-type receiveStreamTestFlow struct{}
-
-func (receiveStreamTestFlow) SendWindowSize() protocol.ByteCount               { return protocol.MaxByteCount }
-func (receiveStreamTestFlow) UpdateSendWindow(protocol.ByteCount) bool         { return false }
-func (receiveStreamTestFlow) AddBytesSent(protocol.ByteCount)                  {}
-func (receiveStreamTestFlow) GetWindowUpdate(monotime.Time) protocol.ByteCount { return 0 }
-func (receiveStreamTestFlow) AddBytesRead(protocol.ByteCount) (bool, bool)     { return false, false }
-func (receiveStreamTestFlow) UpdateHighestReceived(protocol.ByteCount, bool, monotime.Time) error {
-	return nil
+// testStreamFC is a stream flow controller with windows wide enough that
+// flow control never blocks the tests that use it.
+func testStreamFC() *streamFlowController {
+	const window = protocol.ByteCount(1) << 40
+	cfc := newConnectionFlowController(window, window, nil, utils.NewRTTStats(), utils.DefaultLogger)
+	cfc.UpdateSendWindow(window)
+	return newStreamFlowController(0, cfc, window, window, window, utils.NewRTTStats(), utils.DefaultLogger)
 }
-func (receiveStreamTestFlow) Abandon()             {}
-func (receiveStreamTestFlow) IsNewlyBlocked() bool { return false }
 
 func newReceiveStreamForTest() *ReceiveStream {
-	return newReceiveStream(0, receiveStreamTestSender{}, receiveStreamTestFlow{})
+	return newReceiveStream(0, receiveStreamTestSender{}, testStreamFC())
 }
 
 func TestReceiveStreamInOrderFrameRead(t *testing.T) {
@@ -176,7 +173,7 @@ func (s receiveStreamCompletionSender) onStreamCompleted(id protocol.StreamID) {
 // missed completion permanently leaks a stream slot.
 func TestReceiveStreamLateFinWhileBlockedCompletesStream(t *testing.T) {
 	sender := receiveStreamCompletionSender{completed: make(chan protocol.StreamID, 1)}
-	s := newReceiveStream(0, sender, receiveStreamTestFlow{})
+	s := newReceiveStream(0, sender, testStreamFC())
 
 	if err := s.handleStreamFrame(&wire.StreamFrame{StreamID: 0, Data: []byte("a")}, monotime.Now()); err != nil {
 		t.Fatal(err)
@@ -218,7 +215,7 @@ func TestReceiveStreamLateFinWhileBlockedCompletesStream(t *testing.T) {
 // Control case: the same late FIN with the reader not parked.
 func TestReceiveStreamLateFinCompletesStream(t *testing.T) {
 	sender := receiveStreamCompletionSender{completed: make(chan protocol.StreamID, 1)}
-	s := newReceiveStream(0, sender, receiveStreamTestFlow{})
+	s := newReceiveStream(0, sender, testStreamFC())
 	if err := s.handleStreamFrame(&wire.StreamFrame{StreamID: 0, Data: []byte("a")}, monotime.Now()); err != nil {
 		t.Fatal(err)
 	}
