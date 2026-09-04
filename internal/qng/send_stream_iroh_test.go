@@ -47,7 +47,7 @@ func drainSendStream(str *SendStream) <-chan []byte {
 	return ch
 }
 
-func TestSendStreamReadFrom(t *testing.T) {
+func TestSendStreamReadFromLargerThanBuffer(t *testing.T) {
 	str := newSendStream(context.Background(), 0, sendStreamIrohSender{}, testStreamFC(), false)
 	got := drainSendStream(str)
 	want := bytes.Repeat([]byte("0123456789abcdef"), readFromChunkSize/16+3)
