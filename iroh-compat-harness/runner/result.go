@@ -157,7 +157,7 @@ func (r *Report) Validate() error {
 			return fmt.Errorf("compatibility envelope %s has invalid tier %q", envelope.Surface, envelope.Tier)
 		}
 		switch envelope.Status {
-		case "verified-interop", "observed-incompatible", "predicted-interop", "predicted-incompatible", "unsupported", "untested":
+		case "verified-interop", "observed-incompatible", "observed-divergence", "predicted-interop", "predicted-incompatible", "unsupported", "untested":
 		default:
 			return fmt.Errorf("compatibility envelope %s has invalid status %q", envelope.Surface, envelope.Status)
 		}
