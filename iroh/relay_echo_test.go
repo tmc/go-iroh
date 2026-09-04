@@ -17,7 +17,7 @@ type echoRelayServer struct{ ts *httptest.Server }
 
 func newEchoRelayServer(t testing.TB, opts ...relayserver.Option) echoRelayServer {
 	t.Helper()
-	ts := httptest.NewServer(relayserver.New(opts...))
+	ts := httptest.NewServer(relayserver.NewWithOptions(opts...))
 	t.Cleanup(ts.Close)
 	return echoRelayServer{ts: ts}
 }
