@@ -40,6 +40,7 @@ canaries:
 	@set -eu; \
 	for pair in \
 		'postcard-varint TestPostcardUintVectors' \
+		'postcard-8bit TestPostcard8BitVectors' \
 		'ticket-prefix TestEndpointTicketVector' \
 		'pkarr-signer TestPkarrVector'; do \
 		set -- $$pair; \

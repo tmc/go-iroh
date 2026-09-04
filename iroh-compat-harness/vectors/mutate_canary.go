@@ -11,7 +11,7 @@ func mutate(name, text string, data []byte) (string, []byte) {
 	switch name {
 	case "ticket-prefix":
 		return "mutated" + text, data
-	case "postcard-varint", "pkarr-signer":
+	case "postcard-varint", "postcard-8bit", "pkarr-signer":
 		out := append([]byte(nil), data...)
 		if len(out) != 0 {
 			if name == "pkarr-signer" && len(out) > 32 {
