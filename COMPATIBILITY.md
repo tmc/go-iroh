@@ -120,3 +120,49 @@ make parity
 ```
 
 See the [harness README](https://github.com/tmc/go-iroh/blob/compat-harness/iroh-compat-harness/README.md) for prerequisites, the [scenario declarations](https://github.com/tmc/go-iroh/tree/compat-harness/iroh-compat-harness/scenarios) for predicted verdicts and definitions, and [results.json](https://github.com/tmc/go-iroh/blob/compat-harness/iroh-compat-harness/results/results.json) for the machine-readable report.
+
+## Go API and wire changes
+
+This section is written by hand and is not generated. It records changes that
+the matrix above cannot show: Go API changes, which no Rust peer observes, and
+wire changes whose evidence is a single matrix row rather than the whole table.
+Regenerating the report preserves everything from this heading to the end of the
+file.
+
+### v0.1.1
+
+Two encoding changes and one struct field. Nothing was removed, and no exported
+signature changed.
+
+`u8` and `i8` now encode as one raw byte. Rust postcard writes `u8` verbatim and
+`i8` as its two's complement; go-iroh varint-encoded the first and zigzagged the
+second, so `uint8(200)` was `c801` where Rust gives `c8`, and `int8(-2)` was `03`
+where Rust gives `fe`. Any cross-language protocol carrying an 8-bit field
+diverged silently. The postcard-encoded types in this module carry their enums
+as `u64`, which is why nothing caught it. A `u8` below 128 encodes identically
+under both rules, so unsigned data written before this change is still readable;
+`i8` is not, since zigzag and two's complement agree only on zero. Proven
+against Rust output by `vectors/postcard-8bit`.
+
+Padded varints are rejected. `ac8200` and `ac02` both decoded to 300, and `8100`
+was a valid length prefix for a one-byte slice; a record identified by a digest
+of its encoding therefore had more than one valid id, which defeats
+deduplication and equivocation detection. Decoding now returns an overlong-varint
+error for any encoding past its shortest form. **This is stricter than the
+reference implementation, not matched to it:** postcard 1.1.3 accepts every one
+of these encodings. See the compatibility envelope above for what that costs;
+the short version is that both serializers emit only canonical forms, so no
+conforming peer's traffic is affected. Measured by
+`vectors/postcard-varint-strictness`, which is expected to fail because the two
+implementations genuinely disagree.
+
+`gossip.Event` gained a `Dropped` field, reporting how many events a lagging
+subscriber missed. Adding a field to an exported struct breaks unkeyed composite
+literals, so `gossip.Event{kind, peer, ...}` no longer compiles. Keyed literals
+are unaffected. API-diff tools report this addition as compatible.
+
+Also added, with nothing removed: `iroh.Stream.CloseWrite`,
+`iroh.ErrTLSHandshakeFailure`, `iroh.QLOGConnection`, `iroh.QLOGDir`,
+`iroh.WithQLOG`, `mdns.WithLogger`, `key.UncheckedEndpointID`,
+`relayserver.NewWithOptions`, `relayserver.Option`, and
+`relayserver.WithClientRate`.
