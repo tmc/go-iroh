@@ -347,7 +347,16 @@ func (d *Discovery) respond(answer []byte) {
 	timer := time.NewTimer(d.responseDelay())
 	defer timer.Stop()
 	<-timer.C
-	d.writeMulticast(answer)
+	// Answer only on the socket Start opened. writeMulticast falls back to a
+	// fresh socket when there is none, which would multicast a response after
+	// Start has returned.
+	d.mu.RLock()
+	conn := d.conn
+	d.mu.RUnlock()
+	if conn == nil {
+		return
+	}
+	_, _ = conn.WriteToUDPAddrPort(answer, ipv4Multicast)
 }
 
 func (d *Discovery) query(id key.EndpointID) {
