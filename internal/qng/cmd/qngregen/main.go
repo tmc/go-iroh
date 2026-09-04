@@ -9,9 +9,10 @@
 //
 // Usage:
 //
-//	qngregen           regenerate internal/qng in place (refuses if edited)
-//	qngregen -check    report how internal/qng differs from pinned upstream
-//	qngregen -o dir    write a pristine forked tree to dir
+//	qngregen              regenerate internal/qng in place (refuses if edited)
+//	qngregen -check       report how internal/qng differs from pinned upstream
+//	qngregen -o dir       write a pristine forked tree to dir
+//	qngregen -bump v0.0.0 take a new upstream release, merging it into the fork
 package main
 
 import (
@@ -56,6 +57,7 @@ var importRewrites = []struct {
 var (
 	outDir = flag.String("o", "", "write a pristine forked tree to `dir` instead of regenerating in place")
 	check  = flag.Bool("check", false, "report how internal/qng differs from the pinned upstream release")
+	bump   = flag.String("bump", "", "take upstream `version`, merging its changes into the fork")
 )
 
 func main() {
@@ -77,6 +79,9 @@ func run() error {
 	}
 	if err := os.Chdir(root); err != nil {
 		return err
+	}
+	if *bump != "" {
+		return bumpTo(*bump)
 	}
 	if *outDir != "" {
 		if err := generate(*outDir); err != nil {

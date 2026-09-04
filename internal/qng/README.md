@@ -41,17 +41,20 @@ rewrite, go-iroh edits vendored files in place and adds files of its own, so
 regenerating over the tree would discard that work. `qngregen` refuses to do it:
 run with no arguments it reports the local edits and stops.
 
-Take a new release as a merge instead. Generate the pristine tree for the
-release the fork was taken from and for the new one, and merge the difference
-into the working tree:
+Take a new release as a merge instead. `qngregen -bump` does it:
 
-	go run ./internal/qng/cmd/qngregen -o /tmp/qng-old   # at the current pin
-	go get github.com/quic-go/quic-go@<version>
-	go run ./internal/qng/cmd/qngregen -o /tmp/qng-new   # at the new pin
+	go run ./internal/qng/cmd/qngregen -bump v0.62.0
 
-Both trees are reproducible from the module cache at any time, so the merge base
-never has to be stored. Merge `/tmp/qng-old` -> `/tmp/qng-new` onto
-`internal/qng`, resolve the conflicts, and update the version string below.
+It generates the pristine tree for the pinned release and for the new one, runs
+`go get`, and merges the difference between them into `internal/qng` file by
+file. A file the fork has not touched is taken whole; a file it has touched
+keeps its edits unless upstream changed the same lines, in which case the file
+is left with conflict markers and named in the report. Both pristine trees come
+from the module cache, so the merge base never has to be stored.
+
+Resolve any conflicts, then rerun the report to see what moved:
+
+	go run ./internal/qng/cmd/qngregen -check
 
 Then `go build ./... && go test ./internal/qng/`, followed by the focused qng
 wire tests and the root iroh interop tests. Re-review if quic-go changes how it
@@ -88,4 +91,4 @@ path-migration test is not enough evidence for iroh/noq parity.
 
 ## Forked version
 
-quic-go **v0.59.1**.
+quic-go **v0.62.0**.
