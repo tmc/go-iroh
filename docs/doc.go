@@ -5,8 +5,8 @@
 // protocol over an iroh Router, and live synchronization over iroh-gossip.
 //
 // Keys form a prefix hierarchy per author: an entry shadows every entry of the
-// same author whose key it is a prefix of, so writing "menu" removes
-// "menu/tea". See [MemoryStore.Put].
+// same author whose key it is a prefix of and whose record is not newer, so
+// writing "menu" removes "menu/tea". See [MemoryStore.Put].
 //
 // The Go API is not stable before v1 and may change in any v0 release; the
 // wire format tracks pinned upstream iroh-docs releases and does not.

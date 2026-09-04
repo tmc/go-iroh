@@ -245,10 +245,12 @@ func (s *MemoryStore) entriesLocked() []SignedEntry {
 //
 // Keys form a prefix hierarchy per author, so an entry shadows its
 // descendants: writing "menu" for an author removes that author's "menu/tea"
-// and every other key under "menu", and a document cannot hold both. The insert
-// is dropped instead when an ancestor key is already present with a newer or
-// equal record. "Newer" is the record timestamp, with the content hash breaking
-// ties. Entries from different authors never shadow each other.
+// and every other key under "menu" whose record is older than or equal to the
+// one being written. A descendant with a newer record is left alone, so the two
+// do coexist in that case. The insert is dropped instead when an ancestor key
+// is already present with a newer or equal record. "Newer" is the record
+// timestamp, with the content hash breaking ties. Entries from different
+// authors never shadow each other.
 //
 // This is the iroh-docs model, deliberate and how a subtree is deleted, but it
 // is silent: [InsertOutcome.Removed] reports how many entries a write deleted,

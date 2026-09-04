@@ -216,8 +216,8 @@ func testRecord(seed string, length, timestamp uint64) Record {
 }
 
 // TestMemoryStorePrefixShadowing pins the documented surprise: a plain write to
-// a key that is a prefix of an existing key from the same author deletes the
-// longer entry, so the two cannot coexist. TestMemoryStorePrefixDeletion covers
+// a key that is a prefix of an existing, not newer key from the same author
+// deletes the longer entry, so the two do not coexist. TestMemoryStorePrefixDeletion covers
 // the deliberate tombstone use of the same rule; this covers the accident.
 func TestMemoryStorePrefixShadowing(t *testing.T) {
 	namespace := NewNamespaceSecret(repeat32(0xb2))
