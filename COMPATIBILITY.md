@@ -4,7 +4,7 @@ go-iroh is an independent Go implementation of iroh wire v1. This matrix records
 
 Go-client↔Go-relay pairings contain no Rust peer, so they are outside this matrix's scope; that path is covered by the standard test suite.
 
-Generated from commit `ace22ec3bc3d89f402bbd7e4d6fe9c644fb49071` at 2026-09-04T05:34:47Z. A pass requires a recorded Rust process and binary digest; setup errors, unsupported cells, and untested cells never count as passes.
+Generated from commit `76d0c265946c7a5f54b05d1ed8f0e35889ba3c5b` at 2026-09-04T23:09:28Z. A pass requires a recorded Rust process and binary digest; setup errors, unsupported cells, and untested cells never count as passes.
 
 ## How to read this table
 
@@ -123,7 +123,6 @@ make parity
 ```
 
 See the [harness README](iroh-compat-harness/README.md) for prerequisites, the [scenario declarations](iroh-compat-harness/scenarios/) for predicted verdicts and definitions, and [results.json](iroh-compat-harness/results/results.json) for the machine-readable report.
-
 ## Go API and wire changes
 
 This section is written by hand and is not generated. It records changes that
