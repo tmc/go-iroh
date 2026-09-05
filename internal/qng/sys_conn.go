@@ -100,7 +100,7 @@ func wrapConn(pc net.PacketConn) (rawConn, error) {
 		}
 
 		// only set DF on UDP sockets
-		if ok && os.Getenv("IROH_ENABLE_DF") != "" {
+		if ok {
 			if _, ok := pc.LocalAddr().(*net.UDPAddr); ok {
 				var err error
 				supportsDF, err = setDF(rawConn)
