@@ -129,6 +129,37 @@ wire changes whose evidence is a single matrix row rather than the whole table.
 Regenerating the report preserves everything from this heading to the end of the
 file.
 
+### v0.2.0
+
+One option added, one deprecated, one wire change, and a vendored upstream
+bump. Nothing was removed and no exported signature changed.
+
+net_report now runs by default whenever relays are configured. It measures
+relay latency and reports the QAD-derived global addresses advertised as local
+QNT candidates for active remotes. Previously an endpoint had to ask for it.
+This is a behaviour change for an endpoint that configures relays and does not
+opt out: it sends net_report probes it did not send before, and its home relay
+can move away from the bootstrap pick after `Bind`.
+
+`iroh.WithoutNetReport` was added to turn it off. Without it the home relay
+stays whichever relay `Bind` picked to bootstrap with — the first in the relay
+map rather than the nearest — and `Endpoint.NetReport` never reports a
+measurement. `iroh.WithNetReport` is deprecated: it still compiles and still
+clears the disable flag, so passing it is harmless, but it no longer enables
+anything that was off.
+
+mdns responders now answer SRV and TXT questions. A responder answered only PTR
+and ANY, so a peer asking directly for an instance's SRV or TXT record got
+nothing and had to re-query by PTR. Announcements already carried all three
+records together, so this adds no record type that was not already on the wire;
+it answers questions that were being dropped. An SRV or TXT question must name
+the instance rather than the service, since both records describe one instance
+and the service name does not say which.
+
+The vendored quic-go fork in `internal/qng` was updated to upstream v0.62.0.
+That package is internal, so no exported API changed; the fork's own divergence
+from upstream is recorded in the package's own documentation.
+
 ### v0.1.1
 
 Two encoding changes and one struct field. Nothing was removed, and no exported
@@ -160,6 +191,12 @@ implementations genuinely disagree.
 subscriber missed. Adding a field to an exported struct breaks unkeyed composite
 literals, so `gossip.Event{kind, peer, ...}` no longer compiles. Keyed literals
 are unaffected. API-diff tools report this addition as compatible.
+
+Both additions also carry an embedding hazard. A type that embeds
+`gossip.Event` alongside another type providing `Dropped`, or that embeds
+`iroh.Stream` alongside another providing `CloseWrite`, now has an ambiguous
+selector at the point of use. `gorelease` reports neither; `apibump`
+classifies both as embed-breaking.
 
 Also added, with nothing removed: `iroh.Stream.CloseWrite`,
 `iroh.ErrTLSHandshakeFailure`, `iroh.QLOGConnection`, `iroh.QLOGDir`,
