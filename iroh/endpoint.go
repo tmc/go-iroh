@@ -901,7 +901,11 @@ func (e *Endpoint) applyNetReport(report netreport.Report) bool {
 	e.mu.Unlock()
 
 	changed := e.setExternalNATTraversalCandidates(report.GlobalV4, report.GlobalV6)
-	if e.relay != nil && !report.PreferredRelay.IsZero() {
+	// A net_report in flight when a relay is removed still names it as
+	// preferred; applying that report would move the home relay back to a
+	// relay that is no longer configured. Only a still-configured relay may
+	// become home.
+	if e.relay != nil && !report.PreferredRelay.IsZero() && e.relay.HasRelay(report.PreferredRelay) {
 		current := e.relay.HomeRelayStatus().Current()
 		if current == nil || !current.URL.Equal(report.PreferredRelay) {
 			e.relay.SetHomeRelay(report.PreferredRelay)

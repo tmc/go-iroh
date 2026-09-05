@@ -249,6 +249,13 @@ func (a *RelayActor) InsertRelay(url netaddr.RelayURL, cfg relay.Config) (relay.
 	return prev, ok
 }
 
+// HasRelay reports whether url is currently configured.
+func (a *RelayActor) HasRelay(url netaddr.RelayURL) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg.Map.Contains(url)
+}
+
 // RemoveRelay removes url's configuration, returning it when present. Any live
 // non-home connection to url is stopped. If url was the home relay, the next
 // configured relay (if any) becomes home.

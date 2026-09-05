@@ -139,6 +139,9 @@ func (t *RelayTransport) InsertRelay(url netaddr.RelayURL, cfg relay.Config) (re
 	return t.actor.InsertRelay(url, cfg)
 }
 
+// HasRelay reports whether url is configured. See [RelayActor.HasRelay].
+func (t *RelayTransport) HasRelay(url netaddr.RelayURL) bool { return t.actor.HasRelay(url) }
+
 // RemoveRelay removes a relay config from the underlying actor.
 func (t *RelayTransport) RemoveRelay(url netaddr.RelayURL) (relay.Config, bool) {
 	return t.actor.RemoveRelay(url)

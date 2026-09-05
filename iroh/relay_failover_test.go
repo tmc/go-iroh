@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tmc/go-iroh/internal/netreport"
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 	"github.com/tmc/go-iroh/relay"
@@ -150,5 +151,69 @@ func TestRelayHomeFailover(t *testing.T) {
 	}
 	if err := roundTrip(want, "hello after failover"); err != nil {
 		t.Fatalf("echo after failover: %v", err)
+	}
+}
+
+// TestRelayHomeStaysOffRemovedRelay checks that a net_report still in flight
+// when a relay is removed cannot move the home relay back onto it. The report
+// names the removed relay as preferred, so applying it would undo the
+// promotion RemoveRelay just made.
+func TestRelayHomeStaysOffRemovedRelay(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var urls []netaddr.RelayURL
+	for range 3 {
+		urls = append(urls, newEchoRelayServer(t).url(t))
+	}
+	m := relay.MapFromURLs(urls...)
+	sorted := m.URLs()
+
+	// The report is held until the test releases it, so it lands after the
+	// removal. It prefers the relay the test removes.
+	release := make(chan struct{})
+	run := func(ctx context.Context) (*netreport.Report, error) {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return &netreport.Report{PreferredRelay: sorted[0]}, nil
+	}
+
+	ep, err := Bind(ctx,
+		WithRelayMode(relay.ModeCustom(m)),
+		WithoutIPTransports(),
+		withNetReportRunner(run),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Shutdown(ctx)
+
+	home := ep.HomeRelayStatus().Current()
+	if home == nil || !home.URL.Equal(sorted[0]) {
+		t.Fatalf("bootstrap home = %v, want %v", home, sorted[0])
+	}
+	if ep.RemoveRelay(sorted[0]) == nil {
+		t.Fatal("RemoveRelay: home relay not configured")
+	}
+	if got := ep.HomeRelayStatus().Current(); got == nil || !got.URL.Equal(sorted[1]) {
+		t.Fatalf("home after removal = %v, want %v", got, sorted[1])
+	}
+
+	close(release)
+	for {
+		if _, ok := ep.NetReport(); ok {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("net report never applied")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	if got := ep.HomeRelayStatus().Current(); got == nil || !got.URL.Equal(sorted[1]) {
+		t.Fatalf("home after stale net report = %v, want %v", got, sorted[1])
 	}
 }
