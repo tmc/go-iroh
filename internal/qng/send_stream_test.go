@@ -290,7 +290,7 @@ func TestSendStreamWriteBufferBackpressure(t *testing.T) {
 		n, err := str.Write([]byte("x"))
 		done <- result{n: n, err: err}
 	}()
-	waitForBlockedSendStreamWrite(t, str)
+	waitForBlockedSendStreamWrite(t, str, done)
 	select {
 	case r := <-done:
 		t.Fatalf("Write returned without buffer space: %d, %v", r.n, r.err)
@@ -323,7 +323,7 @@ func TestSendStreamWriteBufferDeadline(t *testing.T) {
 		n, err := str.Write(make([]byte, 2*sendStreamWriteBufferMaxSize))
 		done <- result{n: n, err: err}
 	}()
-	waitForBlockedSendStreamWrite(t, str)
+	waitForBlockedSendStreamWrite(t, str, done)
 	frame, _, _ := str.popStreamFrame(257, protocol.Version1)
 	if frame.Frame == nil {
 		t.Fatal("popStreamFrame returned no frame")
@@ -351,7 +351,7 @@ func TestSendStreamWriteBufferShutdown(t *testing.T) {
 		_, err := str.Write([]byte("x"))
 		done <- err
 	}()
-	waitForBlockedSendStreamWrite(t, str)
+	waitForBlockedSendStreamWrite(t, str, done)
 	want := errors.New("shutdown")
 	str.closeForShutdown(want)
 	select {
@@ -541,7 +541,7 @@ func TestSendStreamConcurrentWriteWaitsForBlockedWriter(t *testing.T) {
 		n, err := str.Write([]byte("a"))
 		first <- result{n: n, err: err}
 	}()
-	waitForBlockedSendStreamWrite(t, str)
+	waitForBlockedSendStreamWrite(t, str, first)
 	second := make(chan result, 1)
 	go func() {
 		n, err := str.Write([]byte("b"))
@@ -582,9 +582,19 @@ func TestSendStreamConcurrentWriteWaitsForBlockedWriter(t *testing.T) {
 	}
 }
 
-func waitForBlockedSendStreamWrite(t *testing.T, str *SendStream) {
+// waitForBlockedSendStreamWrite waits until the Write running in another
+// goroutine parks with data still to send. done is the channel that goroutine
+// sends on when Write returns, which is the only other thing that can happen:
+// waiting for one of the two events keeps the wait from having to guess how
+// long a parked writer takes to become visible.
+func waitForBlockedSendStreamWrite[T any](t *testing.T, str *SendStream, done <-chan T) {
 	t.Helper()
-	for range 10_000 {
+	for {
+		select {
+		case <-done:
+			t.Fatal("Write did not block")
+		default:
+		}
 		str.mutex.Lock()
 		blocked := str.dataForWriting != nil
 		str.mutex.Unlock()
@@ -593,7 +603,6 @@ func waitForBlockedSendStreamWrite(t *testing.T, str *SendStream) {
 		}
 		runtime.Gosched()
 	}
-	t.Fatal("Write did not block")
 }
 
 func TestSendStreamFastPathDeadlineFallsBack(t *testing.T) {
@@ -649,7 +658,7 @@ func TestSendStreamFastPathBufferBoundary(t *testing.T) {
 			t.Errorf("straddling Write = %d, %v; want 2, nil", n, err)
 		}
 	}()
-	waitForBlockedSendStreamWrite(t, str)
+	waitForBlockedSendStreamWrite(t, str, done)
 	select {
 	case <-done:
 		t.Fatal("straddling Write returned without buffer space")
@@ -764,7 +773,7 @@ func TestSendStreamWritevPartialConsumption(t *testing.T) {
 		n, err := str.Writev(&bufs)
 		done <- result{n, err}
 	}()
-	waitForBlockedSendStreamWrite(t, str)
+	waitForBlockedSendStreamWrite(t, str, done)
 	// Pop enough small frames to drain past el0 and partway into el1.
 	for popped := 0; popped <= len(el0)+maxBufferedWriteSize/2; {
 		frame, _, _ := str.popStreamFrame(257, protocol.Version1)
@@ -857,7 +866,7 @@ func TestSendStreamWriteBufferDemandGrowth(t *testing.T) {
 		defer close(done)
 		_, _ = str.Write(make([]byte, maxBufferedWriteSize))
 	}()
-	waitForBlockedSendStreamWrite(t, str)
+	waitForBlockedSendStreamWrite(t, str, done)
 	select {
 	case <-done:
 		t.Fatal("Write past the cap returned without buffer space")
