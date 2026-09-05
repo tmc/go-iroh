@@ -174,6 +174,14 @@ change to be aware of is that datagrams too large for the path now fail with
 EMSGSIZE rather than being fragmented, which is what QUIC requires and what
 upstream quic-go does.
 
+`relay.Map` is now safe for concurrent use and must not be copied after first
+use. It held an unsynchronized map while one instance was shared between the
+relay actor and net_report's background prober, so removing a relay raced with
+probing it. A `sync.RWMutex` was added. Both of its fields were already
+unexported, so no composite literal is affected; the one thing to know is that
+copying a `Map` by value now trips `go vet`'s copylocks check. Nothing in this
+module copied one, and the type has always been passed as `*relay.Map`.
+
 The vendored quic-go fork in `internal/qng` was updated to upstream v0.62.0.
 That package is internal, so no exported API changed; the fork's own divergence
 from upstream is recorded in the package's own documentation.
