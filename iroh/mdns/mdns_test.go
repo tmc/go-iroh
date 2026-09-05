@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"log/slog"
+	"net"
 	"net/netip"
 	"strings"
 	"testing"
@@ -428,5 +429,79 @@ func TestHandlePacketAnswersQueries(t *testing.T) {
 	}
 	if d.answerQuery(announcement) {
 		t.Fatal("an announcement was answered")
+	}
+}
+
+// TestListenIPv6MDNS checks that the IPv6 listener binds the mDNS port and
+// joins ff02::fb. A host without IPv6, or one whose mDNS port is taken, cannot
+// run it, and the Discovery it belongs to falls back to IPv4 there.
+func TestListenIPv6MDNS(t *testing.T) {
+	conn, err := listenIPv6MDNS(context.Background())
+	if err != nil {
+		t.Skipf("no ipv6 mdns listener: %v", err)
+	}
+	defer conn.Close()
+	addr := conn.LocalAddr().(*net.UDPAddr)
+	if addr.Port != mdnsPort {
+		t.Fatalf("listening on port %d, want %d", addr.Port, mdnsPort)
+	}
+}
+
+// TestReadLoopCachesAnnouncementOverIPv6 checks that the read loop Start runs
+// on the IPv6 socket caches what it hears, so a peer found over ff02::fb
+// resolves like one found over 224.0.0.251.
+func TestReadLoopCachesAnnouncementOverIPv6(t *testing.T) {
+	sk, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sk.Public().EndpointID()
+	packet, err := buildAnnouncement(DefaultServiceName, announcementData{
+		id:   id,
+		port: 7777,
+		ips:  []netip.AddrPort{netip.MustParseAddrPort("[2001:db8::1]:7777")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback})
+	if err != nil {
+		t.Skipf("no ipv6 loopback: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d := New(key.EndpointID{})
+	go func() {
+		<-ctx.Done()
+		_ = conn.Close()
+	}()
+	done := make(chan error, 1)
+	go func() { done <- d.readLoop(ctx, conn) }()
+
+	sender, err := net.DialUDP("udp6", nil, conn.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sender.Close()
+	if _, err := sender.Write(packet); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, ok := d.item(id); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("announcement not cached")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("readLoop: %v", err)
 	}
 }

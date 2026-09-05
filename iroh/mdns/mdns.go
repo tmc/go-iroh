@@ -23,6 +23,7 @@ import (
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
 const (
@@ -37,6 +38,7 @@ const (
 
 var (
 	ipv4Multicast = netip.MustParseAddrPort("224.0.0.251:5353")
+	ipv6Multicast = netip.MustParseAddrPort("[ff02::fb]:5353")
 
 	errNoAddresses = errors.New("mdns: endpoint data has no IP addresses")
 )
@@ -61,8 +63,9 @@ type Discovery struct {
 
 	mu        sync.RWMutex
 	peers     map[key.EndpointID]peerInfo
-	conn      *net.UDPConn
-	announced []byte // last announcement built by Publish, replayed to queries
+	conn      *net.UDPConn // udp4, joined to 224.0.0.251
+	conn6     *net.UDPConn // udp6, joined to ff02::fb; nil on a host without IPv6
+	announced []byte       // last announcement built by Publish, replayed to queries
 }
 
 type peerInfo struct {
@@ -146,15 +149,25 @@ func (d *Discovery) Start(ctx context.Context) error {
 	}
 	defer conn.Close()
 
+	// IPv6 is best effort: a host without it still discovers peers over IPv4.
+	conn6, err := listenIPv6MDNS(ctx)
+	if err != nil {
+		d.log().Debug("mdns: not listening on ipv6", "err", err)
+	} else {
+		defer conn6.Close()
+	}
+
 	d.mu.Lock()
 	if d.conn == nil {
 		d.conn = conn
+		d.conn6 = conn6
 	}
 	d.mu.Unlock()
 	defer func() {
 		d.mu.Lock()
 		if d.conn == conn {
 			d.conn = nil
+			d.conn6 = nil
 		}
 		d.mu.Unlock()
 	}()
@@ -162,8 +175,19 @@ func (d *Discovery) Start(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
 		_ = conn.Close()
+		if conn6 != nil {
+			_ = conn6.Close()
+		}
 	}()
 
+	if conn6 != nil {
+		go d.readLoop(ctx, conn6)
+	}
+	return d.readLoop(ctx, conn)
+}
+
+// readLoop reads packets from conn until ctx is cancelled or conn is closed.
+func (d *Discovery) readLoop(ctx context.Context, conn *net.UDPConn) error {
 	buf := make([]byte, 1500)
 	for {
 		n, _, err := conn.ReadFromUDPAddrPort(buf)
@@ -178,35 +202,64 @@ func (d *Discovery) Start(ctx context.Context) error {
 }
 
 func listenIPv4MDNS(ctx context.Context) (*net.UDPConn, error) {
-	lc := net.ListenConfig{Control: reusePortControl}
-	pc, err := lc.ListenPacket(ctx, "udp4", net.JoinHostPort("0.0.0.0", fmt.Sprint(mdnsPort)))
+	conn, err := listenMDNS(ctx, "udp4", "0.0.0.0")
 	if err != nil {
-		return nil, fmt.Errorf("mdns: listen udp4: %w", err)
+		return nil, err
+	}
+	p := ipv4.NewPacketConn(conn)
+	group := &net.UDPAddr{IP: net.IPv4(224, 0, 0, 251)}
+	if err := joinGroup(group, p.JoinGroup); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("mdns: join ipv4 multicast: %w", err)
+	}
+	return conn, nil
+}
+
+func listenIPv6MDNS(ctx context.Context) (*net.UDPConn, error) {
+	conn, err := listenMDNS(ctx, "udp6", "::")
+	if err != nil {
+		return nil, err
+	}
+	p := ipv6.NewPacketConn(conn)
+	group := &net.UDPAddr{IP: net.ParseIP("ff02::fb")}
+	if err := joinGroup(group, p.JoinGroup); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("mdns: join ipv6 multicast: %w", err)
+	}
+	return conn, nil
+}
+
+func listenMDNS(ctx context.Context, network, host string) (*net.UDPConn, error) {
+	lc := net.ListenConfig{Control: reusePortControl}
+	pc, err := lc.ListenPacket(ctx, network, net.JoinHostPort(host, fmt.Sprint(mdnsPort)))
+	if err != nil {
+		return nil, fmt.Errorf("mdns: listen %s: %w", network, err)
 	}
 	conn, ok := pc.(*net.UDPConn)
 	if !ok {
 		_ = pc.Close()
 		return nil, errors.New("mdns: listen did not return UDPConn")
 	}
-	p := ipv4.NewPacketConn(conn)
-	group := &net.UDPAddr{IP: net.IPv4(224, 0, 0, 251)}
+	return conn, nil
+}
+
+// joinGroup joins group on every up multicast interface, falling back to the
+// interface the routing table picks when no interface accepts the join.
+func joinGroup(group *net.UDPAddr, join func(*net.Interface, net.Addr) error) error {
 	joined := false
 	ifaces, _ := net.Interfaces()
 	for i := range ifaces {
 		if ifaces[i].Flags&net.FlagUp == 0 || ifaces[i].Flags&net.FlagMulticast == 0 {
 			continue
 		}
-		if err := p.JoinGroup(&ifaces[i], group); err == nil {
+		if err := join(&ifaces[i], group); err == nil {
 			joined = true
 		}
 	}
-	if !joined {
-		if err := p.JoinGroup(nil, group); err != nil {
-			_ = conn.Close()
-			return nil, fmt.Errorf("mdns: join ipv4 multicast: %w", err)
-		}
+	if joined {
+		return nil
 	}
-	return conn, nil
+	return join(nil, group)
 }
 
 // Publish advertises data on the local network. It is fire-and-forget and
@@ -360,12 +413,17 @@ func (d *Discovery) respond(answer []byte) {
 	// fresh socket when there is none, which would multicast a response after
 	// Start has returned.
 	d.mu.RLock()
-	conn := d.conn
+	conn, conn6 := d.conn, d.conn6
 	d.mu.RUnlock()
-	if conn == nil {
+	if conn == nil && conn6 == nil {
 		return
 	}
-	_, _ = conn.WriteToUDPAddrPort(answer, ipv4Multicast)
+	if conn != nil {
+		_, _ = conn.WriteToUDPAddrPort(answer, ipv4Multicast)
+	}
+	if conn6 != nil {
+		_, _ = conn6.WriteToUDPAddrPort(answer, ipv6Multicast)
+	}
 }
 
 func (d *Discovery) query(id key.EndpointID) {
@@ -382,18 +440,31 @@ func (d *Discovery) writeMulticast(packet []byte) {
 		return
 	}
 	d.mu.RLock()
-	conn := d.conn
+	conn, conn6 := d.conn, d.conn6
 	d.mu.RUnlock()
-	if conn != nil {
-		_, _ = conn.WriteToUDPAddrPort(packet, ipv4Multicast)
+	if conn != nil || conn6 != nil {
+		if conn != nil {
+			_, _ = conn.WriteToUDPAddrPort(packet, ipv4Multicast)
+		}
+		if conn6 != nil {
+			_, _ = conn6.WriteToUDPAddrPort(packet, ipv6Multicast)
+		}
 		return
 	}
-	conn, err := net.ListenUDP("udp4", nil)
+	// Start is not running: multicast from a fresh socket per family. IPv6 is
+	// best effort, so a host without it still announces over IPv4.
+	writeOnce("udp4", packet, ipv4Multicast)
+	writeOnce("udp6", packet, ipv6Multicast)
+}
+
+// writeOnce multicasts packet to dst from a new socket on network.
+func writeOnce(network string, packet []byte, dst netip.AddrPort) {
+	conn, err := net.ListenUDP(network, nil)
 	if err != nil {
 		return
 	}
 	defer conn.Close()
-	_, _ = conn.WriteToUDPAddrPort(packet, ipv4Multicast)
+	_, _ = conn.WriteToUDPAddrPort(packet, dst)
 }
 
 // announcement builds the announcement packet for data and records it as the
