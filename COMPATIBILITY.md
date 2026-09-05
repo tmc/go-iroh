@@ -163,6 +163,17 @@ before. Which addresses a record carries is still independent of the link the
 packet rides on, so AAAA records continue to travel over IPv4 where that is the
 only link.
 
+Path MTU discovery now runs. Setting the don't-fragment bit on UDP sockets had
+been gated behind an `IROH_ENABLE_DF` environment variable, so `capabilities().DF`
+was false and the MTU discoverer was never started on either side of a
+connection. A dialing endpoint still appeared to widen its path, but only as a
+side effect of multipath path setup arming the prober; an accepting endpoint
+stayed at the initial 1243-byte payload for the life of the connection.
+Endpoints now discover the real path MTU in both directions. The behaviour
+change to be aware of is that datagrams too large for the path now fail with
+EMSGSIZE rather than being fragmented, which is what QUIC requires and what
+upstream quic-go does.
+
 The vendored quic-go fork in `internal/qng` was updated to upstream v0.62.0.
 That package is internal, so no exported API changed; the fork's own divergence
 from upstream is recorded in the package's own documentation.
