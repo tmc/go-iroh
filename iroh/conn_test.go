@@ -215,21 +215,18 @@ func TestConnPaths(t *testing.T) {
 			deadline := time.Now().Add(2 * time.Second)
 			for {
 				paths = tt.conn.Paths()
-				if selectedPathValidated(paths) || time.Now().After(deadline) {
+				if selectedPathValidated(paths) {
 					break
 				}
+				if time.Now().After(deadline) {
+					t.Fatalf("no validated selected path after 2s; paths=%+v", paths)
+				}
 				time.Sleep(10 * time.Millisecond)
-			}
-			if len(paths) == 0 {
-				t.Fatal("Paths() returned no paths")
 			}
 			var selected int
 			for _, p := range paths {
 				if p.Selected {
 					selected++
-				}
-				if p.Selected && !p.Validated {
-					t.Errorf("selected path is not validated: %+v", p)
 				}
 				if p.Selected && !p.HasAddr {
 					t.Errorf("selected path has no address: %+v", p)
