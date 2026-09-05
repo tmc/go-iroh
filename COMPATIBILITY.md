@@ -156,6 +156,13 @@ it answers questions that were being dropped. An SRV or TXT question must name
 the instance rather than the service, since both records describe one instance
 and the service name does not say which.
 
+mdns discovery now also listens and announces on the IPv6 multicast group
+`ff02::fb`. Two peers that share an IPv6 link and no IPv4 link previously never
+found each other. IPv6 is best effort: a host without it behaves exactly as
+before. Which addresses a record carries is still independent of the link the
+packet rides on, so AAAA records continue to travel over IPv4 where that is the
+only link.
+
 The vendored quic-go fork in `internal/qng` was updated to upstream v0.62.0.
 That package is internal, so no exported API changed; the fork's own divergence
 from upstream is recorded in the package's own documentation.
