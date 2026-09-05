@@ -13,6 +13,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/tmc/go-iroh/netaddr"
 )
@@ -67,9 +68,10 @@ func (c Config) MarshalText() ([]byte, error) {
 
 // Map is a set of relay servers keyed by URL.
 //
-// The zero Map is empty and ready to use, but is not safe for concurrent
-// mutation; build it up before sharing.
+// The zero Map is empty and ready to use. A Map is safe for concurrent use and
+// must not be copied after first use.
 type Map struct {
+	mu     sync.RWMutex
 	relays map[string]Config // key: RelayURL.String()
 }
 
@@ -98,6 +100,8 @@ func MapFromURLs(urls ...netaddr.RelayURL) *Map {
 // Insert adds or replaces the config for its URL, returning the previous config
 // and whether one was present.
 func (m *Map) Insert(c Config) (Config, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.relays == nil {
 		m.relays = map[string]Config{}
 	}
@@ -109,6 +113,8 @@ func (m *Map) Insert(c Config) (Config, bool) {
 
 // Remove deletes the config for url, returning it and whether it was present.
 func (m *Map) Remove(url netaddr.RelayURL) (Config, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	c, ok := m.relays[url.String()]
 	delete(m.relays, url.String())
 	return c, ok
@@ -116,24 +122,38 @@ func (m *Map) Remove(url netaddr.RelayURL) (Config, bool) {
 
 // Get returns the config for url and whether it is present.
 func (m *Map) Get(url netaddr.RelayURL) (Config, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	c, ok := m.relays[url.String()]
 	return c, ok
 }
 
 // Contains reports whether url is in the map.
 func (m *Map) Contains(url netaddr.RelayURL) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	_, ok := m.relays[url.String()]
 	return ok
 }
 
 // Len returns the number of relays.
-func (m *Map) Len() int { return len(m.relays) }
+func (m *Map) Len() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.relays)
+}
 
 // IsEmpty reports whether the map has no relays.
-func (m *Map) IsEmpty() bool { return len(m.relays) == 0 }
+func (m *Map) IsEmpty() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.relays) == 0
+}
 
 // URLs returns the relay URLs in sorted order.
 func (m *Map) URLs() []netaddr.RelayURL {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	keys := slices.Sorted(maps.Keys(m.relays))
 	out := make([]netaddr.RelayURL, 0, len(keys))
 	for _, k := range keys {
@@ -144,6 +164,8 @@ func (m *Map) URLs() []netaddr.RelayURL {
 
 // Configs returns the relay configs in URL-sorted order.
 func (m *Map) Configs() []Config {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	keys := slices.Sorted(maps.Keys(m.relays))
 	out := make([]Config, 0, len(keys))
 	for _, k := range keys {
@@ -154,6 +176,8 @@ func (m *Map) Configs() []Config {
 
 // Clone returns a deep copy of the map.
 func (m *Map) Clone() *Map {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return &Map{relays: maps.Clone(m.relays)}
 }
 
