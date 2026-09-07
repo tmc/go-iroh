@@ -1,0 +1,8 @@
+commit cb993d7e 2026-09-07T09:28:52Z
+claude-code 2.1.257 (Claude Code) model=claude-opus-5 tty=not a tty pid=61050 ITERM_SESSION_ID=w7t3p17:94558771-8847-4536-82E2-11309ED33A95
+session=a86fa4ef-759f-4224-9114-c2b91fd14e38
+session_url=https://claude.ai/code/session_01HQjeEVeM4nNJUpiNkJTt4f
+branch-review Findings 2 and 4. All three mask writes confirmed deletable-with-suite-green by
+actually applying the mutations, then re-confirmed that each new test fails under its own mutation.
+The 0-RTT assertion had to move ahead of the drain: the first Append clears the stale bits, so an
+assertion after draining passed even with the resets deleted.
