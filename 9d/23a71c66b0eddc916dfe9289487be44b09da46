@@ -1,0 +1,11 @@
+commit 9d23a71c 2026-09-07T09:59:08Z
+claude-code 2.1.257 (Claude Code) model=claude-opus-5 tty=not a tty pid=84469 ITERM_SESSION_ID=w7t3p17:94558771-8847-4536-82E2-11309ED33A95
+session=a86fa4ef-759f-4224-9114-c2b91fd14e38
+session_url=https://claude.ai/code/session_01HQjeEVeM4nNJUpiNkJTt4f
+Found by following branch-review-2's note that WriteWithLimit has no test in the module. Verified the
+gap myself (ErrWriteLimitReached and AddBytesSentWithLimiter appear in no _test.go), then found the
+divergence by writing the test to upstream's contract: upstream's TestSendStreamWriteWithLimit
+asserts zero limiter calls at the point where this fork calls it with maxBytes=6. Severity probed
+separately: pop returned no frame with hasMoreData=false while 6 buffered bytes were queued. The
+guard claim in 9d23a71c is my own measurement (active=true with a limited write parked), not the
+reviewer's stress-test figures, which I did not reproduce and so did not enshrine.
