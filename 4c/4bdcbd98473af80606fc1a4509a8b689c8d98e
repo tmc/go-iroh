@@ -1,0 +1,9 @@
+commit 7d3934ec 2026-09-07T10:11:23Z
+claude-code 2.1.257 (Claude Code) model=claude-opus-5 tty=not a tty pid=93550 ITERM_SESSION_ID=w7t3p17:94558771-8847-4536-82E2-11309ED33A95
+session=a86fa4ef-759f-4224-9114-c2b91fd14e38
+session_url=https://claude.ai/code/session_01HQjeEVeM4nNJUpiNkJTt4f
+Gap found by branch-review-2 while attacking 00248cf2; it supplied a working probe. Verified the gap
+myself first (dropping the term leaves the whole package green) and confirmed the probe both passes
+clean and fails under that mutation 3/3 before taking it. Two changes to what was supplied: t.Skipf
+on the setup state became t.Fatalf, because a skip is a silent vacuous pass, and the writes' errors
+are now checked rather than dropped. Verified 0 skips across 10 runs and clean under -race -count=3.
