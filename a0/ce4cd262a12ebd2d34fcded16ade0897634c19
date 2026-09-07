@@ -1,0 +1,8 @@
+commit a0ce4cd2 2026-09-07T09:28:52Z
+claude-code 2.1.257 (Claude Code) model=claude-opus-5 tty=not a tty pid=61050 ITERM_SESSION_ID=w7t3p17:94558771-8847-4536-82E2-11309ED33A95
+session=a86fa4ef-759f-4224-9114-c2b91fd14e38
+session_url=https://claude.ai/code/session_01HQjeEVeM4nNJUpiNkJTt4f
+branch-review Findings 5 and 6. On 5(c) the reviewer cited +9.9..+14.7% for the scaling cells; two
+sources roughly agree but no run was in hand this session, so the direction is stated and attributed
+without publishing a figure. 5(b) asked for a citable evidence pointer -- not added, since the
+commits are the ledger; instead the paragraph now says exactly what comparison the numbers are.
