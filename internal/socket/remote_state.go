@@ -41,6 +41,18 @@ const (
 	// ActorMaxIdleTimeout is how long an actor with no connections stays alive
 	// before it exits and deregisters. remote_state.rs:74.
 	ActorMaxIdleTimeout = 60 * time.Second
+
+	// PunchSettleInterval is how often the actor re-runs path selection while a
+	// hole-punch settles, and PunchSettleWindow bounds that phase.
+	//
+	// Path state is pulled from the connection, not pushed: nothing tells the
+	// actor that a path just became validated. Selection therefore only ran on
+	// the heartbeat, so a path punched open milliseconds after the dial went
+	// unused until the next 5s tick and the connection kept paying the relay
+	// round trip. These arm a short fast phase after a punch reports success;
+	// they do not change HeartbeatInterval or any other Rust-matched constant.
+	PunchSettleInterval = 50 * time.Millisecond
+	PunchSettleWindow   = 3 * time.Second
 )
 
 // ErrExtensionNotNegotiated is returned by hole-punching and other operations
@@ -176,6 +188,7 @@ type remoteMessage struct {
 	resolve       *resolveMsg
 	resolved      *resolvedMsg
 	connClosed    Connection // a registered connection's Done fired
+	punched       bool       // a hole-punch round finished; settle path selection
 }
 
 // addConnectionMsg registers a new connection with the actor and returns a path
@@ -355,13 +368,33 @@ func (a *RemoteStateActor) run(ctx context.Context) {
 	defer upgrade.Stop()
 	idleTimer := time.NewTimer(a.idle)
 	defer idleTimer.Stop()
+	// Armed only while a punch settles; idle the rest of the time.
+	settle := time.NewTicker(PunchSettleInterval)
+	settle.Stop()
+	defer settle.Stop()
+	var settleUntil time.Time
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case msg := <-a.inbox:
+			if msg.punched {
+				settleUntil = time.Now().Add(PunchSettleWindow)
+				settle.Reset(PunchSettleInterval)
+				a.reselect()
+				break
+			}
 			a.handle(ctx, msg)
+		case <-settle.C:
+			a.reselect()
+			// Stop once the punch has paid off or the window closes. A relay
+			// selection is not a stopping point: the direct path may still be
+			// validating.
+			sel, ok := a.SelectedPath()
+			if (ok && sel.Kind() == AddrIP) || !time.Now().Before(settleUntil) {
+				settle.Stop()
+			}
 		case <-idleTimer.C:
 			// Idle out only when there are no connections. The timer is reset to
 			// the full timeout whenever a connection is present, so a stray fire
@@ -390,11 +423,17 @@ func (a *RemoteStateActor) run(ctx context.Context) {
 				// stalls its in-flight relay streams.
 			case selected && sel.Kind() == AddrIP:
 			case selected && sel.Kind() == AddrRelay:
-				go func() { _ = a.TriggerHolepunch() }()
+				go func() {
+					if a.TriggerHolepunch() == nil {
+						a.NotifyHolepunched()
+					}
+				}()
 			default:
 				go func() {
 					_ = a.ValidateDirectPath(context.Background())
-					_ = a.TriggerHolepunch()
+					if a.TriggerHolepunch() == nil {
+						a.NotifyHolepunched()
+					}
 				}()
 			}
 			a.reselect()
@@ -913,6 +952,21 @@ func (a *RemoteStateActor) triggerHolepunch(target natTraversalRoundConnection, 
 		return fmt.Errorf("socket: initiate nat traversal round: %w", err)
 	}
 	return nil
+}
+
+// NotifyHolepunched tells the actor that a hole-punch round finished, so it
+// re-runs path selection now and briefly keeps re-running it while the new
+// path validates, instead of leaving the connection on the relay until the
+// next heartbeat. Callers report only successful rounds; a failed round has
+// nothing new to select and the heartbeat remains the fallback.
+//
+// It must not be called from the actor loop itself, which is the only consumer
+// of the inbox.
+func (a *RemoteStateActor) NotifyHolepunched() {
+	select {
+	case a.inbox <- remoteMessage{punched: true}:
+	case <-a.done:
+	}
 }
 
 // SelectedPath returns the actor's currently selected path and whether one is

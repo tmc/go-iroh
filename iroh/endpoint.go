@@ -1715,7 +1715,9 @@ func (e *Endpoint) registerConn(remote key.EndpointID, qc *quic.Conn, remoteAddr
 	go func() {
 		select {
 		case <-qc.NATTraversalRemoteAddrsReady():
-			_ = actor.TriggerHolepunchConn(adapter)
+			if actor.TriggerHolepunchConn(adapter) == nil {
+				actor.NotifyHolepunched()
+			}
 		case <-qc.Context().Done():
 		}
 	}()
