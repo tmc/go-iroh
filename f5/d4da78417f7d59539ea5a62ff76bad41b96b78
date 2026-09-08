@@ -1,0 +1,7 @@
+commit c77c4a0d 2026-09-07T09:12:16Z
+claude-code 2.1.257 (Claude Code) model=claude-opus-5 tty=not a tty pid=39208 ITERM_SESSION_ID=w7t3p17:94558771-8847-4536-82E2-11309ED33A95
+session=a86fa4ef-759f-4224-9114-c2b91fd14e38
+session_url=https://claude.ai/code/session_01HQjeEVeM4nNJUpiNkJTt4f
+Same reviewer, its Finding 3. Fixed at the source (the blocking write path) rather than in
+endEpisodeLocked: that path can run with bytes still buffered, so stopping the timer there would
+remove a wakeup the current code accidentally relies on. Test fails without the fix.
