@@ -1,0 +1,11 @@
+Reworded from 'dialsites:' to 'internal/dialsites:' to match the
+package path, per Go project commit-prefix convention. Content unchanged
+(rebase tree hash identical). Original: 5e1a61c7.
+
+date=2026-09-08T01:45:04Z
+claude-code=2.1.257 (Claude Code)
+model=claude-opus-5
+tty=not a tty
+pid=87639
+iterm_session=w7t3p17:94558771-8847-4536-82E2-11309ED33A95
+session=a86fa4ef-759f-4224-9114-c2b91fd14e38
