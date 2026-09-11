@@ -24,12 +24,12 @@ func (m *MagicConn) WriteMsgUDP(p, oob []byte, addr *net.UDPAddr) (n, oobn int, 
 		m.writeMsgSegments(p, addr, segmentSize)
 		return len(p), len(oob), nil
 	}
-	n, oobn, err = m.udp.WriteMsgUDPAddrPort(p, oob, ap)
+	n, oobn, err = m.udp.WriteMsgUDPAddrPort(p, m.transports.ip.withPacketInfo(ap, oob), ap)
 	if err == nil {
 		for range segmentCount(len(p), segmentSize) {
 			m.recordIPSent(ap)
 		}
-		return n, oobn, nil
+		return n, len(oob), nil
 	}
 	// EIO on a segmented write is the kernel refusing GSO, not a lost
 	// datagram: the caller disables GSO and resends the batch one datagram at
