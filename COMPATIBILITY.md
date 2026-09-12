@@ -4,7 +4,7 @@ go-iroh is an independent Go implementation of iroh wire v1. This matrix records
 
 Go-client↔Go-relay pairings contain no Rust peer, so they are outside this matrix's scope; that path is covered by the standard test suite.
 
-Generated from commit `76d0c265946c7a5f54b05d1ed8f0e35889ba3c5b` at 2026-09-04T23:09:28Z. A pass requires a recorded Rust process and binary digest; setup errors, unsupported cells, and untested cells never count as passes.
+Generated from commit `95d377b476ddfb950468c37be4a1ea781ae803f8` at 2026-09-12T02:48:01Z. A pass requires a recorded Rust process and binary digest; setup errors, unsupported cells, and untested cells never count as passes.
 
 ## How to read this table
 
@@ -26,12 +26,12 @@ Matrix cells reference the **Peers** table below. Each peer entry records the Ru
 | Surface | Tier | Upstream train | Status | Detail |
 |---|---|---|---|---|
 | CustomAddr endpoint tickets | experimental | 1.0 | observed-incompatible | Observed with iroh-base 1.0.3 in both directions: upstream uses the legacy enum encoding. |
-| CustomAddr endpoint tickets | experimental | 1.1 (pre-release pin) | verified-interop | Measured at upstream commit 4706ec97 in both directions. Upstream moved to go-iroh's length-prefixed byte format; no go-iroh codec change is required. |
+| CustomAddr endpoint tickets | experimental | 1.2 (1.2.0) | verified-interop | CustomAddr-only scope at released upstream 1.2.0 (17c0612f); regeneration must measure both directions. Upstream moved to go-iroh's length-prefixed byte format; no go-iroh codec change is required. |
 | Non-canonical varints | stable | 1.0 | observed-divergence | go-iroh is strictly stricter: it rejects padded varint encodings that postcard 1.1.3 accepts. No traffic produced by a conforming postcard serializer is affected, since both upstream's serializer and go-iroh's emit only canonical forms. Content relayed verbatim through gossip carries varints produced by the originating endpoint rather than the forwarding peer (gossip/discovery.go:269, docs/heads.go:77), so a non-conforming originator's own message is dropped by go-iroh while upstream accepts it, affecting only that originator. |
 
 ## Compatibility matrix
 
-| Scenario | Tier | Rust counterpart | 1.0 (1.0.3) | 1.1-pre @ 4706ec9 | tip (advisory) |
+| Scenario | Tier | Rust counterpart | 1.0 (1.0.3) | 1.2 (1.2.0) | tip (advisory) |
 |---|---|---|:---:|:---:|:---:|
 | discovery/go-publish-rust-dns | stable | upstream CLI | pass [1] | — | — |
 | discovery/qad-report | stable | upstream CLI | pass [2] | — | — |
@@ -63,7 +63,7 @@ Matrix cells reference the **Peers** table below. Each peer entry records the Ru
 | vectors/postcard-varint-strictness | stable | Rust test driver | fail (expected) [4] | — | — |
 | vectors/postcard-varints | stable | Rust test driver | pass [4] | — | — |
 
-The pinned 1.1-pre column currently exercises the bidirectional CustomAddr wire-vector suite in blocking CI. Other scenarios remain untested for that train until blocking coverage is explicitly expanded at its release re-pin. The `tip` column is populated only in the nightly advisory report.
+The released 1.2 (1.2.0) column remains CustomAddr-only: blocking CI exercises the bidirectional ticket wire vectors. This release re-pin does not expand coverage; all other scenarios remain untested for 1.2. The `tip` column is populated only in the nightly advisory report.
 
 ### Peers
 
@@ -73,7 +73,7 @@ The pinned 1.1-pre column currently exercises the bidirectional CustomAddr wire-
 | [2] | iroh-doctor | 1.0 (1.0.3) | `3aa5c46b1c3a96399eee56fd6ab329c5c1542d46ffb37c3bab21a06ebb979d0f` |
 | [3] | iroh-relay | 1.0 (1.0.3) | `dc4a563cdf4197fc3187051e90124c8981e8cff8903274862434923e729d9ce8` |
 | [4] | rust-driver | 1.0 (1.0.3) | `2e8ca0c122f11a99d6bed8d7a482225ec74d07930c8557810549732eeed1ac55` |
-| [5] | rust-driver | 1.1-pre @ 4706ec9 | `d29cad81ec7e5518a824a46efebafcd090d23c883376621f0508621925aea6b8` |
+| [5] | rust-driver | 1.2 (1.2.0) | `abe58885185018d0b21d6602b05f7ede1edeb5274cc962ab1a252dc6b57f0c44` |
 
 ### Observed incompatibility evidence
 
