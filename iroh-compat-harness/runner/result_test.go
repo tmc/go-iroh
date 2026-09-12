@@ -96,11 +96,11 @@ func TestMarkdownNamesRustCounterpart(t *testing.T) {
 	r := Report{
 		Generated: time.Unix(0, 0).UTC(),
 		GoIroh:    GoIroh{Commit: "abc123"},
-		Pins:      []Pin{{Key: "1.0", Train: "1.0", Version: "1.0.3", Kind: "release"}, {Key: "1.1-pre", Train: "1.1", Commit: "4706ec97", Kind: "pre-release"}},
+		Pins:      []Pin{{Key: "1.0", Train: "1.0", Version: "1.0.3", Kind: "release"}, {Key: "1.2", Train: "1.2", Version: "1.2.0", Commit: "17c0612f", Kind: "release"}},
 		Envelopes: []Envelope{{Surface: "CustomAddr endpoint tickets", Tier: "experimental", UpstreamVersion: "1.0", Status: "observed-incompatible", Detail: "Observed in both directions."}},
 		Cells: []Cell{
 			{Scenario: "echo", Description: "Go and Rust exchange an echo, and a pass proves compatible streams.", Tier: "stable", Counterpart: "upstream CLI", Iroh: "1.0", Result: Pass, Expected: Pass, Peer: "iroh-doctor@sha256:abc", PeerDigest: "sha256:abc"},
-			{Scenario: "echo", Description: "Go and Rust exchange an echo, and a pass proves compatible streams.", Tier: "stable", Counterpart: "upstream CLI", Iroh: "1.1-pre", Result: Pass, Expected: Pass, Peer: "iroh-doctor@sha256:ghi", PeerDigest: "sha256:ghi"},
+			{Scenario: "echo", Description: "Go and Rust exchange an echo, and a pass proves compatible streams.", Tier: "stable", Counterpart: "upstream CLI", Iroh: "1.2", Result: Pass, Expected: Pass, Peer: "iroh-doctor@sha256:ghi", PeerDigest: "sha256:ghi"},
 			{Scenario: "datagrams", Description: "Go and Rust exchange datagrams, and a pass proves compatible datagrams.", Tier: "stable", Counterpart: "Rust test driver", Iroh: "1.0", Result: Fail, Expected: Fail, Peer: "rust-driver@sha256:def", PeerDigest: "sha256:def", Detail: "Rust accepted 0/1 datagrams"},
 		},
 	}
@@ -116,8 +116,9 @@ func TestMarkdownNamesRustCounterpart(t *testing.T) {
 		"CustomAddr endpoint tickets",
 		"observed-incompatible",
 		"1.0 (1.0.3)",
-		"1.1-pre @ 4706ec9",
-		"Other scenarios remain untested for that train until blocking coverage is explicitly expanded at its release re-pin",
+		"1.2 (1.2.0)",
+		"This release re-pin does not expand coverage",
+		"all other scenarios remain untested for 1.2",
 		"| echo | stable | upstream CLI | pass [2] | pass [3] | — |",
 		"fail (expected)",
 		"Rust accepted 0/1 datagrams",
