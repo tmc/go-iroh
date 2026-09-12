@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	expected := flag.String("expected-key", "1.1-pre", "pinned prediction key")
+	expected := flag.String("expected-key", "1.2", "pinned prediction key")
 	vector := flag.String("rust-vector", "", "path to the Rust vector driver")
 	scenarios := flag.String("scenarios", "scenarios", "scenario declaration directory")
 	repo := flag.String("repo", "..", "go-iroh repository root")

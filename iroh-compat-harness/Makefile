@@ -7,13 +7,13 @@ RUST_DOCTOR_BIN ?=
 RUST_RELAY_BIN ?=
 RUST_DNS_BIN ?=
 RUST_VECTOR_BIN ?=
-RUST_PRE_VECTOR_BIN ?=
+RUST_CUSTOM_VECTOR_BIN ?=
 DOCTOR_OUTPUT ?= $(HOME)/tmp/go-iroh-compat/iroh-doctor-$(IROH_VERSION)
 
 parity: doctor-image-build
 	@test -z "$$(git -C .. status --porcelain)" || { echo "go-iroh working tree is dirty" >&2; exit 1; }
 	GO_IROH_GIT_COMMON_DIR=$$(git -C .. rev-parse --path-format=absolute --git-common-dir) \
-		IROH_VERSION=$(IROH_VERSION) IROH_PRE_COMMIT=$(IROH_PRE_COMMIT) \
+		IROH_VERSION=$(IROH_VERSION) IROH_CUSTOM_COMMIT=$(IROH_CUSTOM_COMMIT) \
 		docker compose run --build --rm parity
 
 parity-native:
@@ -22,7 +22,7 @@ parity-native:
 	trap 'rm -rf "$$work"' EXIT; \
 	go build -o "$$work/iroh-relay" ../cmd/iroh-relay; \
 	go build -o "$$work/iroh-dns-server" ../cmd/iroh-dns-server; \
-	go run ./cmd/iroh-compat -release-train $(IROH_RELEASE_TRAIN) -release-version $(IROH_RELEASE_VERSION) -pre-train $(IROH_PRE_TRAIN) -pre-commit $(IROH_PRE_COMMIT) -go-relay "$$work/iroh-relay" -go-dns "$$work/iroh-dns-server" -rust-doctor "$(RUST_DOCTOR_BIN)" -rust-relay "$(RUST_RELAY_BIN)" -rust-dns "$(RUST_DNS_BIN)" -rust-vector "$(RUST_VECTOR_BIN)" -rust-pre-vector "$(RUST_PRE_VECTOR_BIN)" -rust-pq "$(RUST_VECTOR_BIN)"
+	go run ./cmd/iroh-compat -release-train $(IROH_RELEASE_TRAIN) -release-version $(IROH_RELEASE_VERSION) -custom-train $(IROH_CUSTOM_TRAIN) -custom-version $(IROH_CUSTOM_VERSION) -custom-commit $(IROH_CUSTOM_COMMIT) -go-relay "$$work/iroh-relay" -go-dns "$$work/iroh-dns-server" -rust-doctor "$(RUST_DOCTOR_BIN)" -rust-relay "$(RUST_RELAY_BIN)" -rust-dns "$(RUST_DNS_BIN)" -rust-vector "$(RUST_VECTOR_BIN)" -rust-custom-vector "$(RUST_CUSTOM_VECTOR_BIN)" -rust-pq "$(RUST_VECTOR_BIN)"
 
 test:
 	go test ./...
