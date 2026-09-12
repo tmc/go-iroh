@@ -10,9 +10,9 @@
     {
       "surface": "CustomAddr endpoint tickets",
       "tier": "experimental",
-      "upstream_version": "1.1 (pre-release pin)",
+      "upstream_version": "1.2 (1.2.0)",
       "status": "verified-interop",
-      "detail": "Measured at upstream commit 4706ec97 in both directions. Upstream moved to go-iroh's length-prefixed byte format; no go-iroh codec change is required."
+      "detail": "CustomAddr-only scope at released upstream 1.2.0 (17c0612f); regeneration must measure both directions. Upstream moved to go-iroh's length-prefixed byte format; no go-iroh codec change is required."
     },
     {
       "surface": "Non-canonical varints",
