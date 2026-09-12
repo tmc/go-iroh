@@ -612,7 +612,7 @@
       "tier": "experimental",
       "upstream_version": "1.2 (1.2.0)",
       "status": "verified-interop",
-      "detail": "CustomAddr-only scope at released upstream 1.2.0 (17c0612f); regeneration must measure both directions. Upstream moved to go-iroh's length-prefixed byte format; no go-iroh codec change is required."
+      "detail": "CustomAddr-only measurement at released upstream 1.2.0 (17c0612f): Go accepted 6/6 Rust tickets and Rust accepted 6/6 Go tickets. Upstream moved to go-iroh's length-prefixed byte format; no go-iroh codec change is required."
     },
     {
       "surface": "Non-canonical varints",
