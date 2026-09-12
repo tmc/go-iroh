@@ -26,7 +26,7 @@ Matrix cells reference the **Peers** table below. Each peer entry records the Ru
 | Surface | Tier | Upstream train | Status | Detail |
 |---|---|---|---|---|
 | CustomAddr endpoint tickets | experimental | 1.0 | observed-incompatible | Observed with iroh-base 1.0.3 in both directions: upstream uses the legacy enum encoding. |
-| CustomAddr endpoint tickets | experimental | 1.2 (1.2.0) | verified-interop | CustomAddr-only scope at released upstream 1.2.0 (17c0612f); regeneration must measure both directions. Upstream moved to go-iroh's length-prefixed byte format; no go-iroh codec change is required. |
+| CustomAddr endpoint tickets | experimental | 1.2 (1.2.0) | verified-interop | CustomAddr-only measurement at released upstream 1.2.0 (17c0612f): Go accepted 6/6 Rust tickets and Rust accepted 6/6 Go tickets. Upstream moved to go-iroh's length-prefixed byte format; no go-iroh codec change is required. |
 | Non-canonical varints | stable | 1.0 | observed-divergence | go-iroh is strictly stricter: it rejects padded varint encodings that postcard 1.1.3 accepts. No traffic produced by a conforming postcard serializer is affected, since both upstream's serializer and go-iroh's emit only canonical forms. Content relayed verbatim through gossip carries varints produced by the originating endpoint rather than the forwarding peer (gossip/discovery.go:269, docs/heads.go:77), so a non-conforming originator's own message is dropped by go-iroh while upstream accepts it, affecting only that originator. |
 
 ## Compatibility matrix
