@@ -47,6 +47,9 @@ func lanIPv4(t *testing.T) netip.Addr {
 // host's LAN address; by route the reply would leave from 127.0.0.1, and a
 // QUIC peer would then see a packet from an address it never dialed.
 func TestIpTransportRepliesFromArrivalAddress(t *testing.T) {
+	if !socket.IPv4ArrivalSupported {
+		t.Skip("no IPv4 arrival address on this platform")
+	}
 	lan := lanIPv4(t)
 
 	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
