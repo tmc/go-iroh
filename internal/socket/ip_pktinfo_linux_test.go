@@ -87,3 +87,55 @@ func TestMagicConnWriteMsgUDPKeepsArrivalAddress(t *testing.T) {
 		t.Fatalf("segments %q, want %q", got, want)
 	}
 }
+
+// TestMagicConnWriteMsgUDPFallsBackWhenSourceRefused checks that a send whose
+// recorded arrival address the kernel refuses is retried without it and the
+// address forgotten. IpTransport.send has done this since the table existed;
+// WriteMsgUDP needs it too, and more: every ECN-marked packet reaches the
+// wire through it, so a stale entry there blackholes a peer until it sends
+// to us again.
+func TestMagicConnWriteMsgUDPFallsBackWhenSourceRefused(t *testing.T) {
+	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+	sock := NewSocket()
+	m := NewMagicConn(sock, udp)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Serve(ctx)
+	defer m.Close()
+	if !m.transports.ip.pktinfo {
+		t.Fatal("packet info not enabled on a wildcard socket")
+	}
+
+	client, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	peer := canonicalAddrPort(client.LocalAddr().(*net.UDPAddr).AddrPort())
+
+	// An address this host does not hold, standing in for one that has gone.
+	m.transports.ip.record(peer, localAddr{addr: netip.MustParseAddr("192.0.2.1")})
+	if m.transports.ip.packetInfoFor(peer) == nil {
+		t.Fatal("arrival address not recorded")
+	}
+
+	if _, _, err := m.WriteMsgUDP([]byte("pong"), nil, client.LocalAddr().(*net.UDPAddr)); err != nil {
+		t.Fatalf("WriteMsgUDP: %v", err)
+	}
+	client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 64)
+	n, _, err := client.ReadFromUDPAddrPort(buf)
+	if err != nil {
+		t.Fatalf("the datagram never left: %v", err)
+	}
+	if string(buf[:n]) != "pong" {
+		t.Fatalf("received %q", buf[:n])
+	}
+	if m.transports.ip.packetInfoFor(peer) != nil {
+		t.Error("the refused arrival address is still recorded")
+	}
+}

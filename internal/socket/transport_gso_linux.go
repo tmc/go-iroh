@@ -26,7 +26,16 @@ func (m *MagicConn) WriteMsgUDP(p, oob []byte, addr *net.UDPAddr) (n, oobn int, 
 	}
 	// Stack buffer for the packet-info message: no allocation per send.
 	var cbuf [maxControlSize]byte
-	n, oobn, err = m.udp.WriteMsgUDPAddrPort(p, m.transports.ip.withPacketInfo(ap, oob, cbuf[:0]), ap)
+	msg := m.transports.ip.withPacketInfo(ap, oob, cbuf[:0])
+	n, oobn, err = m.udp.WriteMsgUDPAddrPort(p, msg, ap)
+	if err != nil && len(msg) > len(oob) && !gsoRefused(err, segmentSize) {
+		// The kernel refused the source: the address it names has gone, or
+		// the platform will not take it. Drop it and let the kernel choose,
+		// as IpTransport.send does. Without this the entry outlives the
+		// address and every later send to this peer is refused the same way.
+		m.transports.ip.forgetLocal(ap)
+		n, oobn, err = m.udp.WriteMsgUDPAddrPort(p, oob, ap)
+	}
 	if err == nil {
 		for range segmentCount(len(p), segmentSize) {
 			m.recordIPSent(ap)
@@ -37,11 +46,17 @@ func (m *MagicConn) WriteMsgUDP(p, oob []byte, addr *net.UDPAddr) (n, oobn int, 
 	// datagram: the caller disables GSO and resends the batch one datagram at
 	// a time, and those resends are counted on the ordinary path. Counting
 	// here would count them twice.
-	if segmentSize > 0 && errors.Is(err, unix.EIO) {
+	if gsoRefused(err, segmentSize) {
 		return n, oobn, err
 	}
 	m.metrics.blackholed.Add(uint64(segmentCount(len(p), segmentSize)))
 	return len(p), len(oob), nil
+}
+
+// gsoRefused reports whether err is the kernel declining to segment a write
+// rather than a fault in the datagram or its source address.
+func gsoRefused(err error, segmentSize int) bool {
+	return segmentSize > 0 && errors.Is(err, unix.EIO)
 }
 
 func (m *MagicConn) writeMsgSegments(p []byte, addr *net.UDPAddr, segmentSize int) {
