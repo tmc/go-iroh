@@ -39,7 +39,11 @@ type IpTransport struct {
 	// Transmit::src_ip.
 	pktinfo bool
 	localMu sync.Mutex
-	local   map[netip.AddrPort]localAddr
+	local   map[netip.AddrPort]*localEntry
+	// heard orders entries by the last datagram heard from each remote,
+	// circularly through this sentinel: heard.next is newest, heard.prev
+	// oldest and first to be evicted.
+	heard localEntry
 }
 
 // localAddr is the local address a remote's datagrams arrive at.
@@ -48,9 +52,19 @@ type localAddr struct {
 	ifIndex int
 }
 
-// maxLocalAddrs bounds the arrival-address table. Beyond it the table is
-// dropped: a reply to a peer not in the table leaves from the address the
-// kernel picks, as it always did before the table.
+// localEntry is a remote's entry in the arrival-address table. cmsg is the
+// packet-info message that makes a reply leave from the address; it is
+// shared with senders and never written after it is built.
+type localEntry struct {
+	remote netip.AddrPort
+	localAddr
+	cmsg       []byte
+	prev, next *localEntry
+}
+
+// maxLocalAddrs bounds the arrival-address table. A full table drops the
+// remote heard from longest ago; a reply to a peer not in the table leaves
+// from the address the kernel picks, as before the table.
 const maxLocalAddrs = 4096
 
 // NewIpTransport returns an IpTransport over conn that delivers received
@@ -61,7 +75,8 @@ func NewIpTransport(conn *net.UDPConn, recvCh chan<- recvBatch) *IpTransport {
 	if la, ok := conn.LocalAddr().(*net.UDPAddr); ok && la.IP.IsUnspecified() {
 		t.pktinfo = enablePacketInfo(conn)
 		if t.pktinfo {
-			t.local = make(map[netip.AddrPort]localAddr)
+			t.local = make(map[netip.AddrPort]*localEntry)
+			t.heard.prev, t.heard.next = &t.heard, &t.heard
 		}
 	}
 	return t
@@ -78,40 +93,79 @@ func enablePacketInfo(conn *net.UDPConn) bool {
 
 // recordLocal notes the local address remote's datagram arrived at.
 func (t *IpTransport) recordLocal(remote netip.AddrPort, oob []byte) {
-	la, ok := parsePacketInfo(oob)
-	if !ok {
+	if la, ok := parsePacketInfo(oob); ok {
+		t.record(remote, la)
+	}
+}
+
+// record notes la as remote's arrival address and remote as the most
+// recently heard. The control message is rebuilt only when la changes.
+func (t *IpTransport) record(remote netip.AddrPort, la localAddr) {
+	t.localMu.Lock()
+	defer t.localMu.Unlock()
+	if e, ok := t.local[remote]; ok {
+		if e.localAddr != la {
+			e.localAddr = la
+			e.cmsg = packetInfoMessage(remote, la)
+		}
+		t.unlink(e)
+		t.linkFront(e)
 		return
 	}
-	t.localMu.Lock()
 	if len(t.local) >= maxLocalAddrs {
-		clear(t.local)
+		oldest := t.heard.prev
+		t.unlink(oldest)
+		delete(t.local, oldest.remote)
 	}
-	t.local[remote] = la
-	t.localMu.Unlock()
+	e := &localEntry{remote: remote, localAddr: la, cmsg: packetInfoMessage(remote, la)}
+	t.local[remote] = e
+	t.linkFront(e)
+}
+
+// linkFront puts e at the head of the recency list. Caller holds localMu.
+func (t *IpTransport) linkFront(e *localEntry) {
+	e.prev, e.next = &t.heard, t.heard.next
+	e.prev.next, e.next.prev = e, e
+}
+
+// unlink removes e from the recency list. Caller holds localMu.
+func (t *IpTransport) unlink(e *localEntry) {
+	e.prev.next, e.next.prev = e.next, e.prev
+	e.prev, e.next = nil, nil
 }
 
 // forgetLocal drops remote's arrival address after the kernel refused it.
 func (t *IpTransport) forgetLocal(remote netip.AddrPort) {
 	t.localMu.Lock()
-	delete(t.local, remote)
+	if e, ok := t.local[remote]; ok {
+		t.unlink(e)
+		delete(t.local, remote)
+	}
 	t.localMu.Unlock()
 }
 
 // packetInfoFor returns the control message that makes a datagram to remote
-// leave from the address remote last reached, or nil when none is known.
+// leave from the address remote last reached, or nil when none is known. The
+// message is shared and must not be modified.
 func (t *IpTransport) packetInfoFor(remote netip.AddrPort) []byte {
 	if !t.pktinfo {
 		return nil
 	}
+	var cmsg []byte
 	t.localMu.Lock()
-	la, ok := t.local[remote]
-	t.localMu.Unlock()
-	if !ok {
-		return nil
+	if e, ok := t.local[remote]; ok {
+		cmsg = e.cmsg
 	}
-	// The source must be of the destination's family. IPv4 traffic on a
-	// dual-stack socket carries IP-level control messages in both
-	// directions, so an IPv4 remote gets an IPv4 message whatever the socket.
+	t.localMu.Unlock()
+	return cmsg
+}
+
+// packetInfoMessage builds the packet-info control message naming la as the
+// source of datagrams to remote, or nil when it cannot be. The source must
+// be of the destination's family: IPv4 traffic on a dual-stack socket
+// carries IP-level control messages in both directions, so an IPv4 remote
+// gets an IPv4 message whatever the socket.
+func packetInfoMessage(remote netip.AddrPort, la localAddr) []byte {
 	if remote.Addr().Is4() {
 		if !la.addr.Is4() {
 			return nil
@@ -122,32 +176,6 @@ func (t *IpTransport) packetInfoFor(remote netip.AddrPort) []byte {
 		return nil
 	}
 	return (&ipv6.ControlMessage{Src: la.addr.AsSlice(), IfIndex: la.ifIndex}).Marshal()
-}
-
-// parsePacketInfo extracts the destination address from the control messages
-// of a received datagram. Both families are tried: the level the kernel uses
-// depends on the socket and on the traffic, not on the bind address alone.
-func parsePacketInfo(oob []byte) (localAddr, bool) {
-	if len(oob) == 0 {
-		return localAddr{}, false
-	}
-	var cm4 ipv4.ControlMessage
-	if cm4.Parse(oob) == nil && len(cm4.Dst) > 0 {
-		if a, ok := netip.AddrFromSlice(cm4.Dst); ok {
-			return localAddr{addr: a.Unmap(), ifIndex: cm4.IfIndex}, true
-		}
-	}
-	var cm6 ipv6.ControlMessage
-	if cm6.Parse(oob) == nil && len(cm6.Dst) > 0 {
-		if a, ok := netip.AddrFromSlice(cm6.Dst); ok {
-			ifIndex := cm6.IfIndex
-			if !a.IsLinkLocalUnicast() {
-				ifIndex = 0
-			}
-			return localAddr{addr: a.Unmap(), ifIndex: ifIndex}, true
-		}
-	}
-	return localAddr{}, false
 }
 
 // maxControlSize bounds the control messages read with a datagram: a
@@ -266,13 +294,15 @@ func (t *IpTransport) send(p []byte, dst netip.AddrPort) (int, error) {
 }
 
 // withPacketInfo prepends the packet-info control message for dst, when one
-// is known, to the control messages of a send. The result never aliases oob.
-func (t *IpTransport) withPacketInfo(dst netip.AddrPort, oob []byte) []byte {
+// is known, to oob. The result is built in buf, grown if too small; oob and
+// the shared message are not written to.
+func (t *IpTransport) withPacketInfo(dst netip.AddrPort, oob, buf []byte) []byte {
 	pi := t.packetInfoFor(dst)
 	if pi == nil {
 		return oob
 	}
-	return append(pi, oob...)
+	buf = append(buf[:0], pi...)
+	return append(buf, oob...)
 }
 
 func canonicalAddrPort(ap netip.AddrPort) netip.AddrPort {

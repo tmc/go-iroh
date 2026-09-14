@@ -24,7 +24,9 @@ func (m *MagicConn) WriteMsgUDP(p, oob []byte, addr *net.UDPAddr) (n, oobn int, 
 		m.writeMsgSegments(p, addr, segmentSize)
 		return len(p), len(oob), nil
 	}
-	n, oobn, err = m.udp.WriteMsgUDPAddrPort(p, m.transports.ip.withPacketInfo(ap, oob), ap)
+	// Stack buffer for the packet-info message: no allocation per send.
+	var cbuf [maxControlSize]byte
+	n, oobn, err = m.udp.WriteMsgUDPAddrPort(p, m.transports.ip.withPacketInfo(ap, oob, cbuf[:0]), ap)
 	if err == nil {
 		for range segmentCount(len(p), segmentSize) {
 			m.recordIPSent(ap)
