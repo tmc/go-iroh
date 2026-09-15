@@ -34,6 +34,17 @@ make vectors       # regenerate with Rust and require byte identity
 go test ./vectors  # verify the committed corpus with Go only
 ```
 
+The image builds reuse cargo's registry and target directories through BuildKit
+cache mounts, and the runner container keeps the Go module and build caches in
+named volumes. Both tools key their caches by content and fingerprint their own
+inputs, so a cache hit is work the tool proved it could skip rather than a
+result carried over. Restructuring the images this way left every Rust peer
+byte-identical: the SHA-256 digests of iroh-doctor, iroh-relay, iroh-dns-server
+and both vector drivers still match the ones recorded in
+`results/results.json`. Caching also does not skip the CustomAddr patch gate,
+which re-resolves the patch and re-reads the lock on every build. To rebuild
+every layer from scratch anyway, set `PARITY_NO_CACHE=1`.
+
 The 1.2.0 column remains CustomAddr-only. `drivers/rust-driver` stays at
 1.0.3 for the full baseline matrix and its committed corpus;
 `drivers/custom-addr` pins iroh-base 1.2.0 separately. Its build script checks
