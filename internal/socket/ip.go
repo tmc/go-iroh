@@ -27,6 +27,10 @@ type IpTransport struct {
 	conn   *net.UDPConn
 	recvCh chan<- recvBatch
 
+	// gro is set when the kernel coalesces received datagrams for this
+	// socket; the receive loop then reads runs rather than datagrams.
+	gro bool
+
 	// pktinfo is set when the socket is bound to the unspecified address and
 	// the platform delivers the destination address of received datagrams.
 	// A wildcard socket has no fixed source address: the kernel picks one per
@@ -67,11 +71,17 @@ type localEntry struct {
 // from the address the kernel picks, as before the table.
 const maxLocalAddrs = 4096
 
+// groBufSize bounds one UDP_GRO read: the kernel coalesces at most a 64 KiB
+// run of datagrams into a single recvmsg.
+const groBufSize = 65535
+
+var groRecvPool = sync.Pool{New: func() any { b := make([]byte, groBufSize); return &b }}
+
 // NewIpTransport returns an IpTransport over conn that delivers received
 // datagrams to recvCh. The transport does not take ownership of conn; the caller
 // closes it.
 func NewIpTransport(conn *net.UDPConn, recvCh chan<- recvBatch) *IpTransport {
-	t := &IpTransport{conn: conn, recvCh: recvCh}
+	t := &IpTransport{conn: conn, recvCh: recvCh, gro: enableGRO(conn)}
 	if la, ok := conn.LocalAddr().(*net.UDPAddr); ok && la.IP.IsUnspecified() {
 		t.pktinfo = enablePacketInfo(conn)
 		if t.pktinfo {
@@ -191,6 +201,10 @@ func (t *IpTransport) LocalAddr() net.Addr { return t.conn.LocalAddr() }
 // match iroh/src/socket/transports/ip.rs:221 to_canonical). Empty datagrams and
 // transient errors are skipped; a closed socket ends the loop cleanly.
 func (t *IpTransport) Serve(ctx context.Context) {
+	if t.gro {
+		t.serveGRO(ctx)
+		return
+	}
 	var oob []byte
 	if t.pktinfo {
 		oob = make([]byte, maxControlSize)
@@ -232,6 +246,51 @@ func (t *IpTransport) Serve(ctx context.Context) {
 			t.recordLocal(cap, oob[:oobn])
 		}
 		b := recvBatch{data: buf[:n], ip: cap, releaseIP: true}
+		if !t.enqueue(ctx, b) {
+			return
+		}
+	}
+}
+
+// serveGRO is the receive loop for a socket with UDP_GRO enabled: one read can
+// return a run of equally sized datagrams from the same peer, so it queues the
+// whole read as one batch strided by the segment size the kernel reports and
+// hands the buffer back to the pool once ReadFrom has copied out the last
+// segment.
+func (t *IpTransport) serveGRO(ctx context.Context) {
+	// The read carries the segment size and, on a wildcard socket, the
+	// packet-info message too: room for both, not just the one.
+	var oob [groOOBSize + maxControlSize]byte
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		bp := groRecvPool.Get().(*[]byte)
+		buf := *bp
+		n, oobn, _, ap, err := t.conn.ReadMsgUDPAddrPort(buf, oob[:])
+		if err != nil {
+			groRecvPool.Put(bp)
+			if errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
+				return
+			}
+			continue
+		}
+		if n == 0 {
+			groRecvPool.Put(bp)
+			continue
+		}
+		seg := groSegmentSize(oob[:oobn])
+		if seg <= 0 || seg > n {
+			seg = n
+		}
+		recordUDPReceive((n+seg-1)/seg, seg < n)
+		src := canonicalAddrPort(ap)
+		if t.pktinfo {
+			// A coalesced run is one peer's, so one arrival address
+			// covers every datagram in it.
+			t.recordLocal(src, oob[:oobn])
+		}
+		b := recvBatch{data: buf[:n], stride: seg, ip: src, groBuf: bp}
 		if !t.enqueue(ctx, b) {
 			return
 		}

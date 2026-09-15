@@ -1286,9 +1286,11 @@ var ErrHandshakeRejected = errors.New("iroh: handshake rejected by hook")
 var ErrConnClosedDuringHandshake = errors.New("iroh: connection closed during handshake")
 
 // Connect dials the endpoint identified by addr and negotiates alpn, returning
-// an established [Conn]. It tries the direct IP addresses in addr in order, then
-// (if relays are enabled) the relay URLs in addr. A relay path carries the QUIC
-// handshake over a relay mapped address that routes through the relay transport.
+// an established [Conn]. It starts a handshake on the direct IP addresses in
+// addr and then (if relays are enabled) on the relay URLs, in that order but
+// staggered rather than one after the other, and takes the first that completes.
+// A relay path carries the QUIC handshake over a relay mapped address that
+// routes through the relay transport.
 //
 // When addr carries no usable address at all - a dial by endpoint ID alone -
 // Connect resolves one through the services given to [WithAddressLookup] and
@@ -1394,36 +1396,103 @@ func (e *Endpoint) connectEarly(ctx context.Context, addr netaddr.EndpointAddr, 
 
 	// With a resumable ticket DialEarly returns at the 0-RTT window, before any
 	// packet from the peer, so success says nothing about whether the target
-	// answers. Handshake completion is the first real evidence, needed for
-	// every target except one already proven or with nothing left to try.
-	sel, haveSel := e.goodTarget(addr.ID)
+	// answers. Handshake completion is the first real evidence, needed for every
+	// target except one the path selector has already proven.
 	var firstErr error
-	for i, target := range dials {
+	if target, ok := e.provenTarget(addr.ID, dials); ok {
 		qc, err := e.transport.DialEarly(ctx, target, clientTLS, e.quicConf)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
+		if err == nil {
+			return &Connecting{ep: e, qc: qc, remoteID: addr.ID, addr: addr, alpn: alpn}, nil
 		}
-		proven := haveSel && e.sock.PathAddr(addr.ID, target).String() == sel
-		if !proven && i < len(dials)-1 {
-			select {
-			case <-qc.HandshakeComplete():
-			case <-ctx.Done():
-				qc.CloseWithError(0, "")
-				return nil, fmt.Errorf("iroh: connect to %s: %w", addr.ID, ctx.Err())
-			case <-time.After(dialAttemptTimeout):
-				qc.CloseWithError(0, "")
-				if firstErr == nil {
-					firstErr = fmt.Errorf("dial %s: no handshake within %v", target, dialAttemptTimeout)
-				}
-				continue
-			}
-		}
-		return &Connecting{ep: e, qc: qc, remoteID: addr.ID, addr: addr, alpn: alpn}, nil
+		firstErr = err
 	}
-	return nil, fmt.Errorf("iroh: connect to %s: %w", addr.ID, tlsHandshakeFailure(firstErr))
+	qc, err := e.dialAny(ctx, dials, clientTLS)
+	if err != nil {
+		if firstErr == nil {
+			firstErr = err
+		}
+		return nil, fmt.Errorf("iroh: connect to %s: %w", addr.ID, tlsHandshakeFailure(firstErr))
+	}
+	return &Connecting{ep: e, qc: qc, remoteID: addr.ID, addr: addr, alpn: alpn}, nil
+}
+
+// provenTarget returns the one of targets that the path selector currently
+// prefers for id, if any. A dial to it needs no further evidence that id
+// answers there.
+func (e *Endpoint) provenTarget(id key.EndpointID, targets []net.Addr) (net.Addr, bool) {
+	sel, ok := e.goodTarget(id)
+	if !ok {
+		return nil, false
+	}
+	for _, target := range targets {
+		if e.sock.PathAddr(id, target).String() == sel {
+			return target, true
+		}
+	}
+	return nil, false
+}
+
+// dialAny starts a handshake with each target dialAttemptDelay apart and returns
+// the first whose handshake completes, so unreachable direct addresses delay the
+// relay path by that step rather than by dialAttemptTimeout each. Losing
+// handshakes are cancelled or closed; the peer may briefly accept one.
+func (e *Endpoint) dialAny(ctx context.Context, targets []net.Addr, clientTLS *itls.Config) (*quic.Conn, error) {
+	if len(targets) == 1 {
+		// Nothing left to race against, so there is no winner to pick and no
+		// reason to wait past the 0-RTT window.
+		return e.transport.DialEarly(ctx, targets[0], clientTLS, e.quicConf)
+	}
+	type result struct {
+		qc  *quic.Conn
+		err error
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan result, len(targets))
+	for i, target := range targets {
+		go func() {
+			if i > 0 {
+				select {
+				case <-time.After(time.Duration(i) * dialAttemptDelay):
+				case <-ctx.Done():
+					results <- result{nil, ctx.Err()}
+					return
+				}
+			}
+			qc, err := e.transport.DialEarly(ctx, target, clientTLS.Clone(), e.quicConf)
+			if err == nil {
+				select {
+				case <-qc.HandshakeComplete():
+				case <-ctx.Done():
+					qc.CloseWithError(0, "")
+					qc, err = nil, ctx.Err()
+				case <-time.After(dialAttemptTimeout):
+					qc.CloseWithError(0, "")
+					qc, err = nil, fmt.Errorf("dial %s: no handshake within %v", target, dialAttemptTimeout)
+				}
+			}
+			results <- result{qc, err}
+		}()
+	}
+	var firstErr error
+	for got := 1; got <= len(targets); got++ {
+		r := <-results
+		if r.err == nil {
+			cancel()
+			go func() {
+				for range len(targets) - got {
+					if late := <-results; late.qc != nil {
+						late.qc.CloseWithError(0, "")
+					}
+				}
+			}()
+			return r.qc, nil
+		}
+		if firstErr == nil {
+			firstErr = r.err
+		}
+	}
+	return nil, firstErr
 }
 
 // Dial dials addr, negotiates alpn, opens a bidirectional stream, and returns it

@@ -436,8 +436,9 @@ func TestConnectEarlyUnreachableFirstTarget(t *testing.T) {
 
 // TestConnectEarlyFallsThroughUnprovenTarget covers the dial path when no
 // proven target is available: the hint recorded by an earlier connection is
-// dropped when the remote is evicted, so a resumed dial must wait for evidence
-// on the unreachable first target and fall through to the next one.
+// dropped when the remote is evicted, so a resumed dial has to find evidence
+// that a target answers before it returns one. With no proven target the dial
+// races them, and the blackholed address must lose to the reachable one.
 func TestConnectEarlyFallsThroughUnprovenTarget(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -487,13 +488,20 @@ func TestConnectEarlyFallsThroughUnprovenTarget(t *testing.T) {
 	conn2, _ := c2.Into0RTT()
 	defer conn2.CloseWithError(0, "")
 
+	// A resumed handshake is no evidence that a target answers, so the dial
+	// must have landed on the reachable address, not on the blackholed one.
+	got, err := netip.ParseAddrPort(conn2.RemoteAddr().String())
+	if err != nil {
+		t.Fatalf("remote addr %q: %v", conn2.RemoteAddr(), err)
+	}
+	want := server.LocalAddr()
+	if got.Addr().Unmap() != want.Addr().Unmap() || got.Port() != want.Port() {
+		t.Fatalf("dial returned %v after %v, want %v: it committed to an unproven address", got, time.Since(start), want)
+	}
 	select {
 	case <-conn2.HandshakeComplete():
 	case <-ctx.Done():
 		t.Fatalf("warm handshake did not complete: %v", ctx.Err())
-	}
-	if waited := time.Since(start); waited < dialAttemptTimeout {
-		t.Errorf("dial returned after %v, want at least dialAttemptTimeout (%v): the unproven first target was not waited on", waited, dialAttemptTimeout)
 	}
 	echo(t, ctx, conn2, "warm")
 }

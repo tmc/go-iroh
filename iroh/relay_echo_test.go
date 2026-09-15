@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -145,5 +146,55 @@ func TestRelayOnlyEcho(t *testing.T) {
 	}
 	if !res.peer.Equal(client.ID()) {
 		t.Errorf("server saw client id %s, want %s", res.peer, client.ID())
+	}
+}
+
+// TestConnectRacesDialTargets checks that unreachable direct addresses do not
+// delay the relay path by a handshake timeout each.
+func TestConnectRacesDialTargets(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	srv := newEchoRelayServer(t)
+	relayURL := srv.url(t)
+	mode := relay.ModeCustom(relay.MapFromURLs(relayURL))
+	const alpn = "iroh-race/0"
+
+	server, err := Bind(ctx, WithALPNs(alpn), WithRelayMode(mode), WithBindAddr(netip.MustParseAddrPort("127.0.0.1:0")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Shutdown(ctx)
+	client, err := Bind(ctx, WithRelayMode(mode), WithBindAddr(netip.MustParseAddrPort("127.0.0.1:0")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Shutdown(ctx)
+	if err := server.Online(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Online(ctx); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		if conn, err := server.Accept(ctx); err == nil {
+			<-ctx.Done()
+			conn.CloseWithError(0, "")
+		}
+	}()
+
+	// Three blackholed direct addresses (TEST-NET-1), then the relay.
+	addr := netaddr.NewEndpointAddr(server.ID()).
+		WithIP(netip.MustParseAddrPort("192.0.2.1:7")).
+		WithIP(netip.MustParseAddrPort("192.0.2.2:7")).
+		WithIP(netip.MustParseAddrPort("192.0.2.3:7")).
+		WithRelayURL(relayURL)
+	start := time.Now()
+	conn, err := client.Connect(ctx, addr, alpn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.CloseWithError(0, "")
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("connect took %v, direct targets were tried sequentially", d)
 	}
 }

@@ -47,6 +47,11 @@ type MagicConn struct {
 	localAddr  net.Addr
 
 	recvCh chan recvBatch
+	// cur is the batch ReadFrom is draining. quic-go reads from a single
+	// goroutine per Transport.
+	cur     recvBatch
+	curOff  int
+	curAddr net.Addr
 
 	readDeadline  deadline
 	writeDeadline deadline
@@ -163,8 +168,27 @@ func (m *MagicConn) Serve(ctx context.Context) {
 // length and the net.Addr quic-go should associate with the path it arrived on.
 // For IP paths that addr is the real remote IP; for relay and custom paths it is
 // the synthetic mapped IPv6 ULA (port 12345). It implements net.PacketConn.
+//
+// ReadFrom is not safe for concurrent use: a GRO or relay batch holds several
+// datagrams, and successive calls hand them out one at a time from a cursor.
+// Only the quic-go Transport reads from a MagicConn, from its single listen
+// goroutine.
 func (m *MagicConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	for {
+		if m.curOff < len(m.cur.data) {
+			seg := m.cur.data[m.curOff:]
+			if m.cur.stride > 0 && len(seg) > m.cur.stride {
+				seg = seg[:m.cur.stride]
+			}
+			m.curOff += len(seg)
+			n := copy(p, seg)
+			addr := m.curAddr
+			if m.curOff >= len(m.cur.data) {
+				m.cur.release()
+				m.cur, m.curAddr = recvBatch{}, nil
+			}
+			return n, addr, nil
+		}
 		select {
 		case b := <-m.recvCh:
 			addr, ok := m.recvBatchAddr(b)
@@ -174,10 +198,14 @@ func (m *MagicConn) ReadFrom(p []byte) (int, net.Addr, error) {
 				// quic-go. Drop and keep reading.
 				continue
 			}
-			m.recordRecv(b.recvAddr())
-			n := copy(p, b.data)
-			b.release()
-			return n, addr, nil
+			m.recordRecv(b.recvAddr(), b.count())
+			if len(b.data) == 0 {
+				// Nothing to hand out, and an empty cursor would be
+				// overwritten unreleased by the next batch.
+				b.release()
+				continue
+			}
+			m.cur, m.curOff, m.curAddr = b, 0, addr
 		case <-m.readDeadline.wait():
 			return 0, nil, timeoutError{}
 		}
@@ -446,20 +474,20 @@ func (m *MagicConn) SendAddr(addr Addr, p []byte) bool {
 	return m.sendAddr(addr, p)
 }
 
-func (m *MagicConn) recordRecv(addr Addr) {
-	m.metrics.recvDatagrams.Add(1)
+func (m *MagicConn) recordRecv(addr Addr, n uint64) {
+	m.metrics.recvDatagrams.Add(n)
 	switch addr.Kind() {
 	case AddrIP:
 		ap, _ := addr.IP()
 		if ap.Addr().Is4() {
-			m.metrics.ipv4Recv.Add(1)
+			m.metrics.ipv4Recv.Add(n)
 		} else {
-			m.metrics.ipv6Recv.Add(1)
+			m.metrics.ipv6Recv.Add(n)
 		}
 	case AddrRelay:
-		m.metrics.relayRecv.Add(1)
+		m.metrics.relayRecv.Add(n)
 	case AddrCustom:
-		m.metrics.customRecv.Add(1)
+		m.metrics.customRecv.Add(n)
 	}
 }
 

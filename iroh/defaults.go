@@ -36,5 +36,9 @@ const (
 const ConnectTimeout = 10 * time.Second
 
 // dialAttemptTimeout bounds how long a dial waits for an unproven target's
-// handshake before trying the next one. See Endpoint.connectEarly.
+// handshake before giving up on it. See Endpoint.connectEarly.
 const dialAttemptTimeout = 3 * time.Second
+
+// dialAttemptDelay staggers the handshakes Endpoint.dialAny starts across a
+// peer's dial targets.
+const dialAttemptDelay = 250 * time.Millisecond
