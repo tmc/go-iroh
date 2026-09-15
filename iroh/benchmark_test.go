@@ -208,7 +208,13 @@ func benchmarkConnPairAddr(b *testing.B, alpn string, ip netip.Addr) (client, se
 		done <- accepted{conn: c, err: err}
 	}()
 
-	addr := netaddr.NewEndpointAddr(srvEP.ID()).WithIP(srvEP.LocalAddr())
+	// A wildcard-bound endpoint reports an unspecified address, which is not
+	// dialable; reach it on loopback at the port it bound.
+	srvAddr := srvEP.LocalAddr()
+	if srvAddr.Addr().IsUnspecified() {
+		srvAddr = netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), srvAddr.Port())
+	}
+	addr := netaddr.NewEndpointAddr(srvEP.ID()).WithIP(srvAddr)
 	client, err = clientEP.Connect(ctx, addr, alpn)
 	if err != nil {
 		b.Fatalf("connect: %v", err)
@@ -223,6 +229,28 @@ func benchmarkConnPairAddr(b *testing.B, alpn string, ip netip.Addr) (client, se
 		res.conn.CloseWithError(0, "")
 	})
 	return client, res.conn
+}
+
+// benchmarkConnPairWildcard is benchmarkConnPair on the socket shape a real
+// endpoint has. Every other benchmark here binds 127.0.0.1, which is the one
+// configuration where the two receive loops in internal/socket do not make the
+// same syscall: a loopback-bound socket has no packet info to collect, so the
+// ordinary loop reads with recvfrom, while the UDP_GRO loop must read with
+// recvmsg to get the segment size. A wildcard socket -- what [WithBindAddr]
+// binds by default -- collects packet info, so both loops read with recvmsg
+// and a comparison between them measures the receive strategy rather than the
+// syscall. Measuring offloads on a loopback-bound socket has already once
+// reported a datagram regression that no endpoint could observe.
+func benchmarkConnPairWildcard(b *testing.B, alpn string) (client, server *Conn) {
+	b.Helper()
+	return benchmarkConnPairAddr(b, alpn, netip.IPv4Unspecified())
+}
+
+// BenchmarkConnDatagramPingPongWildcard is BenchmarkConnDatagramPingPong on that
+// wildcard socket, so the receive path is the one an application runs.
+func BenchmarkConnDatagramPingPongWildcard(b *testing.B) {
+	client, server := benchmarkConnPairWildcard(b, "iroh-bench-datagram-ping-pong-wildcard/0")
+	benchmarkDatagramPingPong(b, client, server)
 }
 
 type benchConnStats struct {
@@ -727,6 +755,11 @@ func BenchmarkQUICRawUDPStreamThroughput(b *testing.B) {
 
 func BenchmarkConnDatagramPingPong(b *testing.B) {
 	client, server := benchmarkConnPair(b, "iroh-bench-datagram-ping-pong/0")
+	benchmarkDatagramPingPong(b, client, server)
+}
+
+func benchmarkDatagramPingPong(b *testing.B, client, server *Conn) {
+	b.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
