@@ -123,6 +123,7 @@ make parity
 ```
 
 See the [harness README](iroh-compat-harness/README.md) for prerequisites, the [scenario declarations](iroh-compat-harness/scenarios/) for predicted verdicts and definitions, and [results.json](iroh-compat-harness/results/results.json) for the machine-readable report.
+
 ## Go API and wire changes
 
 This section is written by hand and is not generated. It records changes that
