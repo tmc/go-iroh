@@ -10,11 +10,17 @@ RUST_VECTOR_BIN ?=
 RUST_CUSTOM_VECTOR_BIN ?=
 DOCTOR_OUTPUT ?= $(HOME)/tmp/go-iroh-compat/iroh-doctor-$(IROH_VERSION)
 
+# The image builds reuse cargo and Go caches. Set PARITY_NO_CACHE=1 to rebuild
+# every layer from scratch when an evidence run must not inherit any of it.
+NO_CACHE := $(if $(PARITY_NO_CACHE),--no-cache,)
+
 parity: doctor-image-build
 	@test -z "$$(git -C .. status --porcelain)" || { echo "go-iroh working tree is dirty" >&2; exit 1; }
-	GO_IROH_GIT_COMMON_DIR=$$(git -C .. rev-parse --path-format=absolute --git-common-dir) \
-		IROH_VERSION=$(IROH_VERSION) IROH_CUSTOM_COMMIT=$(IROH_CUSTOM_COMMIT) \
-		docker compose run --build --rm parity
+	set -eu; \
+		export GO_IROH_GIT_COMMON_DIR=$$(git -C .. rev-parse --path-format=absolute --git-common-dir); \
+		export IROH_VERSION=$(IROH_VERSION) IROH_CUSTOM_COMMIT=$(IROH_CUSTOM_COMMIT); \
+		docker compose build $(NO_CACHE) parity; \
+		docker compose run --rm parity
 
 parity-native:
 	go test ./vectors
@@ -52,7 +58,9 @@ canaries:
 	done
 
 doctor-image-build:
-	docker build -f images/iroh-$(IROH_VERSION)/Dockerfile -t go-iroh-compat:iroh-$(IROH_VERSION) .
+	docker build $(NO_CACHE) -f images/iroh-$(IROH_VERSION)/Dockerfile \
+		--build-arg IROH_VERSION=$(IROH_VERSION) \
+		-t go-iroh-compat:iroh-$(IROH_VERSION) .
 
 doctor-image: doctor-image-build
 	@mkdir -p "$(dir $(DOCTOR_OUTPUT))"; \
