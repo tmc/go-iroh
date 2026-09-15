@@ -98,6 +98,7 @@ func TestMarkdownNamesRustCounterpart(t *testing.T) {
 		GoIroh:    GoIroh{Commit: "abc123"},
 		Pins:      []Pin{{Key: "1.0", Train: "1.0", Version: "1.0.3", Kind: "release"}, {Key: "1.2", Train: "1.2", Version: "1.2.0", Commit: "17c0612f", Kind: "release"}},
 		Envelopes: []Envelope{{Surface: "CustomAddr endpoint tickets", Tier: "experimental", UpstreamVersion: "1.0", Status: "observed-incompatible", Detail: "Observed in both directions."}},
+		PeerNotes: []PeerNote{{Peer: "iroh-doctor", Note: "Upstream ships no release for this train."}},
 		Cells: []Cell{
 			{Scenario: "echo", Description: "Go and Rust exchange an echo, and a pass proves compatible streams.", Tier: "stable", Counterpart: "upstream CLI", Iroh: "1.0", Result: Pass, Expected: Pass, Peer: "iroh-doctor@sha256:abc", PeerDigest: "sha256:abc"},
 			{Scenario: "echo", Description: "Go and Rust exchange an echo, and a pass proves compatible streams.", Tier: "stable", Counterpart: "upstream CLI", Iroh: "1.2", Result: Pass, Expected: Pass, Peer: "iroh-doctor@sha256:ghi", PeerDigest: "sha256:ghi"},
@@ -109,6 +110,12 @@ func TestMarkdownNamesRustCounterpart(t *testing.T) {
 		"## How to read this table",
 		"unsupported` means go-iroh lacks the feature, not that the feature is broken",
 		"| Rust counterpart |",
+		// A peer whose provenance is qualified must carry the caveat next to
+		// its digest, and the counterpart definition must stop asserting that
+		// every upstream CLI is unmodified.
+		"| iroh-doctor (*) |",
+		"* **iroh-doctor provenance.** Upstream ships no release for this train.",
+		"or where building it required any deviation from upstream sources",
 		"| upstream CLI |",
 		"| Rust test driver |",
 		"SHA-256 digest",
@@ -141,6 +148,18 @@ func TestMarkdownNamesRustCounterpart(t *testing.T) {
 // carries hand-written prose after AppendixMarker that the generator does not
 // produce, and a regeneration that dropped it would not be noticed until
 // somebody read the file.
+func TestMarkdownDoesNotCallUpstreamCLIsUnmodified(t *testing.T) {
+	r := Report{
+		Generated: time.Unix(0, 0).UTC(),
+		GoIroh:    GoIroh{Commit: "abc123"},
+		Pins:      []Pin{{Key: "1.2", Train: "1.2", Version: "1.2.0", Kind: "release"}},
+		Cells:     []Cell{{Scenario: "echo", Description: "A pass proves echo.", Tier: "stable", Counterpart: "upstream CLI", Iroh: "1.2", Result: Pass, Expected: Pass}},
+	}
+	if got := string(r.Markdown()); strings.Contains(got, "an unmodified program shipped by upstream iroh") {
+		t.Error("Markdown() still claims every upstream CLI is unmodified")
+	}
+}
+
 func TestWritePreservesHandWrittenAppendix(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "COMPATIBILITY.md")
