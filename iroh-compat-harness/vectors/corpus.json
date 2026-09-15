@@ -1,6 +1,6 @@
 {
   "schema": "go-iroh-l0/2",
-  "iroh": "1.0.3",
+  "iroh": "1.2.0",
   "keys": [
     {
       "seed": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -150,33 +150,33 @@
   "custom_addr_tickets": [
     {
       "length": 0,
-      "encoded": "endpointaamx62zd4fwikmwgvpedr6wnl2tytpqmo2zjeazuaon7vcz5g2gwcaicfiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "bytes": "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6101022a0000000000000000000000000000000000000000000000000000000000000000"
+      "encoded": "endpointaamx62zd4fwikmwgvpedr6wnl2tytpqmo2zjeazuaon7vcz5g2gwcaicfiaa",
+      "bytes": "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6101022a00"
     },
     {
       "length": 1,
-      "encoded": "endpointaamx62zd4fwikmwgvpedr6wnl2tytpqmo2zjeazuaon7vcz5g2gwcaicfiaacaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "bytes": "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6101022a0001000000000000000000000000000000000000000000000000000000000000"
+      "encoded": "endpointaamx62zd4fwikmwgvpedr6wnl2tytpqmo2zjeazuaon7vcz5g2gwcaicfiaqa",
+      "bytes": "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6101022a0100"
     },
     {
       "length": 29,
-      "encoded": "endpointaamx62zd4fwikmwgvpedr6wnl2tytpqmo2zjeazuaon7vcz5g2gwcaicfiab2aabaibqibiga4eascqlbqgq4dyqcejbgfavcylrqgi2dmoaa",
-      "bytes": "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6101022a001d000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c00"
+      "encoded": "endpointaamx62zd4fwikmwgvpedr6wnl2tytpqmo2zjeazuaon7vcz5g2gwcaicfioqaaicamcakbqhbaequcymbuha6earcijrifiwc4mbsgq3dq",
+      "bytes": "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6101022a1d000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c"
     },
     {
       "length": 30,
-      "encoded": "endpointaamx62zd4fwikmwgvpedr6wnl2tytpqmo2zjeazuaon7vcz5g2gwcaicfiab4aabaibqibiga4eascqlbqgq4dyqcejbgfavcylrqgi2dmob2",
-      "bytes": "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6101022a001e000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d"
+      "encoded": "endpointaamx62zd4fwikmwgvpedr6wnl2tytpqmo2zjeazuaon7vcz5g2gwcaicfipaaaicamcakbqhbaequcymbuha6earcijrifiwc4mbsgq3dqoq",
+      "bytes": "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6101022a1e000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d"
     },
     {
       "length": 31,
-      "encoded": "endpointaamx62zd4fwikmwgvpedr6wnl2tytpqmo2zjeazuaon7vcz5g2gwcaicfiar6aabaibqibiga4eascqlbqgq4dyqcejbgfavcylrqgi2dmob2hq",
-      "bytes": "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6101022a011f000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e"
+      "encoded": "endpointaamx62zd4fwikmwgvpedr6wnl2tytpqmo2zjeazuaon7vcz5g2gwcaicfipqaaicamcakbqhbaequcymbuha6earcijrifiwc4mbsgq3dqor4",
+      "bytes": "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6101022a1f000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e"
     },
     {
       "length": 255,
-      "encoded": "endpointaamx62zd4fwikmwgvpedr6wnl2tytpqmo2zjeazuaon7vcz5g2gwcaicfia76aiaaebagbafaydqqcikbmga2dqpcaireeyuculbogazdinryhi6d4qccirdeqssmjzifevcwlbnfyxtamjsgm2dknrxha4tuoz4hu7d6qcbijbuirkgi5eesssljrgu4t2qkfjfgvcvkzlvqwk2lnof2xs7mbqwey3emvtgo2djnjvwy3lon5yhc4ttor2xm53ypf5hw7d5pz7ybamcqocilbuhrceyvc4mrwhi7eerskjzjfmws6mjtgu3tsoz5h5augrkhjffu2t2rknkvowk3lvpwcy3fm5uww3lpofzxk53zpn6x7amdqwdytc4nr6izhfmxtgnz3h5buos2pknlvwx3dm5vw643xpn7yhb4lr6jzpg47uot2xl5tw6537q6hzph5hv6337r6p27p6p37q",
-      "bytes": "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6101022a01ff01000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfe"
+      "encoded": "endpointaamx62zd4fwikmwgvpedr6wnl2tytpqmo2zjeazuaon7vcz5g2gwcaicfl7qcaabaibqibiga4eascqlbqgq4dyqcejbgfavcylrqgi2dmob2hq7eaqseizeeutcokbjfivsyljof4ydcmrtgq2tmnzyhe5dwpb5hy7uaqkcincekrshjbeuus2mjvhe6ucrkjjvivkwk5mfsws3lrov4x3amfrggzdfmztwq2lknnwg23tpobyxe43uov3ho6dzpj5xy7l6p6aidaudqscynb4irgfixdenr2hzbemssokjlfuxtcmzvg44twpj7ifbukr2jjngu6uktkvlvsw25l5qwgzlhnfvw233ron2xo6l3pv7yda4fq6eyxdmpsgjzlf4ztooz7induwt2tk5nv6y3hnnxxg533p6bypc4psolzxh5du6v27m5xxo74hr6lz7j5pw674pt6x37t674",
+      "bytes": "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6101022aff01000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfe"
     }
   ],
   "pkarr": {
