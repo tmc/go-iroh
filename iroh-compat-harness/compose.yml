@@ -17,4 +17,12 @@ services:
       # A linked worktree's .git file points outside /work. Mount the common
       # directory at its original path so provenance resolves inside Docker.
       - ${GO_IROH_GIT_COMMON_DIR:?set GO_IROH_GIT_COMMON_DIR}:${GO_IROH_GIT_COMMON_DIR}:ro
+      # The runner compiles the Go peers on every run. Both caches are keyed by
+      # content, so a hit is work Go proved it could skip, not a stale result.
+      - gomodcache:/go/pkg/mod
+      - gobuildcache:/root/.cache/go-build
     command: ["make", "parity-native"]
+
+volumes:
+  gomodcache:
+  gobuildcache:
