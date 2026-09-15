@@ -188,3 +188,71 @@ func TestIpTransportGRORecordsArrivalAddress(t *testing.T) {
 		t.Fatalf("no packet-info message built for %s", from)
 	}
 }
+
+// TestIpTransportGROReadsAFullRun holds the floor under groBufSize. The kernel
+// assembles a run without regard for the buffer the reader will offer, and a
+// short buffer takes the head of the run and drops the rest -- silently, as far
+// as the reader can tell, and as loss as far as the peer can tell. Sending a run
+// far longer than any plausible smaller buffer makes that truncation a test
+// failure rather than a retransmission somebody else has to explain.
+func TestIpTransportGROReadsAFullRun(t *testing.T) {
+	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+	recvCh := make(chan recvBatch, 64)
+	tr := NewIpTransport(udp, recvCh)
+	if !tr.gro {
+		t.Skip("UDP_GRO not available on this kernel")
+	}
+
+	sender, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sender.Close()
+
+	const (
+		segSize = 1400
+		segs    = 46 // 64400 bytes: one read's worth, and four times 16 KiB
+	)
+	payload := make([]byte, segSize*segs)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go tr.Serve(ctx)
+
+	dst := udp.LocalAddr().(*net.UDPAddr)
+	if _, _, err := sender.WriteMsgUDP(payload, udpSegmentMessage(segSize), dst); err != nil {
+		t.Fatalf("segmented write: %v", err)
+	}
+
+	var got []byte
+	longest := 0
+	deadline := time.After(10 * time.Second)
+	for len(got) < len(payload) {
+		select {
+		case b := <-recvCh:
+			if len(b.data) > longest {
+				longest = len(b.data)
+			}
+			for _, seg := range batchSegments(b) {
+				got = append(got, seg...)
+			}
+			b.release()
+		case <-deadline:
+			t.Fatalf("got %d of %d bytes: the run was truncated", len(got), len(payload))
+		}
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("received %d bytes, not the bytes sent", len(got))
+	}
+	// Without a read this long the run never reached past a shorter buffer,
+	// so a shorter buffer would have passed too.
+	if longest <= 16384 {
+		t.Skipf("longest read was %d bytes: the kernel split the run too finely to test the bound", longest)
+	}
+}

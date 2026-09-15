@@ -72,7 +72,10 @@ type localEntry struct {
 const maxLocalAddrs = 4096
 
 // groBufSize bounds one UDP_GRO read: the kernel coalesces at most a 64 KiB
-// run of datagrams into a single recvmsg.
+// run of datagrams into a single recvmsg. It is a correctness bound, not a
+// tuning knob -- a read buffer shorter than the run the kernel assembled
+// takes the head of the run and discards the rest, which the peer sees as
+// loss. TestIpTransportGROReadsAFullRun holds the floor.
 const groBufSize = 65535
 
 var groRecvPool = sync.Pool{New: func() any { b := make([]byte, groBufSize); return &b }}
