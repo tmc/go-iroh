@@ -1,0 +1,8 @@
+{
+  "peer_notes": [
+    {
+      "peer": "iroh-doctor",
+      "note": "Upstream has shipped no iroh-doctor release for the 1.2 train. The pin is iroh-doctor 0.101.0, whose manifest declares `iroh = \"1.0.0\"` and is caret-resolved up to 1.2.0, so upstream does not itself publish or test this pairing; the matrix measures it, upstream does not endorse it. Building it against 1.2.0 also needs one additive line in iroh-doctor's own manifest, declaring tokio's `rt-multi-thread` feature that its `Builder::new_multi_thread` call already requires and that the iroh 1.0.x dependency graph supplied incidentally through `hickory-net`, which iroh 1.2.0 no longer uses. No iroh source is modified, and the feature is already present in the committed lock, so the `--locked` build resolves identically; the build gate in `images/iroh-1.2.0/Dockerfile` fails if that edit is not exactly one line."
+    }
+  ]
+}

@@ -53,6 +53,10 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	report.PeerNotes, err = runner.LoadPeerNotes(scenarioDir)
+	if err != nil {
+		fatal(err)
+	}
 	if err := runner.ApplyExpected(scenarioDir, *releaseKey, report.Cells); err != nil {
 		fatal(err)
 	}
