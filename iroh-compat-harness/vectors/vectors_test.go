@@ -18,6 +18,9 @@ import (
 //go:embed corpus.json
 var corpusJSON []byte
 
+//go:embed legacy_custom_addr.json
+var legacyCustomAddrJSON []byte
+
 type corpus struct {
 	Schema         string               `json:"schema"`
 	Iroh           string               `json:"iroh"`
@@ -82,7 +85,7 @@ func load(t *testing.T) corpus {
 	if err := json.Unmarshal(corpusJSON, &c); err != nil {
 		t.Fatal(err)
 	}
-	if c.Schema != "go-iroh-l0/2" || c.Iroh != "1.0.3" {
+	if c.Schema != "go-iroh-l0/2" || c.Iroh != "1.2.0" {
 		t.Fatalf("corpus identity = %q, %q", c.Schema, c.Iroh)
 	}
 	return c
@@ -169,33 +172,75 @@ func TestEndpointTicketVector(t *testing.T) {
 	}
 }
 
-func TestCustomAddrTicketVectorsDocumentIroh103Incompatibility(t *testing.T) {
+// TestCustomAddrTicketVectors checks that the CustomAddr endpoint tickets the
+// Rust driver emits at iroh 1.2.0 both decode in go-iroh and re-encode to the
+// same bytes Go produces for the same address. At iroh 1.0.3 neither held; see
+// TestLegacyCustomAddrTicketsStillRejected for the encoding that replaced.
+func TestCustomAddrTicketVectors(t *testing.T) {
 	wantLengths := []int{0, 1, 29, 30, 31, 255}
 	vectors := load(t).CustomAddrTickets
 	if len(vectors) != len(wantLengths) {
 		t.Fatalf("custom ticket count = %d, want %d", len(vectors), len(wantLengths))
 	}
+	for i, v := range vectors {
+		if v.Length != wantLengths[i] {
+			t.Fatalf("vector %d length = %d, want %d", i, v.Length, wantLengths[i])
+		}
+		ticket, err := endpointticket.Parse(v.Encoded)
+		if err != nil {
+			t.Errorf("CustomAddr ticket length %d: %v", v.Length, err)
+			continue
+		}
+		want := mustHex(t, v.Bytes)
+		if got := ticket.EncodeBytes(); !slices.Equal(got, want) {
+			t.Errorf("CustomAddr ticket length %d bytes = %x, want %x", v.Length, got, want)
+		}
+		if got := customAddrTicket(t, v.Length); !slices.Equal(got.EncodeBytes(), want) {
+			t.Errorf("Go CustomAddr ticket length %d = %x, want %x", v.Length, got.EncodeBytes(), want)
+		}
+	}
+}
+
+// TestLegacyCustomAddrTicketsStillRejected is the null control for the test
+// above. The iroh 1.0.3 CustomAddr encoding is frozen in
+// legacy_custom_addr.json, and go-iroh must keep rejecting it. If both the
+// 1.0.3 and the 1.2.0 vectors decoded, the acceptance check would be measuring
+// nothing about the version change.
+func TestLegacyCustomAddrTicketsStillRejected(t *testing.T) {
+	var legacy struct {
+		Iroh    string                   `json:"iroh"`
+		Tickets []customAddrTicketVector `json:"custom_addr_tickets"`
+	}
+	if err := json.Unmarshal(legacyCustomAddrJSON, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Iroh != "1.0.3" || len(legacy.Tickets) != 6 {
+		t.Fatalf("legacy fixture identity = %q, %d tickets", legacy.Iroh, len(legacy.Tickets))
+	}
+	for _, v := range legacy.Tickets {
+		if _, err := endpointticket.Parse(v.Encoded); err == nil {
+			t.Errorf("iroh 1.0.3 CustomAddr ticket length %d unexpectedly decoded", v.Length)
+		}
+		if got := customAddrTicket(t, v.Length); slices.Equal(got.EncodeBytes(), mustHex(t, v.Bytes)) {
+			t.Errorf("iroh 1.0.3 and Go CustomAddr ticket length %d unexpectedly matched", v.Length)
+		}
+	}
+}
+
+// customAddrTicket builds the ticket the corpus driver encodes for a CustomAddr
+// of the given length: seed 0x2a repeated, address type 42, payload 0,1,2,....
+func customAddrTicket(t *testing.T, length int) endpointticket.Ticket {
+	t.Helper()
 	var seed [key.SeedSize]byte
 	for i := range seed {
 		seed[i] = 0x2a
 	}
 	id := key.NewSecretKey(seed).Public().EndpointID()
-	for i, v := range vectors {
-		if v.Length != wantLengths[i] {
-			t.Fatalf("vector %d length = %d, want %d", i, v.Length, wantLengths[i])
-		}
-		if _, err := endpointticket.Parse(v.Encoded); err == nil {
-			t.Errorf("Rust 1.0.3 CustomAddr ticket length %d unexpectedly decoded", v.Length)
-		}
-		data := make([]byte, v.Length)
-		for i := range data {
-			data[i] = byte(i)
-		}
-		goTicket := endpointticket.New(netaddr.NewEndpointAddr(id, netaddr.NewCustomAddr(42, data)))
-		if slices.Equal(goTicket.EncodeBytes(), mustHex(t, v.Bytes)) {
-			t.Errorf("Rust 1.0.3 and Go CustomAddr ticket length %d unexpectedly matched", v.Length)
-		}
+	data := make([]byte, length)
+	for i := range data {
+		data[i] = byte(i)
 	}
+	return endpointticket.New(netaddr.NewEndpointAddr(id, netaddr.NewCustomAddr(42, data)))
 }
 
 // TestPostcardVarintStrictness pins a measured divergence rather than a
