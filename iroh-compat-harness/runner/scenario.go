@@ -11,6 +11,7 @@ import (
 type scenarioFile struct {
 	Scenarios []scenario `json:"scenarios"`
 	Envelopes []Envelope `json:"envelopes"`
+	PeerNotes []PeerNote `json:"peer_notes"`
 }
 
 type scenario struct {
@@ -22,23 +23,50 @@ type scenario struct {
 }
 
 func LoadEnvelopes(dir string) ([]Envelope, error) {
-	matches, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	files, err := loadScenarioFiles(dir)
 	if err != nil {
-		return nil, fmt.Errorf("find compatibility envelopes: %w", err)
+		return nil, err
 	}
 	var envelopes []Envelope
+	for _, file := range files {
+		envelopes = append(envelopes, file.Envelopes...)
+	}
+	return envelopes, nil
+}
+
+// LoadPeerNotes reads the provenance caveats recorded against individual Rust
+// peers. They are declared alongside the scenarios rather than built into the
+// renderer so that a peer's provenance is reviewable in version control.
+func LoadPeerNotes(dir string) ([]PeerNote, error) {
+	files, err := loadScenarioFiles(dir)
+	if err != nil {
+		return nil, err
+	}
+	var notes []PeerNote
+	for _, file := range files {
+		notes = append(notes, file.PeerNotes...)
+	}
+	return notes, nil
+}
+
+func loadScenarioFiles(dir string) ([]scenarioFile, error) {
+	matches, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil {
+		return nil, fmt.Errorf("find scenario files: %w", err)
+	}
+	var files []scenarioFile
 	for _, path := range matches {
 		b, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("read compatibility envelopes: %w", err)
+			return nil, fmt.Errorf("read scenario file: %w", err)
 		}
 		var file scenarioFile
 		if err := json.Unmarshal(b, &file); err != nil {
 			return nil, fmt.Errorf("decode %s: %w", path, err)
 		}
-		envelopes = append(envelopes, file.Envelopes...)
+		files = append(files, file)
 	}
-	return envelopes, nil
+	return files, nil
 }
 
 func ApplyExpected(dir, version string, cells []Cell) error {

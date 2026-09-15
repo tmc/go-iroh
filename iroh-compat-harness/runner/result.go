@@ -31,6 +31,7 @@ type Report struct {
 	Pins      []Pin      `json:"pins"`
 	Cells     []Cell     `json:"cells"`
 	Envelopes []Envelope `json:"envelopes"`
+	PeerNotes []PeerNote `json:"peer_notes,omitempty"`
 }
 
 type GoIroh struct {
@@ -54,6 +55,15 @@ type Envelope struct {
 	UpstreamVersion string `json:"upstream_version"`
 	Status          string `json:"status"`
 	Detail          string `json:"detail"`
+}
+
+// PeerNote records a provenance caveat about one Rust peer: an upstream
+// release that does not itself target the pinned iroh train, or a build-level
+// deviation from upstream sources. It is rendered with the Peers table so a
+// reader meets the caveat next to the evidence it qualifies.
+type PeerNote struct {
+	Peer string `json:"peer"`
+	Note string `json:"note"`
 }
 
 type Cell struct {
@@ -303,7 +313,7 @@ func (r *Report) Markdown() []byte {
 	b.WriteString("- `setup-error` means the environment could not run the scenario, so it makes no compatibility claim.\n")
 	b.WriteString("- `—` means the scenario was not run for that version.\n\n")
 	b.WriteString("Released columns are compatibility claims against a pinned Rust release. A `-pre` column is expected-enforced evidence against a pinned upstream commit, not a claim about a shipped version. The `tip` column is a moving, advisory signal refreshed nightly and is never a committed compatibility claim. Experimental rows may change wire format to track upstream without a major go-iroh version bump.\n\n")
-	b.WriteString("The Rust counterpart is either an **upstream CLI**, an unmodified program shipped by upstream iroh, or a **Rust test driver**, a purpose-built peer linked to the pinned upstream libraries. CLI results have the strongest black-box provenance; test-driver results cover protocol behavior that upstream CLIs do not expose.\n\n")
+	b.WriteString("The Rust counterpart is either an **upstream CLI**, a program shipped by upstream iroh and built from a pinned upstream commit, or a **Rust test driver**, a purpose-built peer linked to the pinned upstream libraries. CLI results have the strongest black-box provenance; test-driver results cover protocol behavior that upstream CLIs do not expose. Where an upstream CLI's own release does not target the pinned iroh train, or where building it required any deviation from upstream sources, that is recorded against the peer in the **Peers** table; read those notes as part of the claim.\n\n")
 	b.WriteString("Matrix cells reference the **Peers** table below. Each peer entry records the Rust executable and its SHA-256 digest. The machine-readable result also records the peer process ID, so a pass cannot be emitted without evidence of a real Rust process.\n\n")
 	b.WriteString("## Compatibility envelope\n\n")
 	b.WriteString("| Surface | Tier | Upstream train | Status | Detail |\n|---|---|---|---|---|\n")
@@ -346,9 +356,25 @@ func (r *Report) Markdown() []byte {
 		b.WriteString(" — |\n")
 	}
 	b.WriteString("\n" + r.coverageNote(scenarios, byScenario))
+	noteIndex := make(map[string]int)
+	var notes []PeerNote
+	for _, note := range r.PeerNotes {
+		if noteIndex[note.Peer] != 0 {
+			continue
+		}
+		notes = append(notes, note)
+		noteIndex[note.Peer] = len(notes)
+	}
 	b.WriteString("\n### Peers\n\n| Ref | Rust peer | Pin | SHA-256 digest |\n|---:|---|---|---|\n")
 	for i, peer := range peers {
-		fmt.Fprintf(&b, "| [%d] | %s | %s | `%s` |\n", i+1, peer.name, peer.pin, peer.digest)
+		marker := ""
+		if n := noteIndex[peer.name]; n != 0 {
+			marker = fmt.Sprintf(" (%s)", strings.Repeat("*", n))
+		}
+		fmt.Fprintf(&b, "| [%d] | %s%s | %s | `%s` |\n", i+1, peer.name, marker, peer.pin, peer.digest)
+	}
+	for i, note := range notes {
+		fmt.Fprintf(&b, "\n%s **%s provenance.** %s\n", strings.Repeat("*", i+1), note.Peer, note.Note)
 	}
 	b.WriteString("\n### Observed incompatibility evidence\n\n")
 	for _, c := range cells {
