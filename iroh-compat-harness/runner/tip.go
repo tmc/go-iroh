@@ -74,7 +74,7 @@ func (r *TipReport) Markdown() []byte {
 	for _, cell := range r.Cells {
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", cell.Scenario, cell.Tier, cell.Expected, formatAdjudication(cell, 1), strings.TrimSuffix(cell.Detail, "."))
 	}
-	b.WriteString("\nAll other scenarios are `—` (untested) at tip. The nightly canary deliberately exercises only the bidirectional CustomAddr wire-vector suite; blocking CI runs the full pinned 1.0 matrix and the same focused suite at the 1.2 pin.\n")
+	b.WriteString("\nAll other scenarios are `—` (untested) at tip. The nightly canary deliberately exercises only the bidirectional CustomAddr wire-vector suite; blocking CI runs the full pinned 1.2 matrix.\n")
 	b.WriteString("\n## Peer\n\n| Ref | Rust peer | Source | SHA-256 digest |\n|---:|---|---|---|\n")
 	if len(r.Cells) != 0 {
 		cell := r.Cells[0]

@@ -8,7 +8,7 @@ Run the matrix from a clean checkout with Docker:
 make parity
 ```
 
-This builds the released Rust peers and the focused 1.2.0 CustomAddr driver, then runs them with the Go runner through Docker Compose. The release pins are declared together in `pins.env`. Developers with native pinned binaries can use `make parity-native` and set `RUST_DOCTOR_BIN`, `RUST_VECTOR_BIN`, and `RUST_CUSTOM_VECTOR_BIN` explicitly.
+This builds the released Rust peers, then runs them with the Go runner through Docker Compose. The release pin is declared in `pins.env`. Developers with native pinned binaries can use `make parity-native` and set `RUST_DOCTOR_BIN` and `RUST_VECTOR_BIN` explicitly.
 
 If `make parity` fails with `make: *** No rule to make target 'parity-native'`,
 the Makefile is present and the bind mount came up empty: the container finds
@@ -40,13 +40,15 @@ named volumes. Both tools key their caches by content and fingerprint their own
 inputs, so a cache hit is work the tool proved it could skip rather than a
 result carried over. Restructuring the images this way left every Rust peer
 byte-identical: the SHA-256 digests of iroh-doctor, iroh-relay, iroh-dns-server
-and both vector drivers still match the ones recorded in
-`results/results.json`. Caching also does not skip the CustomAddr patch gate,
-which re-resolves the patch and re-reads the lock on every build. To rebuild
-every layer from scratch anyway, set `PARITY_NO_CACHE=1`.
+and the vector driver still match the ones recorded in
+`results/results.json`. To rebuild every layer from scratch anyway, set
+`PARITY_NO_CACHE=1`.
 
-The 1.2.0 column remains CustomAddr-only. `drivers/rust-driver` stays at
-1.0.3 for the full baseline matrix and its committed corpus;
-`drivers/custom-addr` pins iroh-base 1.2.0 separately. Its build script checks
-that Cargo resolved iroh-base from the supplied checkout, with no registry
-source or unused patch. A failed check must not produce release evidence.
+The matrix has a single released column. `drivers/rust-driver` pins the 1.2.0
+release set -- iroh, iroh-base and iroh-relay at 1.2.0, iroh-dns at 1.3.0 (that
+crate published no 1.2.0) and noq at 1.3.0 -- and generates the committed
+corpus. CustomAddr tickets interoperate natively at 1.2.0, so the separate
+patched CustomAddr driver that the 1.0.3 baseline needed is gone. The
+superseded 1.0.3 ticket encoding is kept as a frozen negative fixture in
+`vectors/legacy_custom_addr.json`: go-iroh must keep rejecting it, which is
+what makes the 1.2.0 acceptance result discriminating rather than vacuous.
