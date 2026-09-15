@@ -12,18 +12,29 @@ This builds the released Rust peers, then runs them with the Go runner through D
 
 If `make parity` fails with `make: *** No rule to make target 'parity-native'`,
 the Makefile is present and the bind mount came up empty: the container finds
-nothing at `/work/iroh-compat-harness` and reports it as a missing target.
-Docker Desktop can leave the repository path in that state for many runs in a
-row, so retrying alone does not clear it. Binding the path once outside Compose
-does:
+nothing at `/work/iroh-compat-harness` and reports it as a missing target. The
+cause is that the checkout is not on a path the Docker backend shares with its
+virtual machine. An unshared path does not fail the mount; it materializes as
+an empty directory, so the symptom is a missing target rather than a mount
+error. Check what the container actually sees:
 
 ```sh
-docker run --rm -v "$(cd .. && pwd)":/work alpine ls /work >/dev/null
-make parity
+docker run --rm -v "$(cd .. && pwd)":/work alpine ls /work/iroh-compat-harness
 ```
 
-To check the state directly, `docker compose run --rm --entrypoint sh parity -c
-'ls /work | wc -l'` lists the repository root when the mount is healthy.
+Empty output confirms it. Colima shares only `$HOME` by default, so a checkout
+on another volume is invisible to it; `colima ssh -- mount | grep virtiofs`
+lists what is actually shared. Either add the path to the backend's shared
+directories, or run the matrix from a clone on a shared path:
+
+```sh
+git clone --depth 1 --single-branch --branch "$(git rev-parse --abbrev-ref HEAD)" \
+    "file://$(cd .. && pwd)" ~/tmp/go-iroh-parity
+cd ~/tmp/go-iroh-parity/iroh-compat-harness && make parity
+```
+
+The clone keeps provenance honest: it has the same `HEAD` and a clean working
+tree, which is what the runner records and requires.
 
 The command writes schema `go-iroh-parity/4` to `results/results.json`, updates `results/badge.json`, and renders the repository-root `COMPATIBILITY.md`. Released evidence appears in version columns; the advisory nightly tip report is emitted separately as `COMPATIBILITY-tip.md` and `results/tip.json`.
 
