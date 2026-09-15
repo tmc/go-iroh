@@ -1,9 +1,9 @@
 {
   "schema": "go-iroh-parity/4",
-  "generated": "2026-09-15T15:58:31.667685304Z",
+  "generated": "2026-09-15T16:06:17.046889929Z",
   "go_iroh": {
     "version": "main",
-    "commit": "016663193c3f2bf262d73d10a462599d48d71e5b"
+    "commit": "931e50a56a0277b3775d69a4272dc8bcd0f4e90c"
   },
   "pins": [
     {
@@ -22,11 +22,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3061,
+      "peer_pid": 183,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 4,
+      "duration_ms": 3,
       "detail": "fresh Rust output is byte-identical to the Go-verified corpus"
     },
     {
@@ -36,11 +36,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3061,
+      "peer_pid": 183,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 4,
+      "duration_ms": 3,
       "detail": "fresh Rust output is byte-identical to the Go-verified corpus"
     },
     {
@@ -50,11 +50,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3061,
+      "peer_pid": 183,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 4,
+      "duration_ms": 3,
       "detail": "fresh Rust output is byte-identical to the Go-verified corpus"
     },
     {
@@ -64,11 +64,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3061,
+      "peer_pid": 183,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 4,
+      "duration_ms": 3,
       "detail": "fresh Rust output is byte-identical to the Go-verified corpus"
     },
     {
@@ -78,11 +78,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3061,
+      "peer_pid": 183,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 4,
+      "duration_ms": 3,
       "detail": "fresh Rust output is byte-identical to the Go-verified corpus"
     },
     {
@@ -92,11 +92,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3061,
+      "peer_pid": 183,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 4,
+      "duration_ms": 3,
       "evidence": {
         "accepted": 6,
         "lengths": [
@@ -117,11 +117,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3066,
+      "peer_pid": 188,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 5,
+      "duration_ms": 3,
       "evidence": {
         "accepted": 6,
         "lengths": [
@@ -142,11 +142,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3071,
+      "peer_pid": 193,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "fail",
       "expected": "fail",
-      "duration_ms": 7,
+      "duration_ms": 3,
       "evidence": {
         "agreed": 3,
         "cases": [
@@ -217,11 +217,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-doctor@sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
-      "peer_pid": 3076,
+      "peer_pid": 198,
       "peer_digest": "sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 683,
+      "duration_ms": 771,
       "detail": "three doctor send/receive/echo streams completed"
     },
     {
@@ -231,11 +231,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-doctor@sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
-      "peer_pid": 3082,
+      "peer_pid": 204,
       "peer_digest": "sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 3189,
+      "duration_ms": 3170,
       "detail": "three doctor send/receive/echo streams completed"
     },
     {
@@ -245,12 +245,12 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-doctor@sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
-      "peer_pid": 3088,
+      "peer_pid": 210,
       "peer_digest": "sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 8190,
-      "detail": "dial rejected cleanly: iroh: connect to 197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d61: timeout: no recent network activity"
+      "duration_ms": 8168,
+      "detail": "dial rejected cleanly: iroh: connect to 197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d61: context deadline exceeded"
     },
     {
       "scenario": "handshake/wrong-endpoint-id",
@@ -259,11 +259,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-doctor@sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
-      "peer_pid": 3093,
+      "peer_pid": 215,
       "peer_digest": "sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 3236,
+      "duration_ms": 3291,
       "detail": "dial rejected cleanly: iroh: connect to cecc1507dc1ddd7295951c290888f095adb9044d1b73d696e6df065d683bd4fc: CRYPTO_ERROR 0x12a (local): iroh: server identity mismatch: dialed cecc1507dc1ddd7295951c290888f095adb9044d1b73d696e6df065d683bd4fc, got 197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d61"
     },
     {
@@ -273,11 +273,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-relay@sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
-      "peer_pid": 3098,
+      "peer_pid": 220,
       "peer_digest": "sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 28,
+      "duration_ms": 25,
       "detail": "Go client negotiated relay protocol 2 and received the Rust pong"
     },
     {
@@ -287,11 +287,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3111,
+      "peer_pid": 233,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 30,
+      "duration_ms": 27,
       "detail": "Rust test driver negotiated the upstream relay protocol and received a pong"
     },
     {
@@ -301,11 +301,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3122,
+      "peer_pid": 244,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 30,
+      "duration_ms": 32,
       "detail": "Rust test driver negotiated the upstream relay protocol and received a pong"
     },
     {
@@ -315,11 +315,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-relay@sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
-      "peer_pid": 3127,
+      "peer_pid": 249,
       "peer_digest": "sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 33,
+      "duration_ms": 25,
       "detail": "Go client negotiated relay protocol 2 and received the Rust pong"
     },
     {
@@ -329,11 +329,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-relay@sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
-      "peer_pid": 3133,
+      "peer_pid": 255,
       "peer_digest": "sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 99,
+      "duration_ms": 26,
       "detail": "Go client negotiated relay protocol 2 and received the Rust pong"
     },
     {
@@ -343,12 +343,12 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-relay@sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
-      "peer_pid": 3139,
+      "peer_pid": 261,
       "peer_digest": "sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 30088,
-      "detail": "Rust relay closed an idle pre-WebSocket connection after 30.004s"
+      "duration_ms": 30024,
+      "detail": "Rust relay closed an idle pre-WebSocket connection after 30.003s"
     },
     {
       "scenario": "discovery/go-publish-rust-dns",
@@ -357,11 +357,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-dns-server@sha256:d556534dbecad8f97d5ed701685341aedb02986a45a3f9b150ec70bad828a4c0",
-      "peer_pid": 3145,
+      "peer_pid": 267,
       "peer_digest": "sha256:d556534dbecad8f97d5ed701685341aedb02986a45a3f9b150ec70bad828a4c0",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 27,
+      "duration_ms": 22,
       "detail": "upstream Rust DNS server stored and returned a Go-signed pkarr packet"
     },
     {
@@ -371,11 +371,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3160,
+      "peer_pid": 282,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 28,
+      "duration_ms": 25,
       "detail": "Go DNS server stored and returned a Rust-test-driver-signed pkarr packet"
     },
     {
@@ -385,11 +385,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-relay@sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
-      "peer_pid": 3165,
+      "peer_pid": 287,
       "peer_digest": "sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 35,
+      "duration_ms": 27,
       "detail": "Go and the Rust test driver both resolved and reached the same upstream relay URL"
     },
     {
@@ -399,11 +399,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-doctor@sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
-      "peer_pid": 3176,
+      "peer_pid": 298,
       "peer_digest": "sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 1929,
+      "duration_ms": 1628,
       "evidence": {
         "compared_field_count": 9,
         "compared_fields": [
@@ -430,11 +430,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3182,
+      "peer_pid": 303,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 61,
+      "duration_ms": 40,
       "detail": "Go and the Rust test driver exchanged QUIC datagrams in both directions"
     },
     {
@@ -444,11 +444,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3189,
+      "peer_pid": 310,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 78,
+      "duration_ms": 38,
       "detail": "Rust peer observed Go application close code 42 and reason bye"
     },
     {
@@ -458,11 +458,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3196,
+      "peer_pid": 317,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 364,
+      "duration_ms": 38,
       "detail": "Go and the Rust test driver both recorded the authenticated peer and direct address"
     },
     {
@@ -472,11 +472,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3203,
+      "peer_pid": 324,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 321,
+      "duration_ms": 246,
       "detail": "Go resumed a Rust-issued TLS session and Rust accepted the second stream as 0-RTT"
     },
     {
@@ -486,11 +486,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3209,
+      "peer_pid": 330,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 220,
+      "duration_ms": 123,
       "detail": "Go and upstream Rust gossip codecs exchanged framed broadcasts in both directions"
     },
     {
@@ -500,11 +500,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3216,
+      "peer_pid": 337,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 742,
+      "duration_ms": 201,
       "evidence": {
         "directions": [
           "go-client-rust-server",
@@ -525,11 +525,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 3249,
+      "peer_pid": 370,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 532,
+      "duration_ms": 162,
       "evidence": {
         "directions": [
           "go-client-rust-server",
@@ -557,6 +557,12 @@
       "upstream_version": "1.2 (1.2.0)",
       "status": "observed-divergence",
       "detail": "go-iroh is strictly stricter: it rejects padded varint encodings that postcard 1.1.3 accepts. No traffic produced by a conforming postcard serializer is affected, since both upstream's serializer and go-iroh's emit only canonical forms. Content relayed verbatim through gossip carries varints produced by the originating endpoint rather than the forwarding peer (gossip/discovery.go:269, docs/heads.go:77), so a non-conforming originator's own message is dropped by go-iroh while upstream accepts it, affecting only that originator."
+    }
+  ],
+  "peer_notes": [
+    {
+      "peer": "iroh-doctor",
+      "note": "Upstream has shipped no iroh-doctor release for the 1.2 train. The pin is iroh-doctor 0.101.0, whose manifest declares `iroh = \"1.0.0\"` and is caret-resolved up to 1.2.0, so upstream does not itself publish or test this pairing; the matrix measures it, upstream does not endorse it. Building it against 1.2.0 also needs one additive line in iroh-doctor's own manifest, declaring tokio's `rt-multi-thread` feature that its `Builder::new_multi_thread` call already requires and that the iroh 1.0.x dependency graph supplied incidentally through `hickory-net`, which iroh 1.2.0 no longer uses. No iroh source is modified, and the feature is already present in the committed lock, so the `--locked` build resolves identically; the build gate in `images/iroh-1.2.0/Dockerfile` fails if that edit is not exactly one line."
     }
   ]
 }

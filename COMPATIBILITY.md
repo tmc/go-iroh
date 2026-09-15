@@ -4,7 +4,7 @@ go-iroh is an independent Go implementation of iroh wire v1. This matrix records
 
 Go-client↔Go-relay pairings contain no Rust peer, so they are outside this matrix's scope; that path is covered by the standard test suite.
 
-Generated from commit `016663193c3f2bf262d73d10a462599d48d71e5b` at 2026-09-15T15:58:31Z. A pass requires a recorded Rust process and binary digest; setup errors, unsupported cells, and untested cells never count as passes.
+Generated from commit `931e50a56a0277b3775d69a4272dc8bcd0f4e90c` at 2026-09-15T16:06:17Z. A pass requires a recorded Rust process and binary digest; setup errors, unsupported cells, and untested cells never count as passes.
 
 ## How to read this table
 
@@ -17,7 +17,7 @@ Generated from commit `016663193c3f2bf262d73d10a462599d48d71e5b` at 2026-09-15T1
 
 Released columns are compatibility claims against a pinned Rust release. A `-pre` column is expected-enforced evidence against a pinned upstream commit, not a claim about a shipped version. The `tip` column is a moving, advisory signal refreshed nightly and is never a committed compatibility claim. Experimental rows may change wire format to track upstream without a major go-iroh version bump.
 
-The Rust counterpart is either an **upstream CLI**, an unmodified program shipped by upstream iroh, or a **Rust test driver**, a purpose-built peer linked to the pinned upstream libraries. CLI results have the strongest black-box provenance; test-driver results cover protocol behavior that upstream CLIs do not expose.
+The Rust counterpart is either an **upstream CLI**, a program shipped by upstream iroh and built from a pinned upstream commit, or a **Rust test driver**, a purpose-built peer linked to the pinned upstream libraries. CLI results have the strongest black-box provenance; test-driver results cover protocol behavior that upstream CLIs do not expose. Where an upstream CLI's own release does not target the pinned iroh train, or where building it required any deviation from upstream sources, that is recorded against the peer in the **Peers** table; read those notes as part of the claim.
 
 Matrix cells reference the **Peers** table below. Each peer entry records the Rust executable and its SHA-256 digest. The machine-readable result also records the peer process ID, so a pass cannot be emitted without evidence of a real Rust process.
 
@@ -69,9 +69,11 @@ Every scenario is measured against the released 1.2 (1.2.0) pin. The `tip` colum
 | Ref | Rust peer | Pin | SHA-256 digest |
 |---:|---|---|---|
 | [1] | iroh-dns-server | 1.2 (1.2.0) | `d556534dbecad8f97d5ed701685341aedb02986a45a3f9b150ec70bad828a4c0` |
-| [2] | iroh-doctor | 1.2 (1.2.0) | `abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374` |
+| [2] | iroh-doctor (*) | 1.2 (1.2.0) | `abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374` |
 | [3] | iroh-relay | 1.2 (1.2.0) | `d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6` |
 | [4] | rust-driver | 1.2 (1.2.0) | `f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21` |
+
+* **iroh-doctor provenance.** Upstream has shipped no iroh-doctor release for the 1.2 train. The pin is iroh-doctor 0.101.0, whose manifest declares `iroh = "1.0.0"` and is caret-resolved up to 1.2.0, so upstream does not itself publish or test this pairing; the matrix measures it, upstream does not endorse it. Building it against 1.2.0 also needs one additive line in iroh-doctor's own manifest, declaring tokio's `rt-multi-thread` feature that its `Builder::new_multi_thread` call already requires and that the iroh 1.0.x dependency graph supplied incidentally through `hickory-net`, which iroh 1.2.0 no longer uses. No iroh source is modified, and the feature is already present in the committed lock, so the `--locked` build resolves identically; the build gate in `images/iroh-1.2.0/Dockerfile` fails if that edit is not exactly one line.
 
 ### Observed incompatibility evidence
 
