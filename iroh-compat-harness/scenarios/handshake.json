@@ -6,7 +6,7 @@
       "tier": "stable",
       "counterpart": "upstream CLI",
       "expected": {
-        "1.0": "pass"
+        "1.2": "pass"
       }
     },
     {
@@ -15,7 +15,7 @@
       "tier": "stable",
       "counterpart": "upstream CLI",
       "expected": {
-        "1.0": "pass"
+        "1.2": "pass"
       }
     },
     {
@@ -24,7 +24,7 @@
       "tier": "stable",
       "counterpart": "upstream CLI",
       "expected": {
-        "1.0": "pass"
+        "1.2": "pass"
       }
     },
     {
@@ -33,7 +33,7 @@
       "tier": "stable",
       "counterpart": "upstream CLI",
       "expected": {
-        "1.0": "pass"
+        "1.2": "pass"
       }
     },
     {
@@ -42,7 +42,7 @@
       "tier": "stable",
       "counterpart": "Rust test driver",
       "expected": {
-        "1.0": "pass"
+        "1.2": "pass"
       }
     },
     {
@@ -51,7 +51,7 @@
       "tier": "stable",
       "counterpart": "Rust test driver",
       "expected": {
-        "1.0": "pass"
+        "1.2": "pass"
       }
     },
     {
@@ -60,7 +60,7 @@
       "tier": "stable",
       "counterpart": "Rust test driver",
       "expected": {
-        "1.0": "pass"
+        "1.2": "pass"
       }
     },
     {
@@ -69,7 +69,7 @@
       "tier": "stable",
       "counterpart": "Rust test driver",
       "expected": {
-        "1.0": "pass"
+        "1.2": "pass"
       }
     },
     {
@@ -78,7 +78,7 @@
       "tier": "stable",
       "counterpart": "Rust test driver",
       "expected": {
-        "1.0": "pass"
+        "1.2": "pass"
       }
     },
     {
@@ -87,7 +87,7 @@
       "tier": "stable",
       "counterpart": "Rust test driver",
       "expected": {
-        "1.0": "pass"
+        "1.2": "pass"
       }
     }
   ]

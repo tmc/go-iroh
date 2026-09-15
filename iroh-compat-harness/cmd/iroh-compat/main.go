@@ -13,20 +13,16 @@ import (
 )
 
 func main() {
-	releaseKey := flag.String("release-key", "1.0", "released-train scenario key")
-	releaseTrain := flag.String("release-train", "1.0", "released upstream minor train")
+	releaseKey := flag.String("release-key", "1.2", "released-train scenario key")
+	releaseTrain := flag.String("release-train", "1.2", "released upstream minor train")
 	releaseVersion := flag.String("release-version", "", "pinned upstream release")
-	customKey := flag.String("custom-key", "1.2", "CustomAddr scenario key")
-	customTrain := flag.String("custom-train", "1.2", "target upstream minor train")
-	customVersion := flag.String("custom-version", "", "pinned CustomAddr release")
-	customCommit := flag.String("custom-commit", "", "pinned upstream CustomAddr commit")
+	releaseCommit := flag.String("release-commit", "", "pinned upstream release commit")
 	doctor := flag.String("rust-doctor", "", "path to the pinned iroh-doctor binary")
 	goRelay := flag.String("go-relay", "", "path to the go-iroh relay binary")
 	rustRelay := flag.String("rust-relay", "", "path to the pinned upstream iroh-relay binary")
 	goDNS := flag.String("go-dns", "", "path to the go-iroh DNS server binary")
 	rustDNS := flag.String("rust-dns", "", "path to the pinned upstream iroh-dns-server binary")
 	vector := flag.String("rust-vector", "", "path to the pinned Rust vector driver")
-	customVector := flag.String("rust-custom-vector", "", "path to the CustomAddr Rust vector driver")
 	pq := flag.String("rust-pq", "", "path to the pinned Rust PQ peer")
 	flag.Parse()
 
@@ -41,8 +37,7 @@ func main() {
 	report := runner.Report{
 		Schema: runner.Schema, Generated: time.Now().UTC(), GoIroh: runner.GoIroh{Version: "main", Commit: commit},
 		Pins: []runner.Pin{
-			{Key: *releaseKey, Train: *releaseTrain, Version: *releaseVersion, Kind: "release"},
-			{Key: *customKey, Train: *customTrain, Version: *customVersion, Commit: *customCommit, Kind: "release"},
+			{Key: *releaseKey, Train: *releaseTrain, Version: *releaseVersion, Commit: *releaseCommit, Kind: "release"},
 		},
 	}
 	report.Cells = runner.RunVectorCorpus(*vector, filepath.Join(root, "iroh-compat-harness", "vectors", "corpus.json"), *releaseKey)
@@ -61,11 +56,6 @@ func main() {
 	if err := runner.ApplyExpected(scenarioDir, *releaseKey, report.Cells); err != nil {
 		fatal(err)
 	}
-	customCells := runner.RunCustomAddrLive(*customVector, *customKey)
-	if err := runner.ApplyExpectedSubset(scenarioDir, *customKey, customCells); err != nil {
-		fatal(err)
-	}
-	report.Cells = append(report.Cells, customCells...)
 	if err := report.Write(filepath.Join(root, "iroh-compat-harness", "results"), root); err != nil {
 		fatal(err)
 	}
