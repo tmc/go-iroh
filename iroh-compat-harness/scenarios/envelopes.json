@@ -3,21 +3,14 @@
     {
       "surface": "CustomAddr endpoint tickets",
       "tier": "experimental",
-      "upstream_version": "1.0",
-      "status": "observed-incompatible",
-      "detail": "Observed with iroh-base 1.0.3 in both directions: upstream uses the legacy enum encoding."
-    },
-    {
-      "surface": "CustomAddr endpoint tickets",
-      "tier": "experimental",
       "upstream_version": "1.2 (1.2.0)",
       "status": "verified-interop",
-      "detail": "CustomAddr-only measurement at released upstream 1.2.0 (17c0612f): Go accepted 6/6 Rust tickets and Rust accepted 6/6 Go tickets. Upstream moved to go-iroh's length-prefixed byte format; no go-iroh codec change is required."
+      "detail": "Measured at released upstream 1.2.0 (17c0612f): Go accepted 6/6 Rust tickets and Rust accepted 6/6 Go tickets. Upstream moved to go-iroh's length-prefixed byte format; no go-iroh codec change is required. The superseded 1.0.3 enum encoding is kept as a frozen negative fixture in vectors/legacy_custom_addr.json, which go-iroh must keep rejecting."
     },
     {
       "surface": "Non-canonical varints",
       "tier": "stable",
-      "upstream_version": "1.0",
+      "upstream_version": "1.2 (1.2.0)",
       "status": "observed-divergence",
       "detail": "go-iroh is strictly stricter: it rejects padded varint encodings that postcard 1.1.3 accepts. No traffic produced by a conforming postcard serializer is affected, since both upstream's serializer and go-iroh's emit only canonical forms. Content relayed verbatim through gossip carries varints produced by the originating endpoint rather than the forwarding peer (gossip/discovery.go:269, docs/heads.go:77), so a non-conforming originator's own message is dropped by go-iroh while upstream accepts it, affecting only that originator."
     }

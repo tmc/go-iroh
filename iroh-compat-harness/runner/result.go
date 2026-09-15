@@ -345,7 +345,7 @@ func (r *Report) Markdown() []byte {
 		}
 		b.WriteString(" — |\n")
 	}
-	b.WriteString("\nThe released 1.2 (1.2.0) column remains CustomAddr-only: blocking CI exercises the bidirectional ticket wire vectors. This release re-pin does not expand coverage; all other scenarios remain untested for 1.2. The `tip` column is populated only in the nightly advisory report.\n")
+	b.WriteString("\n" + r.coverageNote(scenarios, byScenario))
 	b.WriteString("\n### Peers\n\n| Ref | Rust peer | Pin | SHA-256 digest |\n|---:|---|---|---|\n")
 	for i, peer := range peers {
 		fmt.Fprintf(&b, "| [%d] | %s | %s | `%s` |\n", i+1, peer.name, peer.pin, peer.digest)
@@ -370,6 +370,28 @@ func (r *Report) Markdown() []byte {
 	b.WriteString("```sh\ncd iroh-compat-harness\nmake parity\n```\n\n")
 	b.WriteString("See the [harness README](iroh-compat-harness/README.md) for prerequisites, the [scenario declarations](iroh-compat-harness/scenarios/) for predicted verdicts and definitions, and [results.json](iroh-compat-harness/results/results.json) for the machine-readable report.\n")
 	return []byte(b.String())
+}
+
+// coverageNote states how completely each pin was measured. The matrix cannot
+// say this on its own: an unmeasured cell renders as "—", which reads the same
+// whether the scenario was skipped for that pin or never ran anywhere.
+func (r *Report) coverageNote(scenarios []string, byScenario map[string]map[string]Cell) string {
+	var b strings.Builder
+	for _, pin := range r.Pins {
+		measured := 0
+		for _, scenario := range scenarios {
+			if _, ok := byScenario[scenario][pin.Key]; ok {
+				measured++
+			}
+		}
+		if measured == len(scenarios) {
+			fmt.Fprintf(&b, "Every scenario is measured against the released %s pin. ", pin.label())
+		} else {
+			fmt.Fprintf(&b, "The released %s column is partial: %d of %d scenarios are measured and the rest remain untested for %s. ", pin.label(), measured, len(scenarios), pin.Train)
+		}
+	}
+	b.WriteString("The `tip` column is populated only in the nightly advisory report.\n")
+	return b.String()
 }
 
 func (p Pin) label() string {
