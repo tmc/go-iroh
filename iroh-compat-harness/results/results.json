@@ -1,9 +1,9 @@
 {
   "schema": "go-iroh-parity/4",
-  "generated": "2026-09-15T16:06:17.046889929Z",
+  "generated": "2026-09-15T17:36:21.384746093Z",
   "go_iroh": {
     "version": "main",
-    "commit": "931e50a56a0277b3775d69a4272dc8bcd0f4e90c"
+    "commit": "c2e8e8ef9e8a5c33a80bf9aea7dc85af387bdede"
   },
   "pins": [
     {
@@ -22,7 +22,7 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 183,
+      "peer_pid": 159,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
@@ -36,7 +36,7 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 183,
+      "peer_pid": 159,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
@@ -50,7 +50,7 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 183,
+      "peer_pid": 159,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
@@ -64,7 +64,7 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 183,
+      "peer_pid": 159,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
@@ -78,7 +78,7 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 183,
+      "peer_pid": 159,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
@@ -92,7 +92,7 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 183,
+      "peer_pid": 159,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
@@ -117,11 +117,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 188,
+      "peer_pid": 164,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 3,
+      "duration_ms": 2,
       "evidence": {
         "accepted": 6,
         "lengths": [
@@ -142,11 +142,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 193,
+      "peer_pid": 169,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "fail",
       "expected": "fail",
-      "duration_ms": 3,
+      "duration_ms": 1,
       "evidence": {
         "agreed": 3,
         "cases": [
@@ -217,11 +217,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-doctor@sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
-      "peer_pid": 198,
+      "peer_pid": 174,
       "peer_digest": "sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 771,
+      "duration_ms": 682,
       "detail": "three doctor send/receive/echo streams completed"
     },
     {
@@ -231,11 +231,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-doctor@sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
-      "peer_pid": 204,
+      "peer_pid": 181,
       "peer_digest": "sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 3170,
+      "duration_ms": 3180,
       "detail": "three doctor send/receive/echo streams completed"
     },
     {
@@ -245,11 +245,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-doctor@sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
-      "peer_pid": 210,
+      "peer_pid": 187,
       "peer_digest": "sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 8168,
+      "duration_ms": 8188,
       "detail": "dial rejected cleanly: iroh: connect to 197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d61: context deadline exceeded"
     },
     {
@@ -259,11 +259,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-doctor@sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
-      "peer_pid": 215,
+      "peer_pid": 192,
       "peer_digest": "sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 3291,
+      "duration_ms": 3202,
       "detail": "dial rejected cleanly: iroh: connect to cecc1507dc1ddd7295951c290888f095adb9044d1b73d696e6df065d683bd4fc: CRYPTO_ERROR 0x12a (local): iroh: server identity mismatch: dialed cecc1507dc1ddd7295951c290888f095adb9044d1b73d696e6df065d683bd4fc, got 197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d61"
     },
     {
@@ -273,11 +273,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-relay@sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
-      "peer_pid": 220,
+      "peer_pid": 197,
       "peer_digest": "sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 25,
+      "duration_ms": 27,
       "detail": "Go client negotiated relay protocol 2 and received the Rust pong"
     },
     {
@@ -287,11 +287,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 233,
+      "peer_pid": 210,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 27,
+      "duration_ms": 26,
       "detail": "Rust test driver negotiated the upstream relay protocol and received a pong"
     },
     {
@@ -301,11 +301,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 244,
+      "peer_pid": 221,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 32,
+      "duration_ms": 27,
       "detail": "Rust test driver negotiated the upstream relay protocol and received a pong"
     },
     {
@@ -315,7 +315,7 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-relay@sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
-      "peer_pid": 249,
+      "peer_pid": 226,
       "peer_digest": "sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
       "result": "pass",
       "expected": "pass",
@@ -329,11 +329,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-relay@sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
-      "peer_pid": 255,
+      "peer_pid": 232,
       "peer_digest": "sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 26,
+      "duration_ms": 25,
       "detail": "Go client negotiated relay protocol 2 and received the Rust pong"
     },
     {
@@ -343,11 +343,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-relay@sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
-      "peer_pid": 261,
+      "peer_pid": 238,
       "peer_digest": "sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 30024,
+      "duration_ms": 30029,
       "detail": "Rust relay closed an idle pre-WebSocket connection after 30.003s"
     },
     {
@@ -357,11 +357,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-dns-server@sha256:d556534dbecad8f97d5ed701685341aedb02986a45a3f9b150ec70bad828a4c0",
-      "peer_pid": 267,
+      "peer_pid": 244,
       "peer_digest": "sha256:d556534dbecad8f97d5ed701685341aedb02986a45a3f9b150ec70bad828a4c0",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 22,
+      "duration_ms": 130,
       "detail": "upstream Rust DNS server stored and returned a Go-signed pkarr packet"
     },
     {
@@ -371,11 +371,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 282,
+      "peer_pid": 259,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 25,
+      "duration_ms": 29,
       "detail": "Go DNS server stored and returned a Rust-test-driver-signed pkarr packet"
     },
     {
@@ -385,11 +385,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-relay@sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
-      "peer_pid": 287,
+      "peer_pid": 264,
       "peer_digest": "sha256:d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 27,
+      "duration_ms": 36,
       "detail": "Go and the Rust test driver both resolved and reached the same upstream relay URL"
     },
     {
@@ -399,11 +399,11 @@
       "counterpart": "upstream CLI",
       "iroh": "1.2",
       "peer": "iroh-doctor@sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
-      "peer_pid": 298,
+      "peer_pid": 275,
       "peer_digest": "sha256:abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 1628,
+      "duration_ms": 1477,
       "evidence": {
         "compared_field_count": 9,
         "compared_fields": [
@@ -430,11 +430,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 303,
+      "peer_pid": 281,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 40,
+      "duration_ms": 86,
       "detail": "Go and the Rust test driver exchanged QUIC datagrams in both directions"
     },
     {
@@ -444,11 +444,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 310,
+      "peer_pid": 288,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 38,
+      "duration_ms": 117,
       "detail": "Rust peer observed Go application close code 42 and reason bye"
     },
     {
@@ -458,11 +458,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 317,
+      "peer_pid": 295,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 38,
+      "duration_ms": 177,
       "detail": "Go and the Rust test driver both recorded the authenticated peer and direct address"
     },
     {
@@ -472,11 +472,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 324,
+      "peer_pid": 302,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 246,
+      "duration_ms": 432,
       "detail": "Go resumed a Rust-issued TLS session and Rust accepted the second stream as 0-RTT"
     },
     {
@@ -486,11 +486,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 330,
+      "peer_pid": 308,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 123,
+      "duration_ms": 160,
       "detail": "Go and upstream Rust gossip codecs exchanged framed broadcasts in both directions"
     },
     {
@@ -500,11 +500,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 337,
+      "peer_pid": 315,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 201,
+      "duration_ms": 406,
       "evidence": {
         "directions": [
           "go-client-rust-server",
@@ -525,11 +525,11 @@
       "counterpart": "Rust test driver",
       "iroh": "1.2",
       "peer": "rust-driver@sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
-      "peer_pid": 370,
+      "peer_pid": 348,
       "peer_digest": "sha256:f3ec0ddffdc361618a0784a598786ca1b51e0f32cca02222de23adecdbb4fb21",
       "result": "pass",
       "expected": "pass",
-      "duration_ms": 162,
+      "duration_ms": 222,
       "evidence": {
         "directions": [
           "go-client-rust-server",
