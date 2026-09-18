@@ -179,7 +179,7 @@ func (l *LiveSync) run(ctx context.Context, namespace NamespaceID, store *Memory
 			if !ok {
 				return
 			}
-			l.handleStoreEvent(ctx, opts, ev)
+			l.handleStoreEvent(ctx, namespace, opts, ev)
 		case ev, ok := <-topicEvents:
 			if !ok {
 				return
@@ -189,8 +189,10 @@ func (l *LiveSync) run(ctx context.Context, namespace NamespaceID, store *Memory
 	}
 }
 
-func (l *LiveSync) handleStoreEvent(ctx context.Context, opts liveSyncOptions, ev StoreEvent) {
-	if ev.Kind != StoreEventInsertLocal {
+func (l *LiveSync) handleStoreEvent(ctx context.Context, namespace NamespaceID, opts liveSyncOptions, ev StoreEvent) {
+	// A store can hold several namespaces, but this topic carries one: an
+	// entry from another namespace must not reach these neighbors.
+	if ev.Kind != StoreEventInsertLocal || ev.Entry.Entry.Namespace() != namespace {
 		return
 	}
 	msg, err := postcard.Marshal(liveOp{Kind: liveOpPut, Entry: ev.Entry})
@@ -227,7 +229,7 @@ func (l *LiveSync) handleReceived(ctx context.Context, namespace NamespaceID, st
 	}
 	switch op.Kind {
 	case liveOpPut:
-		if op.Entry.Entry.Namespace() != namespace || op.Entry.Verify() != nil {
+		if op.Entry.Entry.Namespace() != namespace || !acceptTimestamp(op.Entry.Entry) || op.Entry.Verify() != nil {
 			return
 		}
 		hash := op.Entry.Entry.ContentHash()

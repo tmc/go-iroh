@@ -12,8 +12,17 @@ import (
 )
 
 // MaxTimestampFutureShift is the maximum accepted future timestamp in
-// microseconds.
+// microseconds. It bounds entries arriving from a peer only: conflicts are
+// resolved by timestamp, so an entry dated arbitrarily far ahead would win
+// every later write to its key and that key's subtree. Entries already in a
+// store are left as they are.
 const MaxTimestampFutureShift = 10 * 60 * uint64(time.Second/time.Microsecond)
+
+// acceptTimestamp reports whether entry is dated within
+// [MaxTimestampFutureShift] of now, as a remote entry must be.
+func acceptTimestamp(entry Entry) bool {
+	return entry.Timestamp() <= uint64(time.Now().UnixMicro())+MaxTimestampFutureShift
+}
 
 // ContentStatus reports whether entry content is locally available.
 type ContentStatus uint64

@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/tmc/go-iroh/blobs"
+	"github.com/tmc/go-iroh/internal/postcard"
 	"github.com/tmc/go-iroh/key"
 )
 
@@ -101,17 +102,76 @@ func (s *MemoryStore) Fingerprint(r Range) Fingerprint {
 	return s.fingerprintLocked(r)
 }
 
-// InitialMessage returns the Rust range reconciliation initial message.
-func (s *MemoryStore) InitialMessage() Message {
+// namespaceScope is the set of namespaces one reconciliation round may read
+// and accept. Reconciliation ranges come from the peer and cover identifiers
+// of every namespace, so the sync path confines each round to the namespace
+// the peer was authorized for. allNamespaces is the unconfined scope kept for
+// the deprecated entry points, which have no namespace to confine to.
+type namespaceScope struct {
+	id  NamespaceID
+	all bool
+}
+
+var allNamespaces = namespaceScope{all: true}
+
+func inNamespace(namespace NamespaceID) namespaceScope {
+	return namespaceScope{id: namespace}
+}
+
+func (sc namespaceScope) contains(entry SignedEntry) bool {
+	return sc.all || entry.Entry.Namespace() == sc.id
+}
+
+// scopeRange returns the entries of sc whose identifiers are in r.
+func (s *MemoryStore) scopeRange(sc namespaceScope, r Range) []SignedEntry {
 	s.mu.RLock()
-	entries := s.entriesLocked()
+	defer s.mu.RUnlock()
+
+	var entries []SignedEntry
+	for _, entry := range s.entries {
+		if sc.contains(entry) && r.Contains(entry.Entry.ID) {
+			entries = append(entries, entry)
+		}
+	}
+	sortEntries(entries)
+	return entries
+}
+
+// scopeFingerprint returns the fingerprint of the entries of sc in r.
+func (s *MemoryStore) scopeFingerprint(sc namespaceScope, r Range) Fingerprint {
+	fp := EmptyFingerprint()
+	for _, entry := range s.scopeRange(sc, r) {
+		fp.Xor(Fingerprint(entry.Fingerprint()))
+	}
+	return fp
+}
+
+// InitialMessage returns the Rust range reconciliation initial message.
+//
+// Deprecated: use InitialMessageInNamespace.
+func (s *MemoryStore) InitialMessage() Message {
+	return s.initialMessage(allNamespaces)
+}
+
+// InitialMessageInNamespace returns the Rust range reconciliation initial
+// message for namespace.
+func (s *MemoryStore) InitialMessageInNamespace(namespace NamespaceID) Message {
+	return s.initialMessage(inNamespace(namespace))
+}
+
+func (s *MemoryStore) initialMessage(sc namespaceScope) Message {
+	// The zero range and NewRange(first, first) both denote the whole set, so
+	// one scan yields the anchor and the fingerprint from one snapshot.
+	entries := s.scopeRange(sc, Range{})
+	fingerprint := EmptyFingerprint()
+	for _, entry := range entries {
+		fingerprint.Xor(Fingerprint(entry.Fingerprint()))
+	}
 	var first RecordIdentifier
 	if len(entries) != 0 {
 		first = entries[0].Entry.ID
 	}
 	r := NewRange(first, first)
-	fingerprint := s.fingerprintLocked(r)
-	s.mu.RUnlock()
 
 	return Message{Parts: []MessagePart{{
 		Kind: MessagePartRangeFingerprint,
@@ -125,7 +185,21 @@ func (s *MemoryStore) InitialMessage() Message {
 // ProcessMessage processes message and returns a response, if reconciliation
 // should continue. The validate callback must verify incoming entries that
 // should be trusted.
+//
+// Deprecated: use ProcessMessageInNamespace.
 func (s *MemoryStore) ProcessMessage(config SyncConfig, message Message, validate func(SignedEntry, ContentStatus) bool, onInsert func(SignedEntry, ContentStatus), contentStatus func(SignedEntry) ContentStatus) (Message, bool) {
+	return s.processMessage(allNamespaces, config, message, validate, onInsert, contentStatus)
+}
+
+// ProcessMessageInNamespace processes message for namespace and returns a
+// response, if reconciliation should continue. Entries of another namespace
+// are neither sent nor accepted. The validate callback must verify incoming
+// entries that should be trusted.
+func (s *MemoryStore) ProcessMessageInNamespace(namespace NamespaceID, config SyncConfig, message Message, validate func(SignedEntry, ContentStatus) bool, onInsert func(SignedEntry, ContentStatus), contentStatus func(SignedEntry) ContentStatus) (Message, bool) {
+	return s.processMessage(inNamespace(namespace), config, message, validate, onInsert, contentStatus)
+}
+
+func (s *MemoryStore) processMessage(sc namespaceScope, config SyncConfig, message Message, validate func(SignedEntry, ContentStatus) bool, onInsert func(SignedEntry, ContentStatus), contentStatus func(SignedEntry) ContentStatus) (Message, bool) {
 	config = config.withDefaults()
 	if validate == nil {
 		validate = func(SignedEntry, ContentStatus) bool { return true }
@@ -149,14 +223,14 @@ func (s *MemoryStore) ProcessMessage(config SyncConfig, message Message, validat
 	for _, item := range items {
 		var diff []RangeValue
 		if !item.HaveLocal {
-			for _, entry := range s.GetRange(item.Range) {
+			for _, entry := range s.scopeRange(sc, item.Range) {
 				if !peerHasNewerValue(item.Values, entry) {
 					diff = append(diff, RangeValue{Entry: entry, Status: contentStatus(entry)})
 				}
 			}
 		}
 		for _, value := range item.Values {
-			if !validate(value.Entry, value.Status) {
+			if !sc.contains(value.Entry) || !acceptTimestamp(value.Entry.Entry) || !validate(value.Entry, value.Status) {
 				continue
 			}
 			origin := InsertOrigin{Kind: InsertOriginRemote, ContentStatus: value.Status}
@@ -177,11 +251,11 @@ func (s *MemoryStore) ProcessMessage(config SyncConfig, message Message, validat
 	}
 
 	for _, remote := range fingerprints {
-		local := s.Fingerprint(remote.Range)
+		local := s.scopeFingerprint(sc, remote.Range)
 		if local == remote.Fingerprint {
 			continue
 		}
-		entries := s.GetRange(remote.Range)
+		entries := s.scopeRange(sc, remote.Range)
 		if len(entries) <= 1 || remote.Fingerprint == EmptyFingerprint() {
 			out = append(out, MessagePart{
 				Kind: MessagePartRangeItem,
@@ -193,17 +267,17 @@ func (s *MemoryStore) ProcessMessage(config SyncConfig, message Message, validat
 			})
 			continue
 		}
-		for _, r := range s.splitRange(remote.Range, config.SplitFactor) {
+		for _, r := range s.splitRange(sc, remote.Range, config.SplitFactor) {
 			if config.splitHook != nil {
 				config.splitHook(r)
 			}
-			chunk := s.GetRange(r)
+			chunk := s.scopeRange(sc, r)
 			if len(chunk) > config.MaxSetSize {
 				out = append(out, MessagePart{
 					Kind: MessagePartRangeFingerprint,
 					RangeFingerprint: RangeFingerprint{
 						Range:       r,
-						Fingerprint: s.Fingerprint(r),
+						Fingerprint: s.scopeFingerprint(sc, r),
 					},
 				})
 			} else {
@@ -221,7 +295,57 @@ func (s *MemoryStore) ProcessMessage(config SyncConfig, message Message, validat
 	if len(out) == 0 {
 		return Message{}, false
 	}
-	return Message{Parts: out}, true
+	return s.boundedMessage(sc, out), true
+}
+
+// boundedMessage keeps a reconciliation reply within one sync frame. Range
+// items that do not fit are described by fingerprints instead; the peer asks
+// for those ranges in a later round. A single entry larger than a frame still
+// fails at writeSyncFrame, since no range split can make that entry smaller.
+func (s *MemoryStore) boundedMessage(sc namespaceScope, parts []MessagePart) Message {
+	const budget = maxSyncMessageSize - 16 // frame kind and slice length
+	var split []MessagePart
+	for _, part := range parts {
+		b, err := postcard.Marshal(part)
+		if err != nil || len(b) <= budget || part.Kind != MessagePartRangeItem || len(part.RangeItem.Values) < 2 {
+			split = append(split, part)
+			continue
+		}
+		for _, r := range s.splitRange(sc, part.RangeItem.Range, 2) {
+			split = append(split, MessagePart{
+				Kind: MessagePartRangeFingerprint,
+				RangeFingerprint: RangeFingerprint{
+					Range:       r,
+					Fingerprint: s.scopeFingerprint(sc, r),
+				},
+			})
+		}
+	}
+
+	size := 0
+	for i, part := range split {
+		b, err := postcard.Marshal(part)
+		if err != nil {
+			return Message{Parts: parts} // writeSyncFrame reports the encode error
+		}
+		if size+len(b) > budget && part.Kind == MessagePartRangeItem {
+			r := part.RangeItem.Range
+			part = MessagePart{
+				Kind: MessagePartRangeFingerprint,
+				RangeFingerprint: RangeFingerprint{
+					Range:       r,
+					Fingerprint: s.scopeFingerprint(sc, r),
+				},
+			}
+			b, err = postcard.Marshal(part)
+			if err != nil {
+				return Message{Parts: parts}
+			}
+		}
+		size += len(b)
+		split[i] = part
+	}
+	return Message{Parts: split}
 }
 
 func (s *MemoryStore) fingerprintLocked(r Range) Fingerprint {
@@ -397,11 +521,11 @@ func rangeValues(entries []SignedEntry, contentStatus func(SignedEntry) ContentS
 	return values
 }
 
-func (s *MemoryStore) splitRange(r Range, splitFactor int) []Range {
+func (s *MemoryStore) splitRange(sc namespaceScope, r Range, splitFactor int) []Range {
 	if splitFactor < 2 {
 		splitFactor = 2
 	}
-	entries := s.GetRange(r)
+	entries := s.scopeRange(sc, r)
 	n := len(entries)
 	if n == 0 {
 		return nil

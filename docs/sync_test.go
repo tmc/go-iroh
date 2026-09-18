@@ -1,6 +1,9 @@
 package docs
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestProcessMessageStoresIncomingRangeItem(t *testing.T) {
 	namespace := NewNamespaceSecret(repeat32(0xb2))
@@ -171,9 +174,47 @@ func TestSplitRangeSkipsDuplicatePivots(t *testing.T) {
 	entries := store.Entries()
 	r := NewRange(entries[0].Entry.ID, entries[1].Entry.ID)
 
-	for _, r := range store.splitRange(r, 5) {
+	for _, r := range store.splitRange(allNamespaces, r, 5) {
 		if r.IsAll() {
 			t.Fatalf("splitRange generated all-range partition %#v", r)
 		}
+	}
+}
+
+// TestProcessMessageRejectsFutureTimestamp pins MaxTimestampFutureShift on the
+// remote insert path: conflicts resolve by timestamp, so an entry dated past
+// the bound would win every later write to its key.
+func TestProcessMessageRejectsFutureTimestamp(t *testing.T) {
+	now := uint64(time.Now().UnixMicro())
+	tests := []struct {
+		name      string
+		timestamp uint64
+		want      int
+	}{
+		{"now", now, 1},
+		{"within bound", now + MaxTimestampFutureShift/2, 1},
+		{"past bound", now + 2*MaxTimestampFutureShift, 0},
+		{"max uint64", ^uint64(0), 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			namespace := NewNamespaceSecret(repeat32(0xb2))
+			author := NewAuthor(repeat32(0xa1))
+			entry := testSignedEntry(namespace, author, "k", testRecord("k", 1, tt.timestamp))
+			store := NewMemoryStore()
+
+			store.ProcessMessageInNamespace(namespace.ID(), DefaultSyncConfig(), Message{Parts: []MessagePart{{
+				Kind: MessagePartRangeItem,
+				RangeItem: RangeItem{
+					Range:     NewRange(entry.Entry.ID, entry.Entry.ID),
+					Values:    []RangeValue{{Entry: entry, Status: ContentComplete}},
+					HaveLocal: true,
+				},
+			}}}, nil, nil, nil)
+
+			if got := store.Len(); got != tt.want {
+				t.Fatalf("Len = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }

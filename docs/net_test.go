@@ -117,3 +117,58 @@ func repeat32(b byte) [32]byte {
 	}
 	return out
 }
+
+func TestSyncConfinedToNamespace(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	shared := docs.NewNamespaceSecret(repeat32(0xb2))
+	other := docs.NewNamespaceSecret(repeat32(0xb3))
+	author := docs.NewAuthor(repeat32(0xa1))
+	serverEntry := signedEntry(shared, author, "server", "server-data", 1)
+	serverSecret := signedEntry(other, author, "server-secret", "server-secret-data", 1)
+	clientSecret := signedEntry(other, author, "client-secret", "client-secret-data", 1)
+
+	serverStore := docs.NewMemoryStore()
+	serverStore.Put(serverEntry)
+	serverStore.Put(serverSecret)
+	clientStore := docs.NewMemoryStore()
+	clientStore.Put(clientSecret)
+
+	server, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatalf("bind server: %v", err)
+	}
+	router, err := iroh.NewRouter(server, map[string]iroh.ProtocolHandler{
+		docs.ALPN: &docs.Handler{
+			Store: serverStore,
+			Allow: func(namespace docs.NamespaceID, peer key.EndpointID) bool {
+				return namespace == shared.ID()
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("new router: %v", err)
+	}
+	defer router.Shutdown(ctx)
+
+	client, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatalf("bind client: %v", err)
+	}
+	defer client.Shutdown(ctx)
+
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	if _, err := docs.Sync(ctx, client, addr, shared.ID(), clientStore, nil, docs.DefaultSyncConfig()); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if _, ok := clientStore.GetExact(shared.ID(), author.ID(), []byte("server"), false); !ok {
+		t.Fatal("client missing authorized namespace entry")
+	}
+	if _, ok := clientStore.GetExact(other.ID(), author.ID(), []byte("server-secret"), false); ok {
+		t.Fatal("server disclosed an entry from an unauthorized namespace")
+	}
+	if _, ok := serverStore.GetExact(other.ID(), author.ID(), []byte("client-secret"), false); ok {
+		t.Fatal("client disclosed an entry from another namespace")
+	}
+}

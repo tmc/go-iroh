@@ -15,7 +15,12 @@ import (
 	"github.com/tmc/go-iroh/netaddr"
 )
 
-const maxSyncMessageSize = 1024 * 1024 * 1024
+// maxSyncMessageSize bounds one sync frame. A frame carries the entries of a
+// single reconciliation round, and a SignedEntry is at least 170 bytes, so
+// 16 MiB is roughly 100k entries in one round: past anything a real document
+// exchanges, and small enough that a peer's length claim is not worth acting
+// on before the bytes arrive.
+const maxSyncMessageSize = 16 * 1024 * 1024
 
 // AbortReason is the reason an accepting peer declined a sync request.
 type AbortReason uint64
@@ -37,9 +42,11 @@ type SyncOutcome struct {
 
 // Handler handles incoming iroh-docs sync streams.
 type Handler struct {
-	Store         *MemoryStore
-	BlobStore     blobs.Store
-	Config        SyncConfig
+	Store     *MemoryStore
+	BlobStore blobs.Store
+	Config    SyncConfig
+	// Allow reports whether peer may sync namespace. A nil Allow authorizes
+	// every peer for every namespace.
 	Allow         func(NamespaceID, key.EndpointID) bool
 	Validate      func(SignedEntry, ContentStatus) bool
 	OnInsert      func(SignedEntry, ContentStatus)
@@ -101,7 +108,7 @@ func (h *Handler) Accept(ctx context.Context, conn *iroh.Conn) error {
 		ok = true
 		return nil
 	}
-	_, err = h.run(ctx, s, msg.Message, true)
+	_, err = h.run(ctx, s, msg.Namespace, msg.Message, true)
 	if err == nil {
 		ok = true
 	}
@@ -151,18 +158,18 @@ func Sync(ctx context.Context, ep *iroh.Endpoint, addr netaddr.EndpointAddr, nam
 		ok = true
 		return SyncOutcome{}, nil
 	}
-	init := store.InitialMessage()
+	init := store.InitialMessageInNamespace(namespace)
 	if err := writeSyncFrame(s, syncWireMessage{Kind: syncMessageInit, Namespace: namespace, Message: init}); err != nil {
 		return SyncOutcome{}, fmt.Errorf("docs: write init: %w", err)
 	}
-	out, err := h.run(ctx, s, Message{}, false)
+	out, err := h.run(ctx, s, namespace, Message{}, false)
 	if err == nil {
 		ok = true
 	}
 	return out, err
 }
 
-func (h *Handler) run(ctx context.Context, rw io.ReadWriter, initial Message, acceptSide bool) (SyncOutcome, error) {
+func (h *Handler) run(ctx context.Context, rw io.ReadWriter, namespace NamespaceID, initial Message, acceptSide bool) (SyncOutcome, error) {
 	if h.Store == nil {
 		return SyncOutcome{}, fmt.Errorf("docs: nil store")
 	}
@@ -176,7 +183,7 @@ func (h *Handler) run(ctx context.Context, rw io.ReadWriter, initial Message, ac
 	haveNext := acceptSide
 	for {
 		if haveNext {
-			reply, ok := h.Store.ProcessMessage(h.Config, next, validate, h.OnInsert, contentStatus)
+			reply, ok := h.Store.ProcessMessageInNamespace(namespace, h.Config, next, validate, h.OnInsert, contentStatus)
 			out.NumRecv += next.ValueCount()
 			if !ok {
 				return out, nil
@@ -323,16 +330,22 @@ func readSyncFrame(r io.Reader) (syncWireMessage, error) {
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
 		return syncWireMessage{}, err
 	}
+	// n is negative when a length above 2^31-1 is decoded on a 32-bit int.
 	n := int(binary.BigEndian.Uint32(hdr[:]))
-	if n > maxSyncMessageSize {
-		return syncWireMessage{}, fmt.Errorf("frame too large: %d > %d", n, maxSyncMessageSize)
+	if n < 0 || n > maxSyncMessageSize {
+		return syncWireMessage{}, fmt.Errorf("frame too large: %d > %d", uint32(n), maxSyncMessageSize)
 	}
-	b := make([]byte, n)
-	if _, err := io.ReadFull(r, b); err != nil {
+	// Copy rather than allocate n up front: the buffer then grows with the
+	// bytes the peer actually sends, not with the length it claims.
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, io.LimitReader(r, int64(n))); err != nil {
 		return syncWireMessage{}, err
 	}
+	if buf.Len() != n {
+		return syncWireMessage{}, io.ErrUnexpectedEOF
+	}
 	var msg syncWireMessage
-	if err := postcard.Unmarshal(b, &msg); err != nil {
+	if err := postcard.Unmarshal(buf.Bytes(), &msg); err != nil {
 		return syncWireMessage{}, err
 	}
 	return msg, nil

@@ -491,3 +491,116 @@ func TestLiveSyncReportFitsGossipPayloadBudget(t *testing.T) {
 		t.Fatalf("sync report size = %d, want <= %d", len(msg), limit)
 	}
 }
+
+func TestLiveSyncConfinesBroadcastToNamespace(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	shared := NewNamespaceSecret(repeat32(0xb2))
+	other := NewNamespaceSecret(repeat32(0xb3))
+	author := NewAuthor(repeat32(0xa1))
+	sharedEntry := testSignedEntry(shared, author, "k", testRecord("one", 1, 1))
+	otherEntry := testSignedEntry(other, author, "secret", testRecord("secret", 1, 1))
+
+	blobStore, err := blobs.NewMemStore()
+	if err != nil {
+		t.Fatalf("NewMemStore: %v", err)
+	}
+	store := NewMemoryStore()
+	a, aGossip, aRouter := newLiveSyncNode(t, ctx, store, blobStore)
+	defer aRouter.Shutdown(ctx)
+	_, bGossip, bRouter := newLiveSyncNode(t, ctx, NewMemoryStore(), blobStore)
+	defer bRouter.Shutdown(ctx)
+
+	aAddr := netaddr.NewEndpointAddr(a.ID()).WithIP(a.LocalAddr())
+	live, err := StartLiveSync(ctx, a, aGossip, shared.ID(), store, LiveSyncOptions{})
+	if err != nil {
+		t.Fatalf("start live sync: %v", err)
+	}
+	defer live.Close()
+
+	topic, err := bGossip.Subscribe(ctx, gossip.TopicID(shared.ID().Bytes()), []netaddr.EndpointAddr{aAddr})
+	if err != nil {
+		t.Fatalf("subscribe topic: %v", err)
+	}
+	defer topic.Close()
+	if err := topic.Joined(ctx); err != nil {
+		t.Fatalf("joined: %v", err)
+	}
+
+	received := make(chan liveOp)
+	go func() {
+		for ev, err := range topic.Events() {
+			if err != nil || ev.Kind != gossip.Received {
+				continue
+			}
+			var op liveOp
+			if err := postcard.Unmarshal(ev.Content, &op); err != nil {
+				continue
+			}
+			select {
+			case received <- op:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// The other-namespace entry is published first, so a broadcaster that does
+	// not confine itself sends it before the entry this topic is for.
+	store.Put(otherEntry)
+	store.Put(sharedEntry)
+
+	for {
+		select {
+		case op := <-received:
+			if op.Kind != liveOpPut {
+				continue
+			}
+			if ns := op.Entry.Entry.Namespace(); ns != shared.ID() {
+				t.Fatalf("topic peer received entry from namespace %s, want %s", ns, shared.ID())
+			}
+			return
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+}
+
+// TestLiveSyncReceivedPutRejectsFutureTimestamp covers the gossip half of the
+// remote insert path that TestProcessMessageRejectsFutureTimestamp covers for
+// range reconciliation.
+func TestLiveSyncReceivedPutRejectsFutureTimestamp(t *testing.T) {
+	now := uint64(time.Now().UnixMicro())
+	tests := []struct {
+		name      string
+		timestamp uint64
+		want      int
+	}{
+		{"within bound", now + MaxTimestampFutureShift/2, 1},
+		{"past bound", now + 2*MaxTimestampFutureShift, 0},
+		{"max uint64", ^uint64(0), 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			namespace := NewNamespaceSecret(repeat32(0xb2))
+			author := NewAuthor(repeat32(0xa1))
+			entry := testSignedEntry(namespace, author, "k", testRecord("k", 1, tt.timestamp))
+			msg, err := postcard.Marshal(liveOp{Kind: liveOpPut, Entry: entry})
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+
+			store := NewMemoryStore()
+			var l LiveSync
+			l.handleReceived(context.Background(), namespace.ID(), store, liveSyncOptions{}, gossip.Event{
+				Kind:    gossip.Received,
+				Content: msg,
+			})
+
+			if got := store.Len(); got != tt.want {
+				t.Fatalf("Len = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
