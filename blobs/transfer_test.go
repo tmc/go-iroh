@@ -499,3 +499,94 @@ func blobValues(m map[Hash][]byte) [][]byte {
 	}
 	return out
 }
+
+func TestDownloadTrailingBytesBounded(t *testing.T) {
+	data := vectorData(3*BlockSize + 321)
+	hash, encoded, err := EncodeBlob(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rangeEncoded, err := EncodeBlobRange(data, ChunkSize, ChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq := NewHashSequence([]Hash{hash})
+	rootHash, rootEncoded, err := EncodeBlob(seq.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		resp []byte
+		call func(context.Context, BidiStream) error
+	}{
+		{
+			name: "DownloadBlob",
+			resp: encoded,
+			call: func(ctx context.Context, s BidiStream) error {
+				return DownloadBlob(ctx, s, hash, io.Discard)
+			},
+		},
+		{
+			name: "DownloadBlobRange",
+			resp: rangeEncoded,
+			call: func(ctx context.Context, s BidiStream) error {
+				return DownloadBlobRange(ctx, s, hash, ChunkSize, ChunkSize, io.Discard)
+			},
+		},
+		{
+			name: "GetManyBlobBytes",
+			resp: encoded,
+			call: func(ctx context.Context, s BidiStream) error {
+				_, err := GetManyBlobBytes(ctx, s, []Hash{hash})
+				return err
+			},
+		},
+		{
+			name: "GetHashSequenceBytes",
+			resp: append(append([]byte(nil), rootEncoded...), encoded...),
+			call: func(ctx context.Context, s BidiStream) error {
+				_, _, err := GetHashSequenceBytes(ctx, s, rootHash)
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &trailingStream{resp: tt.resp, limit: 32 << 20}
+			if err := tt.call(context.Background(), s); !errors.Is(err, ErrInvalidBlob) {
+				t.Fatalf("%s trailing error = %v, want %v", tt.name, err, ErrInvalidBlob)
+			}
+			if s.trailing > 4096 {
+				t.Fatalf("%s read %d trailing bytes, want at most 4096", tt.name, s.trailing)
+			}
+		})
+	}
+}
+
+// trailingStream is a hostile provider: it serves a valid response and then
+// keeps sending, up to limit bytes, counting what the client reads past resp.
+type trailingStream struct {
+	resp     []byte
+	limit    int
+	trailing int
+}
+
+func (s *trailingStream) Read(p []byte) (int, error) {
+	if len(s.resp) > 0 {
+		n := copy(p, s.resp)
+		s.resp = s.resp[n:]
+		return n, nil
+	}
+	if s.trailing >= s.limit {
+		return 0, io.EOF
+	}
+	n := min(len(p), s.limit-s.trailing)
+	clear(p[:n])
+	s.trailing += n
+	return n, nil
+}
+
+func (s *trailingStream) Write(p []byte) (int, error) { return len(p), nil }
+func (s *trailingStream) Close() error                { return nil }

@@ -375,13 +375,8 @@ func DownloadBlob(ctx context.Context, s BidiStream, hash Hash, w io.Writer) err
 			errc <- fmt.Errorf("blobs: decode response: %w", err)
 			return
 		}
-		extra, err := io.ReadAll(s)
-		if err != nil {
-			errc <- fmt.Errorf("blobs: read response: %w", err)
-			return
-		}
-		if len(extra) != 0 {
-			errc <- fmt.Errorf("%w: trailing %d bytes", ErrInvalidBlob, len(extra))
+		if err := readTrailingByte(s); err != nil {
+			errc <- err
 			return
 		}
 		errc <- nil
@@ -449,13 +444,8 @@ func DownloadBlobRange(ctx context.Context, s BidiStream, hash Hash, offset, len
 			errc <- fmt.Errorf("blobs: decode response: %w", err)
 			return
 		}
-		extra, err := io.ReadAll(s)
-		if err != nil {
-			errc <- fmt.Errorf("blobs: read response: %w", err)
-			return
-		}
-		if len(extra) != 0 {
-			errc <- fmt.Errorf("%w: trailing %d bytes", ErrInvalidBlob, len(extra))
+		if err := readTrailingByte(s); err != nil {
+			errc <- err
 			return
 		}
 		errc <- nil
@@ -657,13 +647,8 @@ func GetManyBlobBytes(ctx context.Context, s BidiStream, hashes []Hash) ([][]byt
 			}
 			data = append(data, b)
 		}
-		extra, err := io.ReadAll(s)
-		if err != nil {
-			done <- result{err: fmt.Errorf("blobs: read response: %w", err)}
-			return
-		}
-		if len(extra) != 0 {
-			done <- result{err: fmt.Errorf("%w: trailing %d bytes", ErrInvalidBlob, len(extra))}
+		if err := readTrailingByte(s); err != nil {
+			done <- result{err: err}
 			return
 		}
 		done <- result{data: data}
@@ -720,13 +705,8 @@ func GetHashSequenceBytes(ctx context.Context, s BidiStream, root Hash) (HashSeq
 			}
 			data = append(data, b)
 		}
-		extra, err := io.ReadAll(s)
-		if err != nil {
-			done <- result{err: fmt.Errorf("blobs: read response: %w", err)}
-			return
-		}
-		if len(extra) != 0 {
-			done <- result{err: fmt.Errorf("%w: trailing %d bytes", ErrInvalidBlob, len(extra))}
+		if err := readTrailingByte(s); err != nil {
+			done <- result{err: err}
 			return
 		}
 		done <- result{seq: seq, data: data}
@@ -779,6 +759,25 @@ func closeWrite(s BidiStream) error {
 		return c.CloseWrite()
 	}
 	return s.Close()
+}
+
+// readTrailingByte reports whether r holds anything beyond a verified blob.
+// It reads a single byte instead of draining r, so a peer that keeps sending
+// after the blob cannot make the caller buffer its output.
+func readTrailingByte(r io.Reader) error {
+	var b [1]byte
+	for {
+		n, err := r.Read(b[:])
+		if n > 0 {
+			return fmt.Errorf("%w: trailing bytes", ErrInvalidBlob)
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("blobs: read response: %w", err)
+		}
+	}
 }
 
 func readAllContext(ctx context.Context, r io.ReadCloser) ([]byte, error) {
