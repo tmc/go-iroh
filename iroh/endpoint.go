@@ -1257,6 +1257,10 @@ func (e *Endpoint) RemoveRelay(url netaddr.RelayURL) *RelayConfig {
 	return &prev
 }
 
+// errNoALPNs reports an endpoint that cannot accept because it was bound
+// without any ALPNs.
+var errNoALPNs = errors.New("iroh: no ALPNs configured; nothing to accept")
+
 // ErrEndpointClosed is returned by operations on a closed [Endpoint].
 var ErrEndpointClosed = errors.New("iroh: endpoint closed")
 
@@ -1610,7 +1614,7 @@ func (e *Endpoint) acceptIncoming(ctx context.Context) (*Incoming, error) {
 		return nil, ErrEndpointClosed
 	}
 	if ln == nil {
-		return nil, errors.New("iroh: no ALPNs configured; nothing to accept")
+		return nil, errNoALPNs
 	}
 	qc, err := ln.Accept(ctx)
 	if err != nil {

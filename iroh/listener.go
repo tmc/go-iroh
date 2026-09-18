@@ -3,11 +3,17 @@ package iroh
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/tmc/go-iroh/key"
 )
+
+// acceptRetryDelay bounds how fast the stream listener retries an accept that
+// failed for a reason scoped to one peer.
+const acceptRetryDelay = 10 * time.Millisecond
 
 // ListenStreams returns a [net.Listener] view of e that accepts bidirectional
 // streams as [net.Conn] values. The endpoint must already be configured with
@@ -41,6 +47,7 @@ func NewStreamListener() *StreamListener {
 	return &StreamListener{
 		ctx:     ctx,
 		cancel:  cancel,
+		logger:  slog.Default(),
 		streams: make(chan net.Conn),
 		done:    make(chan struct{}),
 	}
@@ -58,6 +65,7 @@ type StreamListener struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	addr   net.Addr
+	logger *slog.Logger
 
 	streams chan net.Conn
 	done    chan struct{}
@@ -134,8 +142,24 @@ func (l *StreamListener) run() {
 	for {
 		conn, err := l.ep.accept(l.ctx)
 		if err != nil {
-			l.setErr(err)
-			return
+			// A cancelled listener, a closed endpoint, or an endpoint that can
+			// never accept ends the loop cleanly.
+			if l.ctx.Err() != nil || errors.Is(err, ErrEndpointClosed) || errors.Is(err, errNoALPNs) {
+				l.setErr(err)
+				return
+			}
+			// A failure scoped to one peer (a handshake rejected by a hook, a
+			// peer aborting mid-handshake) drops that peer only. Pause before
+			// retrying so an accept that keeps failing does not spin, which
+			// also bounds how fast a rejected peer can drive the log.
+			l.logger.Warn("iroh: stream listener accept failed", "err", err)
+			select {
+			case <-time.After(acceptRetryDelay):
+			case <-l.ctx.Done():
+				l.setErr(l.ctx.Err())
+				return
+			}
+			continue
 		}
 		wg.Add(1)
 		go func(conn *Conn) {
