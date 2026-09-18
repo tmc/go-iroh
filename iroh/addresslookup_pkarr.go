@@ -343,7 +343,12 @@ func (c *pkarrRelayClient) resolve(ctx context.Context, id key.EndpointID) (*dns
 		io.Copy(io.Discard, resp.Body)
 		return nil, fmt.Errorf("pkarr relay returned status %d", resp.StatusCode)
 	}
-	payload, err := io.ReadAll(resp.Body)
+	// The payload is a signed packet without its 32-byte public key, so a
+	// valid one is shorter than MaxSignedPacketSize. Limiting to the full
+	// packet size leaves enough headroom that an oversized body still fails
+	// the length check in SignedPacketFromBytes rather than being silently
+	// truncated to a plausible length.
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, dns.MaxSignedPacketSize))
 	if err != nil {
 		return nil, fmt.Errorf("read payload: %w", err)
 	}

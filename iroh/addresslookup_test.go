@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -668,5 +669,40 @@ func TestServicesResolveNilSequence(t *testing.T) {
 	}
 	if last := results[len(results)-1]; !errors.Is(last.err, ErrNoResults) {
 		t.Fatalf("final result = %+v, want ErrNoResults", last)
+	}
+}
+
+// TestPkarrResolveBoundsResponse checks that a relay cannot make the client
+// buffer an arbitrarily large body: resolve reads at most a signed packet's
+// worth before giving up.
+func TestPkarrResolveBoundsResponse(t *testing.T) {
+	const offered = 64 << 20
+
+	var written atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-pkarr-signed-packet")
+		chunk := make([]byte, 32<<10)
+		for written.Load() < offered {
+			n, err := w.Write(chunk)
+			written.Add(int64(n))
+			if err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	client, err := newPkarrRelayClient(srv.URL, srv.Client())
+	if err != nil {
+		t.Fatalf("newPkarrRelayClient: %v", err)
+	}
+	sk, _ := key.GenerateSecretKey()
+	if _, err := client.resolve(context.Background(), sk.Public().EndpointID()); err == nil {
+		t.Fatal("resolve succeeded, want error")
+	}
+	// Socket and proxy buffers absorb some of the body after the client
+	// hangs up, so allow slack; without a limit the client consumes all of it.
+	if got := written.Load(); got > 8<<20 {
+		t.Errorf("relay wrote %d bytes, want the client to stop well before %d", got, offered)
 	}
 }
