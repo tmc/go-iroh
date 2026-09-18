@@ -387,3 +387,74 @@ func TestDroppedDatagramsAreCounted(t *testing.T) {
 		t.Fatalf("Snapshot = %+v, want dropped=1 forwarded=0", snapshot)
 	}
 }
+
+func TestDepartureNoticeReachesOnlyPeersSentTo(t *testing.T) {
+	newSession := func(id key.EndpointID) *session {
+		return &session{id: id, send: make(chan *[]byte, 4), maxQueuedBytes: 1 << 20}
+	}
+	secret, _ := key.GenerateSecretKey()
+	sentToKey, _ := key.GenerateSecretKey()
+	quietKey, _ := key.GenerateSecretKey()
+
+	srv := New()
+	leaving := newSession(secret.Public().EndpointID())
+	sentTo := newSession(sentToKey.Public().EndpointID())
+	quiet := newSession(quietKey.Public().EndpointID())
+	srv.register(leaving)
+	srv.register(sentTo)
+	srv.register(quiet)
+
+	srv.handleClientMsg(leaving, relayproto.ClientToRelayMsg{
+		Type:          relayproto.FrameClientToRelayDatagram,
+		DstEndpointID: sentTo.id,
+		Datagrams:     relayproto.DatagramsFromBytes([]byte("hello")),
+	})
+	<-sentTo.send // drain the forwarded datagram
+	srv.unregister(leaving)
+
+	tests := []struct {
+		name string
+		sess *session
+		want bool
+	}{
+		{"peer sent to", sentTo, true},
+		{"peer never sent to", quiet, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			select {
+			case b := <-tt.sess.send:
+				msg, err := relayproto.ParseRelayToClientMsg(*b, relayproto.ProtocolV2)
+				if err != nil {
+					t.Fatalf("parse queued frame: %v", err)
+				}
+				if !tt.want {
+					t.Fatalf("queued %v for %s, want no departure notice", msg.Type, leaving.id)
+				}
+				if msg.Type != relayproto.FrameEndpointGone || !msg.EndpointGone.Equal(leaving.id) {
+					t.Fatalf("queued %+v, want endpoint gone for %s", msg, leaving.id)
+				}
+			default:
+				if tt.want {
+					t.Fatalf("no departure notice for %s queued", leaving.id)
+				}
+			}
+		})
+	}
+}
+
+func TestSentToTableIsBounded(t *testing.T) {
+	sess := &session{}
+	var id key.EndpointID
+	for range maxSentTo + 1 {
+		secret, _ := key.GenerateSecretKey()
+		id = secret.Public().EndpointID()
+		sess.noteSentTo(id)
+	}
+	if got := len(sess.sentTo); got != 1 {
+		t.Fatalf("table size = %d, want 1 (cleared at %d)", got, maxSentTo)
+	}
+	if !sess.sentTo[id] {
+		t.Fatalf("destination recorded after the reset is missing")
+	}
+}

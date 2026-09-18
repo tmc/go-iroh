@@ -35,6 +35,16 @@ const (
 	defaultMaxPendingAuth   = 256
 )
 
+// maxSentTo bounds a session's destination table. Its keys are chosen by the
+// client itself -- one entry per distinct connected peer it addresses -- so the
+// table is grown by the sender's own traffic and cannot be left unbounded. A
+// full table is cleared rather than grown: the session then remembers only the
+// peers it addresses after the reset, so a departure notice can be lost but is
+// never sent to a peer that was not written to. A peer that misses the notice
+// keeps a relay route until its own loss recovery tears the path down, the same
+// as when the notice is dropped by a full send queue.
+const maxSentTo = 1024
+
 // Server is an iroh relay protocol HTTP handler.
 type Server struct {
 	mu               sync.Mutex
@@ -115,6 +125,14 @@ type session struct {
 	maxQueuedBytes int64
 	replaced       chan []byte
 	replaceOnce    sync.Once
+
+	// sentTo holds the peers this session has sent a datagram to, which are
+	// exactly the peers that hold a relay route back to it (a client records a
+	// route only on receipt, internal/socket/relay_actor.go:888) and so the
+	// only ones its departure concerns. It is read and written solely by the
+	// session's read goroutine, which also runs the deferred unregister, and
+	// needs no lock of its own.
+	sentTo map[key.EndpointID]bool
 }
 
 func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
@@ -306,6 +324,7 @@ func (s *Server) handleClientMsg(src *session, msg relayproto.ClientToRelayMsg) 
 			s.metrics.datagramsDropped.Add(1)
 			return
 		}
+		src.noteSentTo(msg.DstEndpointID)
 		// Dropped datagrams surface downstream as QUIC loss and retransmission;
 		// count them so overload is visible without packet captures.
 		if !dst.enqueue(relayproto.RelayToClientMsg{
@@ -338,8 +357,14 @@ func (s *Server) unregister(sess *session) {
 		return
 	}
 	delete(s.clients, sess.id)
-	for _, peer := range s.clients {
-		peer.enqueue(relayproto.RelayToClientMsg{Type: relayproto.FrameEndpointGone, EndpointGone: sess.id})
+	// Tell only the peers this session sent to, as iroh does. Telling every
+	// client would publish the endpoint id of everyone who ever disconnects to
+	// the whole relay population, and would turn one connect and disconnect
+	// into a write to every client.
+	for id := range sess.sentTo {
+		if peer := s.clients[id]; peer != nil {
+			peer.enqueue(relayproto.RelayToClientMsg{Type: relayproto.FrameEndpointGone, EndpointGone: sess.id})
+		}
 	}
 	s.mu.Unlock()
 }
@@ -372,6 +397,20 @@ func (s *session) enqueue(msg relayproto.RelayToClientMsg) bool {
 		relayproto.PutBuf(b)
 		return false
 	}
+}
+
+// noteSentTo records that s has sent a datagram to id, so that id learns when s
+// goes away. See maxSentTo for the table bound.
+func (s *session) noteSentTo(id key.EndpointID) {
+	if s.sentTo[id] {
+		return
+	}
+	if s.sentTo == nil {
+		s.sentTo = make(map[key.EndpointID]bool)
+	} else if len(s.sentTo) >= maxSentTo {
+		clear(s.sentTo)
+	}
+	s.sentTo[id] = true
 }
 
 func (s *session) replace(msg relayproto.RelayToClientMsg) {
