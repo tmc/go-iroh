@@ -269,6 +269,15 @@ func (m *MagicConn) recvAddr(info RecvInfo) (net.Addr, bool) {
 	}
 }
 
+// maxRecvAddrs bounds the received-address cache. Every datagram the kernel
+// delivers reaches the cache before QUIC parses it, so an unbounded cache
+// would let anyone who can vary a source port or address -- trivial with a
+// routed IPv6 prefix -- retain state for the life of the socket. A full cache
+// is emptied rather than evicted from: the cache only saves an allocation, so
+// a miss costs one *net.UDPAddr and never a wrong address. The bound matches
+// maxLocalAddrs, the other per-remote table in this package.
+const maxRecvAddrs = maxLocalAddrs
+
 // udpAddr returns the *net.UDPAddr for ap, caching it so that repeated
 // receives from one peer return the same value. ReadFrom may run from several
 // goroutines, so the cache is locked; the read path takes the shared lock and
@@ -287,6 +296,9 @@ func (m *MagicConn) udpAddr(ap netip.AddrPort) *net.UDPAddr {
 	// Reuse its value so that one peer keeps one address.
 	if addr, ok := m.recvAddrs[ap]; ok {
 		return addr
+	}
+	if len(m.recvAddrs) >= maxRecvAddrs {
+		clear(m.recvAddrs)
 	}
 	addr = udpAddrFromAddrPort(ap)
 	m.recvAddrs[ap] = addr

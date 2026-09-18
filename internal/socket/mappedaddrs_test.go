@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"encoding/binary"
 	"net"
 	"net/netip"
 	"sync"
@@ -300,5 +301,41 @@ func TestAddrMapRoundTrip(t *testing.T) {
 	}
 	if _, ok := m.Lookup(netip.MustParseAddr("203.0.113.1")); ok {
 		t.Error("Lookup of unknown addr should fail")
+	}
+}
+
+// TestMagicConnUDPAddrCacheIsBounded checks that a peer varying its source
+// address cannot make the cache grow without bound, and that an address
+// returned after the cache was emptied is still the address that was asked
+// for.
+func TestMagicConnUDPAddrCacheIsBounded(t *testing.T) {
+	tests := []struct {
+		name string
+		at   func(n int) netip.AddrPort
+	}{
+		{"ports", func(n int) netip.AddrPort {
+			return netip.AddrPortFrom(netip.AddrFrom4([4]byte{192, 0, 2, 1}), uint16(n))
+		}},
+		{"addrs", func(n int) netip.AddrPort {
+			var a [16]byte
+			a[0], a[1] = 0x20, 0x01
+			binary.BigEndian.PutUint32(a[12:], uint32(n))
+			return netip.AddrPortFrom(netip.AddrFrom16(a), 4242)
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &MagicConn{recvAddrs: make(map[netip.AddrPort]*net.UDPAddr)}
+			// Enough sightings to fill the cache several times over.
+			for n := 1; n <= 3*maxRecvAddrs; n++ {
+				ap := tc.at(n)
+				if got := m.udpAddr(ap); got.AddrPort() != ap {
+					t.Fatalf("udpAddr(%s) = %s", ap, got.AddrPort())
+				}
+				if len(m.recvAddrs) > maxRecvAddrs {
+					t.Fatalf("cache holds %d addresses after %d sightings, want at most %d", len(m.recvAddrs), n, maxRecvAddrs)
+				}
+			}
+		})
 	}
 }
