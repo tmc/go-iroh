@@ -157,3 +157,26 @@ func TestFrameShortRead(t *testing.T) {
 		t.Fatalf("short body err = %v, want io.ErrUnexpectedEOF", err)
 	}
 }
+
+func TestReadFrameRejectsOversizedLength(t *testing.T) {
+	tests := []struct {
+		name string
+		hdr  uint32
+	}{
+		{"just over", DefaultMaxMessageSize + 1},
+		{"high bit set", 1 << 31},
+		{"max uint32", ^uint32(0)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			var hdr [4]byte
+			binary.BigEndian.PutUint32(hdr[:], tt.hdr)
+			buf.Write(hdr[:])
+			err := ReadFrame(&buf, &StreamHeader{}, DefaultMaxMessageSize)
+			if !errors.Is(err, ErrFrameTooLarge) {
+				t.Fatalf("ReadFrame err = %v, want ErrFrameTooLarge", err)
+			}
+		})
+	}
+}

@@ -170,9 +170,11 @@ func readValue(ctx context.Context, r io.Reader, max int, v any) error {
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
 		return err
 	}
+	// n is negative if the length does not fit in an int, as on a 32-bit
+	// platform, which would otherwise slip past the cap check.
 	n := int(binary.BigEndian.Uint32(hdr[:]))
-	if n > max {
-		return fmt.Errorf("irpc: message too large: %d > %d", n, max)
+	if n < 0 || n > max {
+		return fmt.Errorf("irpc: message too large: %d > %d", uint32(n), max)
 	}
 	b := make([]byte, n)
 	if _, err := io.ReadFull(r, b); err != nil {

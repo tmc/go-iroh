@@ -64,9 +64,11 @@ func ReadFrame(r io.Reader, v any, maxSize int) error {
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
 		return fmt.Errorf("gossipproto: read frame length: %w", err)
 	}
+	// n is negative if the length does not fit in an int, as on a 32-bit
+	// platform, which would otherwise slip past the cap check.
 	n := int(binary.BigEndian.Uint32(hdr[:]))
-	if n > maxSize {
-		return fmt.Errorf("%w: %d > %d", ErrFrameTooLarge, n, maxSize)
+	if n < 0 || n > maxSize {
+		return fmt.Errorf("%w: %d > %d", ErrFrameTooLarge, uint32(n), maxSize)
 	}
 	b := make([]byte, n)
 	if _, err := io.ReadFull(r, b); err != nil {

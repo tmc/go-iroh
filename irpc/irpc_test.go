@@ -1,7 +1,9 @@
 package irpc
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -178,4 +180,27 @@ func newTestServer(t *testing.T, ctx context.Context) (*iroh.Endpoint, *iroh.Rou
 		t.Fatalf("new router: %v", err)
 	}
 	return server, router
+}
+
+func TestReadValueRejectsOversizedLength(t *testing.T) {
+	tests := []struct {
+		name string
+		hdr  uint32
+	}{
+		{"just over", 4097},
+		{"high bit set", 1 << 31},
+		{"max uint32", ^uint32(0)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			var hdr [4]byte
+			binary.BigEndian.PutUint32(hdr[:], tt.hdr)
+			buf.Write(hdr[:])
+			err := readValue(context.Background(), &buf, 4096, &testRequest{})
+			if err == nil || !strings.Contains(err.Error(), "message too large") {
+				t.Fatalf("readValue err = %v, want message too large", err)
+			}
+		})
+	}
 }
