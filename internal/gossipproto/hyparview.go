@@ -255,6 +255,11 @@ func (s *HyparviewState) onJoin(peer PeerID, data *PeerData, out *[]HyparviewOut
 
 func (s *HyparviewState) onForwardJoin(sender PeerID, message ForwardJoin, out *[]HyparviewOutEvent) {
 	peer := message.Peer.ID
+	// A ForwardJoin comes from a Join the peer sent from fresh topic
+	// state, so, as in onJoin, any Neighbor we sent it before may have
+	// gone to state it has since dropped. Forget it, so the peer is
+	// answered or the walk forwarded as if nothing were pending.
+	delete(s.pendingNeighbor, peer)
 	if s.active.contains(peer) {
 		s.insertPeerInfo(message.Peer, out)
 		s.sendNeighbor(peer, PriorityHigh, out)
@@ -268,15 +273,13 @@ func (s *HyparviewState) onForwardJoin(sender PeerID, message ForwardJoin, out *
 	if message.Ttl == s.config.PassiveRandomWalkLength {
 		s.addPassive(peer, message.Peer.Data, out)
 	}
-	if !s.active.contains(peer) && !s.isPending(peer) {
-		if next, ok := s.active.randomWithout(s.rand, sender); ok {
-			message.Ttl--
-			*out = append(*out, HyparviewOutEvent{
-				Kind:    HyparviewSendMessage,
-				To:      next,
-				Message: HyparviewMessage{Kind: HyparviewForwardJoin, ForwardJoin: message},
-			})
-		}
+	if next, ok := s.active.randomWithout(s.rand, sender); ok {
+		message.Ttl--
+		*out = append(*out, HyparviewOutEvent{
+			Kind:    HyparviewSendMessage,
+			To:      next,
+			Message: HyparviewMessage{Kind: HyparviewForwardJoin, ForwardJoin: message},
+		})
 	}
 }
 

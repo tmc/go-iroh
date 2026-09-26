@@ -402,3 +402,68 @@ func TestHyparviewJoinFromPendingPeerAnswersAgain(t *testing.T) {
 		}
 	}
 }
+
+// TestHyparviewForwardJoinFromPendingPeerAnswersAgain checks that a
+// ForwardJoin naming a peer with a Neighbor answer still pending is handled
+// as if nothing were pending: answered where the walk ends, forwarded
+// elsewhere. The ForwardJoin comes from a Join the peer sent from fresh topic
+// state, so the earlier answer may have gone to state the peer has dropped.
+func TestHyparviewForwardJoinFromPendingPeerAnswersAgain(t *testing.T) {
+	me := PeerID(seq32(1))
+	sender := PeerID(seq32(2))
+	next := PeerID(seq32(3))
+	joining := PeerID(seq32(4))
+	config := DefaultHyparviewConfig()
+	answer := HyparviewOutEvent{
+		Kind: HyparviewSendMessage,
+		To:   joining,
+		Message: HyparviewMessage{
+			Kind:     HyparviewNeighbor,
+			Neighbor: Neighbor{Priority: PriorityHigh},
+		},
+	}
+	forward := HyparviewOutEvent{
+		Kind: HyparviewSendMessage,
+		To:   next,
+		Message: HyparviewMessage{
+			Kind: HyparviewForwardJoin,
+			ForwardJoin: ForwardJoin{
+				Peer: PeerInfo{ID: joining},
+				Ttl:  config.ActiveRandomWalkLength - 1,
+			},
+		},
+	}
+	tests := []struct {
+		name   string
+		active []PeerID
+		ttl    Ttl
+		want   []HyparviewOutEvent
+	}{
+		{"walk end", []PeerID{sender, next}, 0, []HyparviewOutEvent{answer}},
+		{"lone neighbor", []PeerID{sender}, config.ActiveRandomWalkLength, []HyparviewOutEvent{answer}},
+		{"active", []PeerID{sender, next, joining}, config.ActiveRandomWalkLength, []HyparviewOutEvent{answer}},
+		{"forward", []PeerID{sender, next}, config.ActiveRandomWalkLength, []HyparviewOutEvent{forward}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := NewHyparviewStateWithRand(me, nil, config, testRand(t))
+			state.shuffleScheduled = true
+			for _, p := range tt.active {
+				state.active.insert(p)
+			}
+			state.pendingNeighbor[joining] = struct{}{}
+
+			got := state.Handle(HyparviewInEvent{
+				Kind: HyparviewRecvMessage,
+				From: sender,
+				Message: HyparviewMessage{
+					Kind:        HyparviewForwardJoin,
+					ForwardJoin: ForwardJoin{Peer: PeerInfo{ID: joining}, Ttl: tt.ttl},
+				},
+			})
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("forward join = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
