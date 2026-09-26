@@ -133,6 +133,10 @@ func (l *StreamListener) run() {
 	}()
 	for {
 		conn, err := l.ep.accept(l.ctx)
+		if errors.Is(err, ErrHandshakeRejected) {
+			// A hook turning one peer away must not stop the listener.
+			continue
+		}
 		if err != nil {
 			l.setErr(err)
 			return
