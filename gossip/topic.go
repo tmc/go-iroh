@@ -95,14 +95,16 @@ type Gossip struct {
 	ep             *iroh.Endpoint
 	maxMessageSize int
 
-	mu          sync.Mutex
-	state       *gossipproto.State
-	topics      map[TopicID]map[*Topic]struct{}
-	neighbors   map[TopicID]map[PeerID]struct{}
-	peerAddrs   map[PeerID]netaddr.EndpointAddr
-	peerSenders map[PeerID]*Sender
-	metrics     gossipMetrics
-	closed      bool
+	mu             sync.Mutex
+	state          *gossipproto.State
+	topics         map[TopicID]map[*Topic]struct{}
+	neighbors      map[TopicID]map[PeerID]struct{}
+	generations    map[TopicID]uint64
+	nextGeneration uint64
+	peerAddrs      map[PeerID]netaddr.EndpointAddr
+	peerSenders    map[PeerID]*Sender
+	metrics        gossipMetrics
+	closed         bool
 	// joinWait is closed and replaced whenever a topic's neighbor set
 	// changes or a topic closes, waking every Joined caller.
 	joinWait chan struct{}
@@ -115,6 +117,7 @@ func NewGossip(ep *iroh.Endpoint, opts ...GossipOption) *Gossip {
 		maxMessageSize: gossipproto.DefaultMaxMessageSize,
 		topics:         make(map[TopicID]map[*Topic]struct{}),
 		neighbors:      make(map[TopicID]map[PeerID]struct{}),
+		generations:    make(map[TopicID]uint64),
 		peerAddrs:      make(map[PeerID]netaddr.EndpointAddr),
 		peerSenders:    make(map[PeerID]*Sender),
 	}
@@ -176,6 +179,8 @@ func (g *Gossip) Shutdown(ctx context.Context) {
 		}
 	}
 	g.topics = make(map[TopicID]map[*Topic]struct{})
+	g.neighbors = make(map[TopicID]map[PeerID]struct{})
+	g.generations = make(map[TopicID]uint64)
 	g.wakeJoinWaiters()
 	senders := make([]*Sender, 0, len(g.peerSenders))
 	for peer, sender := range g.peerSenders {
@@ -270,6 +275,8 @@ func (g *Gossip) SubscribeWithOpts(ctx context.Context, topic TopicID, opts Join
 	}
 	if g.topics[topic] == nil {
 		g.topics[topic] = make(map[*Topic]struct{})
+		g.nextGeneration++
+		g.generations[topic] = g.nextGeneration
 	}
 	g.topics[topic][t] = struct{}{}
 	out := g.handleLocked(gossipproto.InEvent{
@@ -342,7 +349,11 @@ func (g *Gossip) closeTopic(t *Topic) error {
 	g.wakeJoinWaiters()
 	empty := len(g.topics[t.id]) == 0
 	if empty {
+		// Quit empties the active view without NeighborDown events,
+		// so forget the neighbors here.
 		delete(g.topics, t.id)
+		delete(g.neighbors, t.id)
+		delete(g.generations, t.id)
 	}
 	var out []gossipproto.OutEvent
 	if empty && !g.closed {
@@ -364,7 +375,11 @@ func (g *Gossip) handleLocked(in gossipproto.InEvent) []gossipproto.OutEvent {
 	if g.state == nil {
 		return nil
 	}
-	return g.state.Handle(in)
+	out := g.state.Handle(in)
+	for i := range out {
+		out[i].Generation = g.generations[out[i].Topic]
+	}
+	return out
 }
 
 func (g *Gossip) dispatch(ctx context.Context, events []gossipproto.OutEvent) {
@@ -386,9 +401,9 @@ func (g *Gossip) dispatch(ctx context.Context, events []gossipproto.OutEvent) {
 				}
 			}
 		case gossipproto.EmitEvent:
-			g.emit(ev.Topic, ev.Event)
+			g.emit(ev.Topic, ev.Event, ev.Generation)
 		case gossipproto.PeerDataEvent:
-			g.emitPeerData(ev.Topic, ev.To, ev.Data)
+			g.emitPeerData(ev.Topic, ev.To, ev.Data, ev.Generation)
 		case gossipproto.ScheduleTimer:
 			g.schedule(ev.After, ev.Timer)
 		case gossipproto.DisconnectPeer:
@@ -454,14 +469,23 @@ func (g *Gossip) wakeJoinWaiters() {
 	}
 }
 
-func (g *Gossip) emit(topic TopicID, ev gossipproto.TopicEvent) {
+func (g *Gossip) emit(topic TopicID, ev gossipproto.TopicEvent, generation uint64) {
 	event, ok := publicEvent(ev)
 	if !ok {
 		return
 	}
 	g.mu.Lock()
+	if g.generations[topic] != generation {
+		g.mu.Unlock()
+		return
+	}
 	if ev.Kind == gossipproto.TopicNeighborUp {
 		g.metrics.neighborUp.Add(1)
+		if g.topics[topic] == nil {
+			// Dispatched after the topic closed: do not revive it.
+			g.mu.Unlock()
+			return
+		}
 		if g.neighbors[topic] == nil {
 			g.neighbors[topic] = make(map[PeerID]struct{})
 		}
@@ -482,7 +506,7 @@ func (g *Gossip) emit(topic TopicID, ev gossipproto.TopicEvent) {
 	}
 }
 
-func (g *Gossip) emitPeerData(topic TopicID, peer PeerID, data *gossipproto.PeerData) {
+func (g *Gossip) emitPeerData(topic TopicID, peer PeerID, data *gossipproto.PeerData, generation uint64) {
 	id, err := endpointFromPeerID(peer)
 	if err != nil {
 		return
@@ -492,6 +516,10 @@ func (g *Gossip) emitPeerData(topic TopicID, peer PeerID, data *gossipproto.Peer
 		ev.Data = append([]byte(nil), (*data)...)
 	}
 	g.mu.Lock()
+	if g.generations[topic] != generation {
+		g.mu.Unlock()
+		return
+	}
 	subs := make([]*Topic, 0, len(g.topics[topic]))
 	for t := range g.topics[topic] {
 		subs = append(subs, t)

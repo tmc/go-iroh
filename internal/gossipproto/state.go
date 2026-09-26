@@ -47,14 +47,17 @@ const (
 
 // OutEvent is an output from the top-level gossip protocol state machine.
 type OutEvent struct {
-	Kind    OutEventKind
-	To      PeerID
-	Message Message
-	Topic   TopicID
-	After   time.Duration
-	Timer   Timer
-	Event   TopicEvent
-	Data    *PeerData
+	Kind OutEventKind
+	// Generation is set by the gossip adapter when it queues an output.
+	// It is not part of the protocol message.
+	Generation uint64
+	To         PeerID
+	Message    Message
+	Topic      TopicID
+	After      time.Duration
+	Timer      Timer
+	Event      TopicEvent
+	Data       *PeerData
 }
 
 // OutEventKind identifies a top-level gossip output.
