@@ -234,6 +234,11 @@ func (s *HyparviewState) handleJoin(peer PeerID, out *[]HyparviewOutEvent) {
 }
 
 func (s *HyparviewState) onJoin(peer PeerID, data *PeerData, out *[]HyparviewOutEvent) {
+	// A Join comes from fresh topic state that is waiting for a Neighbor.
+	// Any Neighbor we sent the peer before went to state it has since
+	// dropped, so forget it and answer again. Otherwise a peer that quit
+	// before our answer arrived stays pending here and is never answered.
+	delete(s.pendingNeighbor, peer)
 	s.addActive(peer, data, PriorityHigh, true, out)
 	info := PeerInfo{ID: peer, Data: clonePeerDataPtr(data)}
 	for _, node := range s.active.without(peer) {

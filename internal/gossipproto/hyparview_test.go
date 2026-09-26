@@ -357,3 +357,48 @@ func TestHyparviewPendingNeighborTimerRefills(t *testing.T) {
 		t.Fatalf("missed peer still passive")
 	}
 }
+
+// TestHyparviewJoinFromPendingPeerAnswersAgain checks that a Join from a peer
+// that is already active, with a Neighbor answer still pending, is answered
+// again. The peer sends Join from fresh topic state; if it quit before the
+// first answer arrived, that answer is lost and nothing else clears the
+// pending mark.
+func TestHyparviewJoinFromPendingPeerAnswersAgain(t *testing.T) {
+	me := PeerID(seq32(1))
+	joiner := PeerID(seq32(2))
+	state := NewHyparviewStateWithRand(me, nil, DefaultHyparviewConfig(), testRand(t))
+	state.shuffleScheduled = true
+
+	join := HyparviewInEvent{
+		Kind:    HyparviewRecvMessage,
+		From:    joiner,
+		Message: HyparviewMessage{Kind: HyparviewJoin},
+	}
+	answer := HyparviewOutEvent{
+		Kind: HyparviewSendMessage,
+		To:   joiner,
+		Message: HyparviewMessage{
+			Kind:     HyparviewNeighbor,
+			Neighbor: Neighbor{Priority: PriorityHigh},
+		},
+	}
+	tests := []struct {
+		name string
+		want []HyparviewOutEvent
+	}{
+		{"first", []HyparviewOutEvent{
+			{Kind: HyparviewEmitEvent, Event: HyparviewEvent{Kind: HyparviewNeighborUp, Peer: joiner}},
+			answer,
+		}},
+		{"again", []HyparviewOutEvent{answer}},
+	}
+	for _, tt := range tests {
+		got := state.Handle(join)
+		if !reflect.DeepEqual(got, tt.want) {
+			t.Fatalf("%s join = %#v, want %#v", tt.name, got, tt.want)
+		}
+		if !state.isPending(joiner) {
+			t.Fatalf("%s join: answer not pending", tt.name)
+		}
+	}
+}
