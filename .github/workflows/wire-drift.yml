@@ -40,9 +40,9 @@ jobs:
             cat COMPATIBILITY-tip.md >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ "${{ steps.drift.outcome }}" = success ]; then
-            echo "CustomAddr wire vectors match the pinned 1.2 prediction." >> "$GITHUB_STEP_SUMMARY"
+            echo "CustomAddr wire vectors match the pinned 1.3 prediction." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "::warning::CustomAddr wire vectors differ from the pinned 1.2 prediction"
+            echo "::warning::CustomAddr wire vectors differ from the pinned 1.3 prediction"
             echo "CustomAddr wire drift detected; inspect the vector step before changing a release prediction." >> "$GITHUB_STEP_SUMMARY"
           fi
       - uses: actions/upload-artifact@v7

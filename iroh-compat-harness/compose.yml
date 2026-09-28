@@ -6,7 +6,7 @@ services:
       args:
         RUST_IMAGE: go-iroh-compat:iroh-${IROH_VERSION:?set IROH_VERSION}
     environment:
-      IROH_VERSION: ${IROH_VERSION:-1.2.0}
+      IROH_VERSION: ${IROH_VERSION:-1.3.0}
       RUST_DOCTOR_BIN: /usr/local/bin/iroh-doctor
       RUST_VECTOR_BIN: /usr/local/bin/rust-driver
       RUST_DNS_BIN: /usr/local/bin/iroh-dns-server

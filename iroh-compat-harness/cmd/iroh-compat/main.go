@@ -13,8 +13,8 @@ import (
 )
 
 func main() {
-	releaseKey := flag.String("release-key", "1.2", "released-train scenario key")
-	releaseTrain := flag.String("release-train", "1.2", "released upstream minor train")
+	releaseKey := flag.String("release-key", "1.3", "released-train scenario key")
+	releaseTrain := flag.String("release-train", "1.3", "released upstream minor train")
 	releaseVersion := flag.String("release-version", "", "pinned upstream release")
 	releaseCommit := flag.String("release-commit", "", "pinned upstream release commit")
 	doctor := flag.String("rust-doctor", "", "path to the pinned iroh-doctor binary")
