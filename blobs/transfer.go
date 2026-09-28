@@ -61,42 +61,25 @@ func ServeBlob(ctx context.Context, s BidiStream, store Store) error {
 // ServeBlobStreams serves blob requests from streams accepted by accept.
 //
 // ServeBlobStreams accepts streams until accept returns an error or ctx is
-// canceled. Each accepted stream is served concurrently with [ServeBlob].
+// canceled, and then waits for the streams it is serving. Each accepted stream
+// is served concurrently with [ServeBlob]; an error serving one stream ends
+// only that stream.
 func ServeBlobStreams(ctx context.Context, accept AcceptBlobStream, store Store) error {
 	if accept == nil {
 		return errors.New("blobs: nil stream accepter")
 	}
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	ctx, cancel := context.WithCancel(ctxOrBackground(ctx))
 	defer cancel()
-
-	errc := make(chan error, 1)
-	var wg sync.WaitGroup
 	for {
 		s, err := accept(ctx)
 		if err != nil {
-			cancel()
-			wg.Wait()
-			select {
-			case serveErr := <-errc:
-				return serveErr
-			default:
-			}
-			if ctx.Err() != nil {
-				return nil
-			}
-			return fmt.Errorf("blobs: accept stream: %w", err)
+			// accept fails when the connection closes, which is how
+			// serving normally ends.
+			return nil
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := ServeBlob(ctx, s, store); err != nil {
-				select {
-				case errc <- err:
-					cancel()
-				default:
-				}
-			}
-		}()
+		wg.Go(func() { _ = ServeBlob(ctx, s, store) })
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -175,4 +176,61 @@ func TestDownloaderStalledProvider(t *testing.T) {
 			t.Fatalf("ReadBlob = %q, %v; want %q", got, err, data)
 		}
 	})
+}
+
+// TestServeBlobStreamsStreamError pins that a request that fails ends only
+// its own stream, not the connection's other streams.
+func TestServeBlobStreamsStreamError(t *testing.T) {
+	data := []byte("still served")
+	hash := blobs.NewHash(data)
+	tests := []struct {
+		name string
+		req  []byte
+	}{
+		{"missing blob", blobs.EncodeGetRequestBytes(blobs.GetBlob(blobs.NewHash([]byte("missing"))))},
+		{"garbage request", []byte{0xff, 0xff, 0xff}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				n := irohtest.NewNet(t)
+				srv := provide(t, n, serve(mustBlobStore(t, data)))
+				client := n.Peer()
+				ctx := context.Background()
+				conn, err := client.Connect(ctx, srv.Addr(), blobs.ALPN)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer conn.CloseWithError(0, "")
+
+				bad, err := conn.OpenStreamSync(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := bad.Write(tt.req); err != nil {
+					t.Fatal(err)
+				}
+				bad.CloseWrite()
+				// The server ends the stream once it has failed the request.
+				if _, err := io.ReadAll(bad); err != nil {
+					t.Fatal(err)
+				}
+
+				irohtest.Within(t, isolationBudget, func(ctx context.Context) error {
+					s, err := conn.OpenStreamSync(ctx)
+					if err != nil {
+						return err
+					}
+					got, err := blobs.GetBlobBytes(ctx, s, hash)
+					if err != nil {
+						return err
+					}
+					if !bytes.Equal(got, data) {
+						t.Errorf("GetBlobBytes = %q, want %q", got, data)
+					}
+					return nil
+				})
+			})
+		})
+	}
 }
