@@ -55,11 +55,11 @@ and the vector driver still match the ones recorded in
 `results/results.json`. To rebuild every layer from scratch anyway, set
 `PARITY_NO_CACHE=1`.
 
-The matrix has a single released column. `drivers/rust-driver` pins the 1.2.0
-release set -- iroh, iroh-base and iroh-relay at 1.2.0, iroh-dns at 1.3.0 (that
-crate published no 1.2.0) and noq at 1.3.0 -- and generates the committed
-corpus. CustomAddr tickets interoperate natively at 1.2.0, so the separate
-patched CustomAddr driver that the 1.0.3 baseline needed is gone. The
-superseded 1.0.3 ticket encoding is kept as a frozen negative fixture in
-`vectors/legacy_custom_addr.json`: go-iroh must keep rejecting it, which is
-what makes the 1.2.0 acceptance result discriminating rather than vacuous.
+The matrix has a single released column. `drivers/rust-driver` pins the 1.3.0
+release set -- iroh, iroh-base and iroh-relay at 1.3.0, iroh-dns at 1.3.0 and
+noq at 1.3.0 -- and generates the committed corpus. CustomAddr tickets have
+interoperated natively since 1.2.0, so the separate patched CustomAddr driver
+that the 1.0.3 baseline needed is gone. The superseded 1.0.3 ticket encoding is
+kept as a frozen negative fixture in `vectors/legacy_custom_addr.json`: go-iroh
+must keep rejecting it, which is what makes the acceptance result
+discriminating rather than vacuous.
