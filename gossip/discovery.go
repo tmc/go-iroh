@@ -23,6 +23,11 @@ const (
 	Provenance = "gossip"
 
 	defaultDiscoveryTimeout = 10 * time.Second
+
+	// discoveryPeerCap bounds the peers a Discovery remembers. Any topic
+	// member can announce data for any number of identities, so past the
+	// cap the least recently updated peer is forgotten.
+	discoveryPeerCap = 1024
 )
 
 // DefaultDiscoveryTopic is the default topic used by Discovery.
@@ -228,12 +233,33 @@ func (d *Discovery) handlePeerData(id key.EndpointID, b []byte) error {
 		return nil
 	}
 	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.peers[id]; !ok && len(d.peers) >= discoveryPeerCap {
+		d.evictLocked()
+	}
 	d.peers[id] = discoveryPeer{
 		data:        cloneEndpointData(data),
 		lastUpdated: uint64(time.Now().UnixMicro()),
 	}
-	d.mu.Unlock()
 	return nil
+}
+
+// evictLocked forgets the least recently updated peer other than d itself.
+// d.mu must be held.
+func (d *Discovery) evictLocked() {
+	var oldest key.EndpointID
+	found := false
+	for id, p := range d.peers {
+		if id.Equal(d.id) {
+			continue
+		}
+		if !found || p.lastUpdated < d.peers[oldest].lastUpdated {
+			oldest, found = id, true
+		}
+	}
+	if found {
+		delete(d.peers, oldest)
+	}
 }
 
 func (d *Discovery) item(id key.EndpointID) (iroh.Item, bool) {

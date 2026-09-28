@@ -1,11 +1,13 @@
 package gossip
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"net/netip"
 	"testing"
 
 	"github.com/tmc/go-iroh/dns"
+	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 )
 
@@ -60,5 +62,40 @@ func TestDiscoveryPeerDataRustVectors(t *testing.T) {
 				t.Fatalf("round-trip addrs = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+// TestDiscoveryPeersBounded checks that a flood of peer data under distinct
+// identities, which any topic member can send, cannot grow the discovery
+// cache without bound or evict the local endpoint's own entry.
+func TestDiscoveryPeersBounded(t *testing.T) {
+	self := key.UncheckedEndpointID([32]byte{0xff})
+	d := New(self)
+	d.Publish(dns.NewEndpointData(netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1")}))
+	b, err := encodeDiscoveryPeerData(dns.NewEndpointData(netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:2")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const count = 4 * discoveryPeerCap
+	var last key.EndpointID
+	for i := range count {
+		var id [32]byte
+		binary.BigEndian.PutUint32(id[:], uint32(i))
+		last = key.UncheckedEndpointID(id)
+		if err := d.handlePeerData(last, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d.mu.Lock()
+	n := len(d.peers)
+	d.mu.Unlock()
+	if n > discoveryPeerCap {
+		t.Errorf("discovery holds %d peers after %d distinct identities, want at most %d", n, count, discoveryPeerCap)
+	}
+	if _, ok := d.item(self); !ok {
+		t.Error("local entry evicted")
+	}
+	if _, ok := d.item(last); !ok {
+		t.Error("newest peer missing")
 	}
 }
