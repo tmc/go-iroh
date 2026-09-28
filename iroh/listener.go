@@ -140,7 +140,7 @@ func (l *StreamListener) run() {
 		})
 	}()
 	for {
-		conn, err := l.ep.accept(l.ctx)
+		in, err := l.ep.acceptIncoming(l.ctx)
 		if err != nil {
 			// A cancelled listener, a closed endpoint, or an endpoint that can
 			// never accept ends the loop cleanly.
@@ -148,10 +148,8 @@ func (l *StreamListener) run() {
 				l.setErr(err)
 				return
 			}
-			// A failure scoped to one peer (a handshake rejected by a hook, a
-			// peer aborting mid-handshake) drops that peer only. Pause before
-			// retrying so an accept that keeps failing does not spin, which
-			// also bounds how fast a rejected peer can drive the log.
+			// Any other failure is transient. Pause before retrying so an
+			// accept that keeps failing does not spin.
 			l.logger.Warn("iroh: stream listener accept failed", "err", err)
 			select {
 			case <-time.After(acceptRetryDelay):
@@ -161,11 +159,25 @@ func (l *StreamListener) run() {
 			}
 			continue
 		}
+		accepting, err := in.Accept()
+		if err != nil {
+			l.logger.Warn("iroh: stream listener accept failed", "err", err)
+			continue
+		}
+		// Finish the handshake and run the hooks off the accept loop, as
+		// Router does, so a slow or rejected peer affects only itself.
 		wg.Add(1)
-		go func(conn *Conn) {
+		go func() {
 			defer wg.Done()
+			conn, err := accepting.Connection(l.ctx)
+			if err != nil {
+				if l.ctx.Err() == nil && !errors.Is(err, ErrConnClosedDuringHandshake) {
+					l.logger.Warn("iroh: stream listener rejected peer", "err", err)
+				}
+				return
+			}
 			l.acceptStreams(conn)
-		}(conn)
+		}()
 	}
 }
 
