@@ -28,3 +28,14 @@ tty: not a tty
 pid: 25590 (note-writing process)
 ITERM_SESSION_ID: w18t0p0:FA9F00FD-C0E6-4CBD-A9AB-44FD11B1A62F
 validation: targeted docs regression and loopback sync passed; full race suite running
+
+rebased-commit: c0ba963640b2094c038c024d66c0078b0b00ac31
+rebased-commit-date: 2026-09-28T15:54:12-07:00
+agent: Codex
+codex-version: 0.158.0
+claude-code-version: not used for rebase
+model: GPT-6 (exact runtime model identifier unavailable)
+tty: not a tty
+pid: 68388
+ITERM_SESSION_ID: w18t0p0:FA9F00FD-C0E6-4CBD-A9AB-44FD11B1A62F
+reason: autosquash four local fixup commits into docs and gossip changes
