@@ -149,7 +149,10 @@ func testAcceptIsolation(t *testing.T, run acceptServer, mb misbehavior) {
 	run(t, srv.Endpoint, alpn, accepted)
 
 	mb.act(ctx, bad, srv, alpn)
-	synctest.Wait() // let the bad peer get as far as it can
+	// Let the bad peer get as far as it can. synctest.Wait alone would not
+	// advance the clock, so no datagram in flight would arrive.
+	time.Sleep(100 * time.Millisecond)
+	synctest.Wait()
 
 	irohtest.Within(t, isolationBudget, func(ctx context.Context) error {
 		conn, err := good.Connect(ctx, srv.Addr(), alpn)
