@@ -18,6 +18,11 @@ import (
 // peer. This matches iroh.Stream. A net.Conn, whose Close closes both
 // directions and which does not implement CloseWrite, is not a suitable
 // BidiStream for these helpers.
+//
+// If a stream implements CancelRead(code uint64), as iroh.Stream does, the
+// helpers call it to abandon a response when their context ends. Otherwise a
+// helper waiting on a peer that never answers returns only when the stream
+// fails.
 type BidiStream interface {
 	io.Reader
 	io.Writer
@@ -314,7 +319,7 @@ func Observe(ctx context.Context, s BidiStream, hash Hash) iter.Seq2[Bitfield, e
 		go func() {
 			select {
 			case <-ctx.Done():
-				_ = s.Close()
+				abort(s)
 			case <-done:
 			}
 		}()
@@ -334,7 +339,7 @@ func Observe(ctx context.Context, s BidiStream, hash Hash) iter.Seq2[Bitfield, e
 			bitfield, err := readObserveItem(r)
 			if err == nil {
 				if !yield(bitfield, nil) {
-					_ = s.Close()
+					abort(s)
 					return
 				}
 				continue
@@ -399,7 +404,7 @@ func DownloadBlob(ctx context.Context, s BidiStream, hash Hash, w io.Writer) err
 	case err := <-errc:
 		return err
 	case <-ctx.Done():
-		_ = s.Close()
+		abort(s)
 		<-errc
 		return ctx.Err()
 	}
@@ -468,7 +473,7 @@ func DownloadBlobRange(ctx context.Context, s BidiStream, hash Hash, offset, len
 	case err := <-errc:
 		return err
 	case <-ctx.Done():
-		_ = s.Close()
+		abort(s)
 		<-errc
 		return ctx.Err()
 	}
@@ -671,7 +676,7 @@ func GetManyBlobBytes(ctx context.Context, s BidiStream, hashes []Hash) ([][]byt
 	case res := <-done:
 		return res.data, res.err
 	case <-ctx.Done():
-		_ = s.Close()
+		abort(s)
 		res := <-done
 		if res.err != nil {
 			return nil, ctx.Err()
@@ -729,7 +734,7 @@ func GetHashSequenceBytes(ctx context.Context, s BidiStream, root Hash) (HashSeq
 	case res := <-done:
 		return res.seq, res.data, res.err
 	case <-ctx.Done():
-		_ = s.Close()
+		abort(s)
 		res := <-done
 		if res.err != nil {
 			return HashSequence{}, nil, ctx.Err()
@@ -765,6 +770,15 @@ func getBlob(ctx context.Context, s BidiStream, hash Hash, decode func(Hash, []b
 		return nil, fmt.Errorf("blobs: decode response: %w", err)
 	}
 	return data, nil
+}
+
+// abort ends both directions of s, so that a Read waiting on a peer that
+// never answers returns. Close alone may end only the send side.
+func abort(s BidiStream) {
+	if c, ok := s.(interface{ CancelRead(uint64) }); ok {
+		c.CancelRead(0)
+	}
+	_ = s.Close()
 }
 
 func closeWrite(s BidiStream) error {
@@ -812,7 +826,7 @@ func readAllContext(ctx context.Context, s BidiStream, limit int64) ([]byte, err
 	case res := <-done:
 		return res.b, res.err
 	case <-ctx.Done():
-		_ = s.Close()
+		abort(s)
 		res := <-done
 		if res.err != nil {
 			return nil, ctx.Err()
