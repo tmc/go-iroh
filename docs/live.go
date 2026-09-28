@@ -91,7 +91,9 @@ type LiveSync struct {
 	topic       *gossip.Topic
 	cancelStore func()
 	downloads   chan liveDownload
-	pending     map[blobs.Hash]*pendingDownload
+
+	mu      sync.Mutex
+	pending map[blobs.Hash]*pendingDownload // queued or in-flight downloads
 }
 
 // StartLiveSync starts live synchronization for namespace.
@@ -288,6 +290,8 @@ func (l *LiveSync) queueDownload(ctx context.Context, opts liveSyncOptions, hash
 	if !ok {
 		return
 	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.pending == nil {
 		l.pending = make(map[blobs.Hash]*pendingDownload)
 	}
@@ -300,9 +304,29 @@ func (l *LiveSync) queueDownload(ctx context.Context, opts liveSyncOptions, hash
 	l.pending[hash] = pending
 	select {
 	case l.downloads <- liveDownload{Hash: hash, pending: pending}:
-	case <-ctx.Done():
 	default:
 		delete(l.pending, hash)
+	}
+}
+
+// untried returns the providers of req after the first tried. If there are
+// none, it forgets req, so that the next announcement of the hash starts a new
+// download instead of joining one that has ended.
+func (l *LiveSync) untried(req liveDownload, tried int) []netaddr.EndpointAddr {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	providers := req.pending.snapshot()[tried:]
+	if len(providers) == 0 && l.pending[req.Hash] == req.pending {
+		delete(l.pending, req.Hash)
+	}
+	return providers
+}
+
+func (l *LiveSync) forget(req liveDownload) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.pending[req.Hash] == req.pending {
+		delete(l.pending, req.Hash)
 	}
 }
 
@@ -335,23 +359,37 @@ func (l *LiveSync) runDownloader(ctx context.Context, store *MemoryStore, opts l
 		case <-ctx.Done():
 			return
 		case req := <-l.downloads:
-			if contentComplete(ctx, opts.BlobStore, req.Hash) {
-				store.contentReady(req.Hash)
-				continue
-			}
-			if opts.downloadBlob == nil {
-				continue
-			}
-			providers := req.pending.snapshot()
-			if len(providers) == 0 {
-				continue
-			}
-			if err := opts.downloadBlob(ctx, providers, req.Hash); err != nil {
-				continue
-			}
-			store.contentReady(req.Hash)
-			l.broadcastContentReady(ctx, req.Hash)
+			l.download(ctx, store, opts, req)
 		}
+	}
+}
+
+// download fetches req's content, trying providers that announce it while
+// earlier ones fail, and forgets req when it is done either way.
+func (l *LiveSync) download(ctx context.Context, store *MemoryStore, opts liveSyncOptions, req liveDownload) {
+	tried := 0
+	for {
+		if contentComplete(ctx, opts.BlobStore, req.Hash) {
+			l.forget(req)
+			store.contentReady(req.Hash)
+			return
+		}
+		if opts.downloadBlob == nil {
+			l.forget(req)
+			return
+		}
+		providers := l.untried(req, tried)
+		if len(providers) == 0 {
+			return
+		}
+		tried += len(providers)
+		if err := opts.downloadBlob(ctx, providers, req.Hash); err != nil {
+			continue
+		}
+		l.forget(req)
+		store.contentReady(req.Hash)
+		l.broadcastContentReady(ctx, req.Hash)
+		return
 	}
 }
 
