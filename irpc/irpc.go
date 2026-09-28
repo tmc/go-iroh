@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"log/slog"
 
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/postcard"
@@ -22,6 +23,9 @@ type Handler[Req, Resp any] struct {
 	// MaxMessageSize limits one postcard frame body. The zero value uses 16 MiB.
 	MaxMessageSize int
 	// Handle handles one request and may send zero or more responses.
+	// Each request runs in its own goroutine. A panic in Handle is
+	// recovered and logged, and the caller receives an error; the
+	// connection and its other requests are unaffected.
 	Handle func(context.Context, Req, *Responder[Resp]) error
 }
 
@@ -47,6 +51,12 @@ func (h Handler[Req, Resp]) handleStream(ctx context.Context, s *iroh.Stream) {
 		return
 	}
 	r := &Responder[Resp]{w: s, max: h.maxMessageSize()}
+	defer func() {
+		if v := recover(); v != nil {
+			slog.Error("irpc: handler panicked", "panic", v)
+			_ = r.Error(errors.New("irpc: handler panicked"))
+		}
+	}()
 	if err := h.Handle(ctx, req, r); err != nil {
 		_ = r.Error(err)
 	}
