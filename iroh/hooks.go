@@ -38,8 +38,11 @@ type EndpointHooks interface {
 	// Returning an error closes the connection; use [RejectHandshake] to pick
 	// the close code and reason.
 	//
-	// On the ordinary paths it runs on the goroutine that is establishing the
-	// connection, with that caller's context. On the 0-RTT paths
+	// For a dialed connection it runs on the goroutine establishing it, with
+	// that caller's context. For an accepted connection it runs on a goroutine
+	// of its own, with the context of the accept loop ([Router],
+	// [StreamListener]) or of the endpoint ([Endpoint.Accept]), so a slow hook
+	// delays only the connection it is judging. On the 0-RTT paths
 	// ([Connecting.Into0RTT] and early-data accepts) the handshake
 	// completes after the connection is already in use, so AfterHandshake runs
 	// on a separate goroutine with a background context: a hook that touches
