@@ -6,3 +6,14 @@ tty: not a tty
 pid: 73791
 ITERM_SESSION_ID: w14t1p0:544D5681-C5AA-40BC-AE94-CCBEF122C34B
 session: e6f1bdca-40ac-4376-8c02-660abb8b5559
+
+rebased-commit: 25a7bffcb12ec940d59f11369f5fbc15afc477c0
+rebased-commit-date: 2026-09-28T15:54:12-07:00
+agent: Codex
+codex-version: 0.158.0
+claude-code-version: not used for rebase
+model: GPT-6 (exact runtime model identifier unavailable)
+tty: not a tty
+pid: 68388
+ITERM_SESSION_ID: w18t0p0:FA9F00FD-C0E6-4CBD-A9AB-44FD11B1A62F
+reason: autosquash four local fixup commits into docs and gossip changes
