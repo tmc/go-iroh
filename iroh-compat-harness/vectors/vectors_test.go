@@ -85,7 +85,7 @@ func load(t *testing.T) corpus {
 	if err := json.Unmarshal(corpusJSON, &c); err != nil {
 		t.Fatal(err)
 	}
-	if c.Schema != "go-iroh-l0/2" || c.Iroh != "1.2.0" {
+	if c.Schema != "go-iroh-l0/2" || c.Iroh != "1.3.0" {
 		t.Fatalf("corpus identity = %q, %q", c.Schema, c.Iroh)
 	}
 	return c
@@ -173,7 +173,7 @@ func TestEndpointTicketVector(t *testing.T) {
 }
 
 // TestCustomAddrTicketVectors checks that the CustomAddr endpoint tickets the
-// Rust driver emits at iroh 1.2.0 both decode in go-iroh and re-encode to the
+// Rust driver emits at iroh 1.3.0 both decode in go-iroh and re-encode to the
 // same bytes Go produces for the same address. At iroh 1.0.3 neither held; see
 // TestLegacyCustomAddrTicketsStillRejected for the encoding that replaced.
 func TestCustomAddrTicketVectors(t *testing.T) {
@@ -204,7 +204,7 @@ func TestCustomAddrTicketVectors(t *testing.T) {
 // TestLegacyCustomAddrTicketsStillRejected is the null control for the test
 // above. The iroh 1.0.3 CustomAddr encoding is frozen in
 // legacy_custom_addr.json, and go-iroh must keep rejecting it. If both the
-// 1.0.3 and the 1.2.0 vectors decoded, the acceptance check would be measuring
+// 1.0.3 and the current vectors decoded, the acceptance check would be measuring
 // nothing about the version change.
 func TestLegacyCustomAddrTicketsStillRejected(t *testing.T) {
 	var legacy struct {

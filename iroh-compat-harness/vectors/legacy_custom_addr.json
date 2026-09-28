@@ -1,5 +1,5 @@
 {
-  "note": "CustomAddr endpoint tickets emitted by the Rust driver at iroh-base 1.0.3, kept as a frozen negative fixture. go-iroh must keep REJECTING these legacy enum encodings; if it ever accepts them, the 1.2.0 acceptance test above is not discriminating.",
+  "note": "CustomAddr endpoint tickets emitted by the Rust driver at iroh-base 1.0.3, kept as a frozen negative fixture. go-iroh must keep REJECTING these legacy enum encodings; if it ever accepts them, the current acceptance test is not discriminating.",
   "iroh": "1.0.3",
   "custom_addr_tickets": [
     {
