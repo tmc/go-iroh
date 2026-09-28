@@ -71,34 +71,6 @@ func RunVectorCorpus(bin, corpus, version string) []Cell {
 	return cells
 }
 
-// RunCustomAddrLive runs only the bidirectional CustomAddr ticket vectors.
-// It is used by the upstream-main drift canary, where no released golden
-// corpus exists yet.
-func RunCustomAddrLive(bin, version string) []Cell {
-	if bin == "" {
-		return vectorCellsFor(customAddrScenarios, version, SetupError, "RUST_VECTOR_BIN is not set", "", 0, "")
-	}
-	digest, err := FileDigest(bin)
-	if err != nil {
-		return vectorCellsFor(customAddrScenarios, version, SetupError, err.Error(), "", 0, "")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "custom-addr-vectors")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	start := time.Now()
-	if err := cmd.Start(); err != nil {
-		return vectorCellsFor(customAddrScenarios, version, SetupError, fmt.Sprintf("start Rust CustomAddr vector peer: %v", err), digest, 0, "")
-	}
-	pid := cmd.Process.Pid
-	peer := "rust-driver@" + digest
-	if err := cmd.Wait(); err != nil {
-		return vectorCellsFor(customAddrScenarios, version, SetupError, fmt.Sprintf("Rust CustomAddr vector peer: %v: %s", err, stderr.String()), digest, pid, peer)
-	}
-	return customAddrCells(bin, stdout.Bytes(), version, digest, pid, peer, time.Since(start).Milliseconds())
-}
-
 func vectorCells(version string, result Verdict, detail, digest string, pid int, peer string) []Cell {
 	return vectorCellsFor(vectorScenarios, version, result, detail, digest, pid, peer)
 }

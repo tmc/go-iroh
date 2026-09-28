@@ -94,11 +94,6 @@ struct CustomAddrTicketVector {
     bytes: String,
 }
 
-#[derive(Serialize)]
-struct CustomAddrCorpus {
-    custom_addr_tickets: Vec<CustomAddrTicketVector>,
-}
-
 #[derive(Deserialize)]
 struct CustomAddrDecodeRequest {
     length: usize,
@@ -179,20 +174,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Err("custom-addr-decode accepts no arguments".into());
             }
             return custom_addr_decode();
-        }
-        if command == "custom-addr-vectors" {
-            if args.next().is_some() {
-                return Err("custom-addr-vectors accepts no arguments".into());
-            }
-            let key = SecretKey::from_bytes(&[0x2a; 32]);
-            serde_json::to_writer(
-                std::io::stdout(),
-                &CustomAddrCorpus {
-                    custom_addr_tickets: custom_addr_ticket_vectors(&key),
-                },
-            )?;
-            println!();
-            return Ok(());
         }
         return Err(format!("unknown command {command}").into());
     }
