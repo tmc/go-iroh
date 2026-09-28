@@ -99,6 +99,69 @@ func TestEndpointHooksRejectAfterHandshake(t *testing.T) {
 	}
 }
 
+// TestStreamListenerSurvivesHookRejection pins that a hook rejecting one peer
+// does not stop ListenStreams from accepting the next.
+func TestStreamListenerSurvivesHookRejection(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-hooks/0"
+	loopback := WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0))
+	blocked, err := Bind(ctx, loopback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocked.Shutdown(ctx)
+	allowed, err := Bind(ctx, loopback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer allowed.Shutdown(ctx)
+
+	server, err := Bind(ctx, WithALPNs(alpn), loopback, WithHooks(testHooks{
+		after: func(_ context.Context, conn *Conn) error {
+			if conn.RemoteID().Equal(blocked.ID()) {
+				return RejectHandshake(77, "blocked")
+			}
+			return nil
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Shutdown(ctx)
+	ln, err := server.ListenStreams()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := blocked.Connect(ctx, addr, alpn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-conn.Context().Done():
+	case <-ctx.Done():
+		t.Fatal("blocked peer was not rejected")
+	}
+
+	c, err := allowed.Dial(ctx, addr, alpn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.Write([]byte("hi")); err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := ln.Accept()
+	if err != nil {
+		t.Fatalf("Accept after a rejection: %v", err)
+	}
+	accepted.Close()
+}
+
 // TestEndpointHooksAfterHandshakeBothSides pins that AfterHandshake fires for
 // accepted connections as well as dialed ones, and that Conn.Side tells them
 // apart. A hook installed on a server sees connections the server never dialed.
