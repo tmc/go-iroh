@@ -8,3 +8,14 @@ tty: not a tty
 pid: 57193 (note-writing process)
 ITERM_SESSION_ID: w18t0p0:FA9F00FD-C0E6-4CBD-A9AB-44FD11B1A62F
 validation: focused listener race tests passed before message-only amendment; test tree unchanged; no PR commit ancestry
+
+rebased-commit: 8300404ca1ae8311705075d31eb1ca066078fd7a
+rebased-commit-date: 2026-09-28T15:54:14-07:00
+agent: Codex
+codex-version: 0.158.0
+claude-code-version: not used for rebase
+model: GPT-6 (exact runtime model identifier unavailable)
+tty: not a tty
+pid: 68388
+ITERM_SESSION_ID: w18t0p0:FA9F00FD-C0E6-4CBD-A9AB-44FD11B1A62F
+reason: autosquash four local fixup commits into docs and gossip changes
