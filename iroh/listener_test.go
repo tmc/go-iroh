@@ -13,8 +13,23 @@ import (
 
 // TestStreamListenerSurvivesRejectedPeer pins that a peer rejected by an
 // AfterHandshake hook does not stop the listener: an authorized peer must still
-// be admitted by the same StreamListener afterwards.
+// be admitted by the same StreamListener afterwards. A hook may reject with
+// RejectHandshake or with any other error; neither is fatal to the listener.
 func TestStreamListenerSurvivesRejectedPeer(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		err  error
+	}{
+		{"reject handshake", RejectHandshake(77, "unauthorized endpoint")},
+		{"plain error", errors.New("unauthorized endpoint")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			testStreamListenerSurvivesRejectedPeer(t, tt.err)
+		})
+	}
+}
+
+func testStreamListenerSurvivesRejectedPeer(t *testing.T, rejectErr error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -31,7 +46,7 @@ func TestStreamListenerSurvivesRejectedPeer(t *testing.T) {
 		WithHooks(testHooks{
 			after: func(_ context.Context, conn *Conn) error {
 				if !conn.RemoteID().Equal(authorized.ID()) {
-					return RejectHandshake(77, "unauthorized endpoint")
+					return rejectErr
 				}
 				return nil
 			},
