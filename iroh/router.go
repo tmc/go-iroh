@@ -177,8 +177,8 @@ func NewRouter(ep *Endpoint, handlers map[string]ProtocolHandler, cfg *RouterCon
 //
 // Dispatch is by exact ALPN string. One goroutine runs the accept loop; each
 // accepted connection is handled in a child goroutine with a context derived
-// from the router's. A panic in a handler goroutine is recovered, logged, and
-// stops the accept loop.
+// from the router's. A panic in a handler goroutine is recovered and logged,
+// and closes only that connection; the accept loop continues.
 type Router struct {
 	ep                      *Endpoint
 	handlers                map[string]ProtocolHandler
