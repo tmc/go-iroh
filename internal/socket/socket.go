@@ -27,9 +27,11 @@ type Socket struct {
 	// Keyed by the URL's string form because netaddr.RelayURL wraps a pointer
 	// and is not reliably comparable across separately-parsed URLs.
 	relayAddrs *AddrMap[relayMapKey, RelayMappedAddr]
-	// relayByKey recovers the original RelayKey.
+	// relayByKey recovers the original RelayKey. relayHeard is the sentinel
+	// of a list of its entries, most recently used first.
 	relayMu    sync.Mutex
-	relayByKey map[relayMapKey]RelayKey
+	relayByKey map[relayMapKey]*relayEntry
+	relayHeard relayEntry
 
 	// customAddrs maps a custom address (by its string key) to a custom mapped
 	// address.
@@ -46,6 +48,22 @@ type relayMapKey struct {
 	eid key.EndpointID
 }
 
+// relayEntry is one relay mapping in the recency list.
+type relayEntry struct {
+	RelayKey
+	key        relayMapKey
+	prev, next *relayEntry
+}
+
+// maxRelayAddrs bounds the relay mapped-address table. A datagram from any
+// endpoint id the relay forwards creates a mapping before QUIC parses it, and
+// only a remote that completes a handshake is ever evicted, so a relay-side
+// peer cycling endpoint ids could otherwise retain state for the life of the
+// socket. A full table drops the mapping used longest ago; a remote still
+// exchanging datagrams refreshes its mapping on every one and keeps it. The
+// bound matches maxLocalAddrs, the other per-remote table in this package.
+const maxRelayAddrs = maxLocalAddrs
+
 // RelayKey identifies a relay path: a relay URL together with the remote
 // endpoint reached through it. It is the key type of the relay mapped-address
 // table.
@@ -56,7 +74,7 @@ type RelayKey struct {
 
 // NewSocket returns a ready Socket with empty mapped-address tables.
 func NewSocket() *Socket {
-	return &Socket{
+	s := &Socket{
 		endpointAddrs: NewAddrMap[key.EndpointID, EndpointIDMappedAddr](
 			NewEndpointIDMappedAddr,
 			func(v EndpointIDMappedAddr) netip.Addr { return v.Addr() },
@@ -65,13 +83,15 @@ func NewSocket() *Socket {
 			NewRelayMappedAddr,
 			func(v RelayMappedAddr) netip.Addr { return v.Addr() },
 		),
-		relayByKey: make(map[relayMapKey]RelayKey),
+		relayByKey: make(map[relayMapKey]*relayEntry),
 		customAddrs: NewAddrMap[string, CustomMappedAddr](
 			NewCustomMappedAddr,
 			func(v CustomMappedAddr) netip.Addr { return v.Addr() },
 		),
 		customByKey: make(map[string]netaddr.CustomAddr),
 	}
+	s.relayHeard.prev, s.relayHeard.next = &s.relayHeard, &s.relayHeard
+	return s
 }
 
 // Close marks the socket closed. Subsequent sends are dropped (blackholed) so
@@ -95,15 +115,44 @@ func (s *Socket) LookupEndpointID(m EndpointIDMappedAddr) (key.EndpointID, bool)
 }
 
 // RelayMappedAddrFor returns the relay mapped address for the (url, eid) pair,
-// allocating one on first use.
+// allocating one on first use. Each call marks the pair as the most recently
+// used; see [maxRelayAddrs].
 func (s *Socket) RelayMappedAddrFor(url netaddr.RelayURL, eid key.EndpointID) RelayMappedAddr {
 	key := relayMapKey{url.String(), eid}
 	s.relayMu.Lock()
-	if _, ok := s.relayByKey[key]; !ok {
-		s.relayByKey[key] = RelayKey{URL: url, EID: eid}
+	defer s.relayMu.Unlock()
+	if e, ok := s.relayByKey[key]; ok {
+		s.relayUnlink(e)
+		s.relayLinkFront(e)
+	} else {
+		if len(s.relayByKey) >= maxRelayAddrs {
+			s.relayForget(s.relayHeard.prev)
+		}
+		e := &relayEntry{RelayKey: RelayKey{URL: url, EID: eid}, key: key}
+		s.relayByKey[key] = e
+		s.relayLinkFront(e)
 	}
-	s.relayMu.Unlock()
 	return s.relayAddrs.Get(key)
+}
+
+// relayForget drops the relay mapping e. Caller holds relayMu.
+func (s *Socket) relayForget(e *relayEntry) {
+	s.relayUnlink(e)
+	delete(s.relayByKey, e.key)
+	s.relayAddrs.Remove(e.key)
+}
+
+// relayLinkFront puts e at the head of the recency list. Caller holds relayMu.
+func (s *Socket) relayLinkFront(e *relayEntry) {
+	e.prev, e.next = &s.relayHeard, s.relayHeard.next
+	e.next.prev = e
+	s.relayHeard.next = e
+}
+
+// relayUnlink removes e from the recency list. Caller holds relayMu.
+func (s *Socket) relayUnlink(e *relayEntry) {
+	e.prev.next, e.next.prev = e.next, e.prev
+	e.prev, e.next = nil, nil
 }
 
 // LookupRelay returns the (url, eid) pair for a relay mapped address, if known.
@@ -113,9 +162,12 @@ func (s *Socket) LookupRelay(m RelayMappedAddr) (RelayKey, bool) {
 		return RelayKey{}, false
 	}
 	s.relayMu.Lock()
-	rk, ok := s.relayByKey[key]
+	e, ok := s.relayByKey[key]
 	s.relayMu.Unlock()
-	return rk, ok
+	if !ok {
+		return RelayKey{}, false
+	}
+	return e.RelayKey, true
 }
 
 // CustomMappedAddrFor returns the custom mapped address for c, allocating one on
@@ -166,17 +218,12 @@ func (s *Socket) EvictRemote(id key.EndpointID, addrs []Addr) {
 	s.endpointAddrs.Remove(id)
 
 	s.relayMu.Lock()
-	var relayKeys []relayMapKey
-	for k, rk := range s.relayByKey {
-		if rk.EID == id {
-			relayKeys = append(relayKeys, k)
-			delete(s.relayByKey, k)
+	for _, e := range s.relayByKey {
+		if e.EID == id {
+			s.relayForget(e)
 		}
 	}
 	s.relayMu.Unlock()
-	for _, k := range relayKeys {
-		s.relayAddrs.Remove(k)
-	}
 
 	for _, a := range addrs {
 		c, ok := a.Custom()

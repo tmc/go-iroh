@@ -2,10 +2,12 @@ package socket
 
 import (
 	"context"
+	"encoding/binary"
 	"net/netip"
 	"testing"
 	"time"
 
+	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 )
 
@@ -109,5 +111,33 @@ func TestRemoteMapEvictsOnIdle(t *testing.T) {
 	// The next reference regenerates a fresh mapping.
 	if got := s.EndpointIDMappedAddrFor(eid); got == epMapped {
 		t.Error("regenerated mapping reused the evicted address")
+	}
+}
+
+// TestSocketRelayMappingsAreBounded checks that a relay-side peer cycling
+// endpoint ids cannot grow the relay mapped-address table without bound, and
+// that a remote still exchanging datagrams keeps its mapped address.
+func TestSocketRelayMappingsAreBounded(t *testing.T) {
+	s := NewSocket()
+	url, err := netaddr.ParseRelayURL("https://relay.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := testEndpointID(t)
+	liveMapped := s.RelayMappedAddrFor(url, live)
+	// Enough identities to fill the table several times over.
+	for n := 1; n <= 3*maxRelayAddrs; n++ {
+		var b [key.PublicKeySize]byte
+		binary.BigEndian.PutUint32(b[:], uint32(n))
+		s.RelayMappedAddrFor(url, key.UncheckedEndpointID(b))
+		if n%64 == 0 && s.RelayMappedAddrFor(url, live) != liveMapped {
+			t.Fatalf("live remote's mapped address changed after %d identities", n)
+		}
+		if got := s.relayAddrs.Len(); got > maxRelayAddrs {
+			t.Fatalf("table holds %d relay mappings after %d identities, want at most %d", got, n, maxRelayAddrs)
+		}
+	}
+	if rk, ok := s.LookupRelay(liveMapped); !ok || rk.EID != live {
+		t.Errorf("LookupRelay(live) = %v, %v; want %v", rk.EID, ok, live)
 	}
 }
