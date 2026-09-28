@@ -19,3 +19,14 @@ tty: not a tty
 pid: 68388
 ITERM_SESSION_ID: w18t0p0:FA9F00FD-C0E6-4CBD-A9AB-44FD11B1A62F
 reason: autosquash four local fixup commits into docs and gossip changes
+
+rebased-commit: 76832b70bf4c1c35c8802f4e2a565c7968199e54
+rebased-commit-date: 2026-09-28T16:12:04-07:00
+agent: Codex
+codex-version: 0.158.0
+claude-code-version: not used for rebase
+model: GPT-6 (exact runtime model identifier unavailable)
+tty: not a tty
+pid: 28666
+ITERM_SESSION_ID: w18t0p0:FA9F00FD-C0E6-4CBD-A9AB-44FD11B1A62F
+reason: fold the large docs sync test deadline fix into the unpublished docs commit
