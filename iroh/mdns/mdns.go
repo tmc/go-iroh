@@ -62,16 +62,26 @@ type Discovery struct {
 	responseDelay func() time.Duration
 
 	mu        sync.RWMutex
-	peers     map[key.EndpointID]peerInfo
+	peers     map[key.EndpointID]*peerInfo
+	heard     peerInfo     // sentinel of a list of peers, most recently heard first
 	conn      *net.UDPConn // udp4, joined to 224.0.0.251
 	conn6     *net.UDPConn // udp6, joined to ff02::fb; nil on a host without IPv6
 	announced []byte       // last announcement built by Publish, replayed to queries
 }
 
 type peerInfo struct {
+	id          key.EndpointID
 	data        dns.EndpointData
 	lastUpdated uint64
+	prev, next  *peerInfo
 }
+
+// maxPeers bounds the peer cache. Announcements are unauthenticated, so
+// without a bound any host on the link could grow the cache for the life of
+// the Discovery by announcing a fresh endpoint id in every packet. A full
+// cache drops the peer heard from longest ago: the cache only saves a query,
+// so a miss costs one multicast round trip and never a wrong address.
+const maxPeers = 4096
 
 // Option configures a Discovery.
 type Option func(*Discovery)
@@ -125,8 +135,9 @@ func New(id key.EndpointID, opts ...Option) *Discovery {
 		responseDelay: func() time.Duration {
 			return 20*time.Millisecond + time.Duration(rand.Int64N(int64(100*time.Millisecond)))
 		},
-		peers: make(map[key.EndpointID]peerInfo),
+		peers: make(map[key.EndpointID]*peerInfo),
 	}
+	d.heard.prev, d.heard.next = &d.heard, &d.heard
 	for _, opt := range opts {
 		opt(d)
 	}
@@ -328,12 +339,17 @@ func (d *Discovery) Resolve(ctx context.Context, id key.EndpointID) iter.Seq2[ir
 func (d *Discovery) item(id key.EndpointID) (iroh.Item, bool) {
 	d.mu.RLock()
 	peer, ok := d.peers[id]
+	var data dns.EndpointData
+	var lastUpdated uint64
+	if ok {
+		data, lastUpdated = cloneEndpointData(peer.data), peer.lastUpdated
+	}
 	d.mu.RUnlock()
 	if !ok {
 		return iroh.Item{}, false
 	}
-	info := dns.EndpointInfo{ID: id, Data: cloneEndpointData(peer.data)}
-	return iroh.NewItem(info, Provenance, &peer.lastUpdated), true
+	info := dns.EndpointInfo{ID: id, Data: data}
+	return iroh.NewItem(info, Provenance, &lastUpdated), true
 }
 
 func (d *Discovery) handlePacket(packet []byte) {
@@ -342,15 +358,36 @@ func (d *Discovery) handlePacket(packet []byte) {
 		d.answerQuery(packet)
 		return
 	}
+	d.cachePeer(info)
+}
+
+// cachePeer records info as the most recently heard peer.
+func (d *Discovery) cachePeer(info dns.EndpointInfo) {
 	d.mu.Lock()
-	if d.peers == nil {
-		d.peers = make(map[key.EndpointID]peerInfo)
+	defer d.mu.Unlock()
+	p, ok := d.peers[info.ID]
+	if ok {
+		unlinkPeer(p)
+	} else {
+		if len(d.peers) >= maxPeers {
+			oldest := d.heard.prev
+			unlinkPeer(oldest)
+			delete(d.peers, oldest.id)
+		}
+		p = &peerInfo{id: info.ID}
+		d.peers[info.ID] = p
 	}
-	d.peers[info.ID] = peerInfo{
-		data:        cloneEndpointData(info.Data),
-		lastUpdated: uint64(time.Now().UnixMicro()),
-	}
-	d.mu.Unlock()
+	p.data = cloneEndpointData(info.Data)
+	p.lastUpdated = uint64(time.Now().UnixMicro())
+	p.prev, p.next = &d.heard, d.heard.next
+	p.next.prev = p
+	d.heard.next = p
+}
+
+// unlinkPeer removes p from the recency list. Caller holds mu.
+func unlinkPeer(p *peerInfo) {
+	p.prev.next, p.next.prev = p.next, p.prev
+	p.prev, p.next = nil, nil
 }
 
 // answerFor returns the announcement to multicast in reply to packet, and

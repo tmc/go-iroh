@@ -505,3 +505,36 @@ func TestReadLoopCachesAnnouncementOverIPv6(t *testing.T) {
 		t.Fatalf("readLoop: %v", err)
 	}
 }
+
+// TestPeerCacheIsBounded checks that a LAN host announcing a fresh endpoint id
+// in every packet cannot grow the peer cache without bound, and that a peer
+// still announcing, or one first heard after the flood, resolves from the
+// cache.
+func TestPeerCacheIsBounded(t *testing.T) {
+	data := dns.NewEndpointData().WithIPAddrs(netip.MustParseAddrPort("192.0.2.1:7777"))
+	info := func(n int) dns.EndpointInfo {
+		var b [key.PublicKeySize]byte
+		binary.BigEndian.PutUint32(b[:], uint32(n))
+		return dns.EndpointInfo{ID: key.UncheckedEndpointID(b), Data: data}
+	}
+	live, late := info(0), info(-1)
+
+	d := New(key.EndpointID{})
+	// Enough identities to fill the cache several times over.
+	for n := 1; n <= 3*maxPeers; n++ {
+		if n%64 == 1 {
+			d.cachePeer(live)
+		}
+		d.cachePeer(info(n))
+		if got := d.peerCount(); got > maxPeers {
+			t.Fatalf("cache holds %d peers after %d announcements, want at most %d", got, n, maxPeers)
+		}
+	}
+	if _, ok := d.item(live.ID); !ok {
+		t.Error("peer still announcing was evicted")
+	}
+	d.cachePeer(late)
+	if _, ok := d.item(late.ID); !ok {
+		t.Error("peer heard after the flood is not cached")
+	}
+}
