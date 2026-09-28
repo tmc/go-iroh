@@ -6,3 +6,25 @@ tty: not a tty
 pid: 73791
 ITERM_SESSION_ID: w14t1p0:544D5681-C5AA-40BC-AE94-CCBEF122C34B
 session: e6f1bdca-40ac-4376-8c02-660abb8b5559
+
+commit: 517b96e7d16adcab9c50351c44ec0a304cb3bed1
+date: 2026-09-28T15:19:21-07:00
+agent: Codex
+codex-version: 0.158.0
+claude-code-version: 2.1.280 (installed; not executing agent)
+model: GPT-6 (exact runtime model identifier unavailable)
+tty: not a tty
+pid: 63071 (note-writing process)
+ITERM_SESSION_ID: w18t0p0:FA9F00FD-C0E6-4CBD-A9AB-44FD11B1A62F
+validation: targeted regression fails as expected, including with race detector; implementation repair pending
+
+commit: aa63b4a256c80c320d3737c3a3edc521bcbc5e96
+date: 2026-09-28T15:36:48-07:00
+agent: Codex
+codex-version: 0.158.0
+claude-code-version: 2.1.280 (installed; not executing agent)
+model: GPT-6 (exact runtime model identifier unavailable)
+tty: not a tty
+pid: 25590 (note-writing process)
+ITERM_SESSION_ID: w18t0p0:FA9F00FD-C0E6-4CBD-A9AB-44FD11B1A62F
+validation: targeted docs regression and loopback sync passed; full race suite running
