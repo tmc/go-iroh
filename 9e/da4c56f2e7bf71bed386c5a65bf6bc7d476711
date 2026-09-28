@@ -50,3 +50,14 @@ tty: not a tty
 pid: 27672
 ITERM_SESSION_ID: w18t0p0:FA9F00FD-C0E6-4CBD-A9AB-44FD11B1A62F
 validation: full go test -race -count=1 ./... passed; git-auto-commit-message failed to initialize due to missing Anthropic API key
+
+rebased-commit: 9eda4c56f2e7bf71bed386c5a65bf6bc7d476711
+rebased-commit-date: 2026-09-28T16:12:03-07:00
+agent: Codex
+codex-version: 0.158.0
+claude-code-version: not used for rebase
+model: GPT-6 (exact runtime model identifier unavailable)
+tty: not a tty
+pid: 28666
+ITERM_SESSION_ID: w18t0p0:FA9F00FD-C0E6-4CBD-A9AB-44FD11B1A62F
+reason: fold the large docs sync test deadline fix into the unpublished docs commit
