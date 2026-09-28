@@ -1,0 +1,19 @@
+commit: 437ec377f6dca5ef67615bff506cc81171081d8a
+date: 2026-09-18T16:55:25-07:00
+claude-code: 2.1.269
+model: claude-opus-5[1m]
+tty: not a tty
+pid: 73791
+ITERM_SESSION_ID: w14t1p0:544D5681-C5AA-40BC-AE94-CCBEF122C34B
+session: e6f1bdca-40ac-4376-8c02-660abb8b5559
+
+rebased-commit: cf3ec64cf17041dead567e8e768ebfd0b11d0d85
+rebased-commit-date: 2026-09-28T15:54:12-07:00
+agent: Codex
+codex-version: 0.158.0
+claude-code-version: not used for rebase
+model: GPT-6 (exact runtime model identifier unavailable)
+tty: not a tty
+pid: 68388
+ITERM_SESSION_ID: w18t0p0:FA9F00FD-C0E6-4CBD-A9AB-44FD11B1A62F
+reason: autosquash four local fixup commits into docs and gossip changes
