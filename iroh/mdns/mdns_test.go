@@ -6,11 +6,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"log/slog"
 	"net"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/tmc/go-iroh/dns"
@@ -478,8 +481,11 @@ func TestReadLoopCachesAnnouncementOverIPv6(t *testing.T) {
 		<-ctx.Done()
 		_ = conn.Close()
 	}()
-	done := make(chan error, 1)
-	go func() { done <- d.readLoop(ctx, conn) }()
+	done := make(chan struct{})
+	go func() {
+		d.readLoop(ctx, conn)
+		close(done)
+	}()
 
 	sender, err := net.DialUDP("udp6", nil, conn.LocalAddr().(*net.UDPAddr))
 	if err != nil {
@@ -501,9 +507,7 @@ func TestReadLoopCachesAnnouncementOverIPv6(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("readLoop: %v", err)
-	}
+	<-done
 }
 
 // TestPeerCacheIsBounded checks that a LAN host announcing a fresh endpoint id
@@ -536,5 +540,110 @@ func TestPeerCacheIsBounded(t *testing.T) {
 	d.cachePeer(late)
 	if _, ok := d.item(late.ID); !ok {
 		t.Error("peer heard after the flood is not cached")
+	}
+}
+
+// fakeReader is a packet source for readLoop. read is called with the number
+// of earlier reads and returns the next packet or error; a nil packet and nil
+// error block the read until close. Every read after close fails with
+// net.ErrClosed.
+type fakeReader struct {
+	read   func(n int) ([]byte, error)
+	closed chan struct{}
+
+	mu    sync.Mutex
+	reads int
+}
+
+func (r *fakeReader) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
+	select {
+	case <-r.closed:
+		return 0, netip.AddrPort{}, net.ErrClosed
+	default:
+	}
+	r.mu.Lock()
+	n := r.reads
+	r.reads++
+	r.mu.Unlock()
+	p, err := r.read(n)
+	if p == nil && err == nil {
+		<-r.closed
+		return 0, netip.AddrPort{}, net.ErrClosed
+	}
+	return copy(b, p), netip.MustParseAddrPort("192.0.2.9:5353"), err
+}
+
+func (r *fakeReader) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.reads
+}
+
+// TestReadLoopSurvivesReadErrors checks that an error reading one datagram,
+// such as the WSAEMSGSIZE Windows returns for an oversized multicast packet,
+// does not stop discovery, and that a persistent error is retried with a
+// backoff rather than in a spin.
+func TestReadLoopSurvivesReadErrors(t *testing.T) {
+	sk, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sk.Public().EndpointID()
+	packet, err := buildAnnouncement(DefaultServiceName, announcementData{
+		id:   id,
+		port: 7777,
+		ips:  []netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:7777")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgSize := &net.OpError{Op: "read", Net: "udp", Err: errors.New("wsarecvfrom: message too long")}
+
+	tests := []struct {
+		name      string
+		read      func(n int) ([]byte, error)
+		wantID    bool
+		wantReads int // at most, over 10s
+	}{
+		{"one error", func(n int) ([]byte, error) {
+			switch n {
+			case 0:
+				return nil, msgSize
+			case 1:
+				return packet, nil
+			}
+			return nil, nil
+		}, true, 3},
+		{"persistent error", func(n int) ([]byte, error) {
+			return nil, msgSize
+		}, false, 50},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				r := &fakeReader{read: tc.read, closed: make(chan struct{})}
+				d := New(key.EndpointID{})
+				done := make(chan struct{})
+				go func() {
+					d.readLoop(t.Context(), r)
+					close(done)
+				}()
+				time.Sleep(10 * time.Second)
+				synctest.Wait()
+				select {
+				case <-done:
+					t.Fatal("readLoop stopped on a read error")
+				default:
+				}
+				if n := r.count(); n > tc.wantReads {
+					t.Errorf("%d reads in 10s, want at most %d", n, tc.wantReads)
+				}
+				if _, ok := d.item(id); ok != tc.wantID {
+					t.Errorf("announcement cached = %v, want %v", ok, tc.wantID)
+				}
+				close(r.closed)
+				<-done
+			})
+		})
 	}
 }

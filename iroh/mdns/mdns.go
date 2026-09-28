@@ -194,21 +194,49 @@ func (d *Discovery) Start(ctx context.Context) error {
 	if conn6 != nil {
 		go d.readLoop(ctx, conn6)
 	}
-	return d.readLoop(ctx, conn)
+	d.readLoop(ctx, conn)
+	return nil
 }
 
+// packetReader is the part of *net.UDPConn that readLoop uses.
+type packetReader interface {
+	ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error)
+}
+
+// Bounds on the wait after a failed read.
+const (
+	minReadBackoff = 5 * time.Millisecond
+	maxReadBackoff = time.Second
+)
+
 // readLoop reads packets from conn until ctx is cancelled or conn is closed.
-func (d *Discovery) readLoop(ctx context.Context, conn *net.UDPConn) error {
+// Any other read error is about one datagram, not the socket -- Windows, for
+// one, fails the read of a multicast packet larger than the buffer with
+// WSAEMSGSIZE -- and any host on the link can send one, so the loop logs it
+// and reads on, waiting longer after each consecutive failure so that an
+// error that persists does not spin.
+func (d *Discovery) readLoop(ctx context.Context, conn packetReader) {
 	buf := make([]byte, 1500)
+	var backoff time.Duration
 	for {
 		n, _, err := conn.ReadFromUDPAddrPort(buf)
-		if err != nil {
-			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
-				return nil
-			}
-			return fmt.Errorf("mdns: read: %w", err)
+		if err == nil {
+			backoff = 0
+			d.handlePacket(buf[:n])
+			continue
 		}
-		d.handlePacket(buf[:n])
+		if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+			return
+		}
+		backoff = min(max(2*backoff, minReadBackoff), maxReadBackoff)
+		d.log().Debug("mdns: read failed", "err", err, "retry", backoff)
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
 	}
 }
 
