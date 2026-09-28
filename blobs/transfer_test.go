@@ -590,3 +590,31 @@ func (s *trailingStream) Read(p []byte) (int, error) {
 
 func (s *trailingStream) Write(p []byte) (int, error) { return len(p), nil }
 func (s *trailingStream) Close() error                { return nil }
+
+func TestServeRequestTooLarge(t *testing.T) {
+	data := []byte("hello")
+	valid := EncodeGetRequestBytes(GetBlob(NewHash(data)))
+	tests := []struct {
+		name   string
+		serve  func(context.Context, BidiStream, Store) error
+		prefix []byte
+	}{
+		{"ServeBlob/zeros", ServeBlob, nil},
+		{"ServeBlob/valid then zeros", ServeBlob, valid},
+		{"ServeSingleLeaf/zeros", ServeSingleLeaf, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// A request that never ends, cut off far past any sane bound so an
+			// unbounded read fails the test instead of the machine.
+			s := &trailingStream{resp: tt.prefix, limit: 64 << 20}
+			err := tt.serve(context.Background(), s, mustStore(t, data))
+			if !errors.Is(err, ErrRequestTooLarge) {
+				t.Fatalf("serve error = %v, want %v", err, ErrRequestTooLarge)
+			}
+			if s.trailing > MaxRequestSize+64<<10 {
+				t.Fatalf("server read %d bytes, want at most about %d", s.trailing, MaxRequestSize)
+			}
+		})
+	}
+}

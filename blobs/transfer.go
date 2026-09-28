@@ -35,13 +35,20 @@ var (
 	// ErrUnsupportedRequest is returned when a request is outside the
 	// raw-blob transfer subset.
 	ErrUnsupportedRequest = errors.New("blobs: unsupported request")
+	// ErrRequestTooLarge is returned when a request is longer than
+	// [MaxRequestSize].
+	ErrRequestTooLarge = errors.New("blobs: request too large")
 )
+
+// MaxRequestSize is the largest request a server reads, as in iroh-blobs.
+const MaxRequestSize = 1 << 20
 
 // ServeBlob serves one full-range raw blob request on s.
 //
 // The client must send a full [RequestGet] request, then close its send side.
 // ServeBlob writes the full-range BAO response, or the hash-sequence root and
-// children for [GetAll], and closes its send side.
+// children for [GetAll], and closes its send side. A request longer than
+// [MaxRequestSize] fails with [ErrRequestTooLarge].
 func ServeBlob(ctx context.Context, s BidiStream, store Store) error {
 	return serveBlob(ctx, s, store, false, true)
 }
@@ -101,10 +108,14 @@ func serveBlob(ctx context.Context, s BidiStream, store Store, singleLeaf, hashS
 	if store == nil {
 		return errors.New("blobs: nil blob store")
 	}
-	requestBytes, err := readAllContext(ctx, s)
+	requestBytes, err := readAllContext(ctx, s, MaxRequestSize+1)
 	if err != nil {
 		_ = s.Close()
 		return fmt.Errorf("blobs: read request: %w", err)
+	}
+	if len(requestBytes) > MaxRequestSize {
+		_ = s.Close()
+		return ErrRequestTooLarge
 	}
 	req, err := DecodeRequestBytes(requestBytes)
 	if err != nil {
@@ -743,7 +754,9 @@ func getBlob(ctx context.Context, s BidiStream, hash Hash, decode func(Hash, []b
 	if err := closeWrite(s); err != nil {
 		return nil, fmt.Errorf("blobs: close request: %w", err)
 	}
-	encoded, err := readAllContext(ctx, s)
+	// One byte past the largest valid response is enough for decode to
+	// reject an oversized one.
+	encoded, err := readAllContext(ctx, s, 8+MaxSingleLeafSize+1)
 	if err != nil {
 		return nil, fmt.Errorf("blobs: read response: %w", err)
 	}
@@ -780,7 +793,9 @@ func readTrailingByte(r io.Reader) error {
 	}
 }
 
-func readAllContext(ctx context.Context, r io.ReadCloser) ([]byte, error) {
+// readAllContext reads s until EOF, until it has read limit bytes, or until
+// ctx is done.
+func readAllContext(ctx context.Context, s BidiStream, limit int64) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -790,14 +805,14 @@ func readAllContext(ctx context.Context, r io.ReadCloser) ([]byte, error) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		b, err := io.ReadAll(r)
+		b, err := io.ReadAll(io.LimitReader(s, limit))
 		done <- result{b: b, err: err}
 	}()
 	select {
 	case res := <-done:
 		return res.b, res.err
 	case <-ctx.Done():
-		_ = r.Close()
+		_ = s.Close()
 		res := <-done
 		if res.err != nil {
 			return nil, ctx.Err()
