@@ -54,14 +54,14 @@
       "description": "Go encodes range proofs for blobs of 0 to 300000 bytes and compares them to bao-tree's for whole blobs, the last chunk, chunk ranges inside, across, and past a 16-chunk block, and two spans in one block, then verifies bao-tree's encodings, and a pass proves go-iroh serves and accepts the partial-block proofs iroh-blobs does.",
       "tier": "stable",
       "counterpart": "Rust test driver",
-      "expected": {"1.2": "fail", "1.3": "fail"}
+      "expected": {"1.2": "pass", "1.3": "pass"}
     },
     {
       "name": "vectors/bao-chunk-ranges",
       "description": "Go produces and verifies bao-tree's range proofs for chunk ranges no byte range expresses: two spans in one block, the chunk at infinity, and ranges starting past the end, which iroh-blobs sends to ask for a size proof, and a pass proves go-iroh serves any range iroh-blobs can request.",
       "tier": "stable",
       "counterpart": "Rust test driver",
-      "expected": {"1.2": "fail", "1.3": "fail"}
+      "expected": {"1.2": "pass", "1.3": "pass"}
     },
     {
       "name": "vectors/ip-ticket-rust-to-go",
