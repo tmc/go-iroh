@@ -3,8 +3,12 @@ package iroh
 import (
 	"context"
 	"io"
+	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/netip"
+	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -146,6 +150,48 @@ func TestRelayOnlyEcho(t *testing.T) {
 	}
 	if !res.peer.Equal(client.ID()) {
 		t.Errorf("server saw client id %s, want %s", res.peer, client.ID())
+	}
+}
+
+func TestRelayOnlyOnlineThroughProxy(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	relayServer := newEchoRelayServer(t)
+	relayURL := relayServer.url(t)
+	target, err := url.Parse(relayServer.ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proxyRequests atomic.Int32
+	reverseProxy := httputil.NewSingleHostReverseProxy(target)
+	director := reverseProxy.Director
+	reverseProxy.Director = func(r *http.Request) {
+		proxyRequests.Add(1)
+		director(r)
+	}
+	proxyServer := httptest.NewServer(reverseProxy)
+	t.Cleanup(proxyServer.Close)
+	proxyURL, err := url.Parse(proxyServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mode := relay.ModeCustom(relay.MapFromURLs(relayURL))
+	ep, err := Bind(ctx,
+		WithRelayMode(mode),
+		WithProxy(ProxyURL(proxyURL)),
+		WithoutIPTransports(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Shutdown(ctx)
+	if err := ep.Online(ctx); err != nil {
+		t.Fatalf("endpoint online through proxy: %v", err)
+	}
+	if proxyRequests.Load() == 0 {
+		t.Fatal("proxy received no relay requests")
 	}
 }
 

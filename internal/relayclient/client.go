@@ -48,6 +48,9 @@ type Options struct {
 	TLSConfig *tls.Config
 	// HTTPClient overrides the HTTP client used for the WebSocket dial.
 	HTTPClient *http.Client
+	// Proxy selects an HTTP proxy for the relay connection. Nil disables
+	// proxying.
+	Proxy func(*url.URL) (*url.URL, error)
 	// AuthToken, if set, is sent as a Bearer token in the Authorization header.
 	AuthToken string
 }
@@ -78,7 +81,7 @@ func Connect(ctx context.Context, u netaddr.RelayURL, opts Options) (*Client, er
 
 	httpClient := opts.HTTPClient
 	if httpClient == nil {
-		httpClient = keyMaterialHTTPClient(opts.SecretKey, opts.TLSConfig)
+		httpClient = keyMaterialHTTPClient(opts.SecretKey, opts.TLSConfig, opts.Proxy)
 	}
 
 	conn, resp, err := websocket.Dial(ctx, dialURL, dialOptions(httpClient, header))
@@ -105,18 +108,30 @@ func Connect(ctx context.Context, u netaddr.RelayURL, opts Options) (*Client, er
 	return c, nil
 }
 
-func keyMaterialHTTPClient(sk key.SecretKey, config *tls.Config) *http.Client {
-	return &http.Client{Transport: keyMaterialTransport{secretKey: sk, tlsConfig: config}}
+func keyMaterialHTTPClient(sk key.SecretKey, config *tls.Config, proxy func(*url.URL) (*url.URL, error)) *http.Client {
+	return &http.Client{Transport: keyMaterialTransport{secretKey: sk, tlsConfig: config, proxy: proxy}}
 }
 
 type keyMaterialTransport struct {
 	secretKey key.SecretKey
 	tlsConfig *tls.Config
+	proxy     func(*url.URL) (*url.URL, error)
 }
 
 func (t keyMaterialTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req = req.Clone(req.Context())
 	tr := &http.Transport{TLSClientConfig: t.tlsConfig}
+	if t.proxy != nil {
+		// Plain HTTP relay URLs do not use the key-material TLS dialer, so let
+		// net/http send those requests through its ordinary HTTP proxy path.
+		// HTTPS relays use the custom CONNECT tunnel below.
+		tr.Proxy = func(req *http.Request) (*url.URL, error) {
+			if req.URL.Scheme != "http" {
+				return nil, nil
+			}
+			return t.proxy(req.URL)
+		}
+	}
 	tr.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		tlsConfig := t.tlsConfig
 		if tlsConfig == nil {
@@ -131,10 +146,34 @@ func (t keyMaterialTransport) RoundTrip(req *http.Request) (*http.Response, erro
 			}
 			tlsConfig.ServerName = host
 		}
-		dialer := tls.Dialer{Config: tlsConfig}
-		conn, err := dialer.DialContext(ctx, network, addr)
+		var conn net.Conn
+		var err error
+		if t.proxy != nil {
+			target := &url.URL{Scheme: "https", Host: addr}
+			proxy, proxyErr := t.proxy(target)
+			if proxyErr != nil {
+				return nil, fmt.Errorf("relayclient: select proxy for %s: %w", target, proxyErr)
+			}
+			if proxy != nil {
+				conn, err = dialProxy(ctx, proxy, addr, tlsConfig)
+				if err == nil {
+					tlsConn := tls.Client(conn, tlsConfig)
+					if err = tlsConn.HandshakeContext(ctx); err != nil {
+						conn.Close()
+					} else {
+						conn = tlsConn
+					}
+				}
+			} else {
+				dialer := tls.Dialer{Config: tlsConfig}
+				conn, err = dialer.DialContext(ctx, network, addr)
+			}
+		} else {
+			dialer := tls.Dialer{Config: tlsConfig}
+			conn, err = dialer.DialContext(ctx, network, addr)
+		}
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("relayclient: dial %s: %w", addr, err)
 		}
 		tlsConn, ok := conn.(*tls.Conn)
 		if !ok {

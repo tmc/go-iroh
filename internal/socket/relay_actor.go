@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	mrand "math/rand/v2"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -162,6 +163,8 @@ type RelayActorConfig struct {
 	SecretKey key.SecretKey
 	// Map is the relay map; consulted for per-relay auth tokens.
 	Map *relay.Map
+	// Proxy selects an HTTP proxy for relay connections. Nil disables proxying.
+	Proxy func(*url.URL) (*url.URL, error)
 	// dialer overrides the relay dial function. nil uses [defaultRelayDialer].
 	dialer relayDialer
 }
@@ -627,6 +630,7 @@ func (r *activeRelay) dial() (relayClient, bool, error) {
 		c, err := r.parent.dialer(ctx, r.url, relayclient.Options{
 			SecretKey: r.parent.cfg.SecretKey,
 			AuthToken: r.parent.authTokenFor(r.url),
+			Proxy:     r.parent.cfg.Proxy,
 		})
 		done <- result{c: c, err: err}
 	}()

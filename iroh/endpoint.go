@@ -7,10 +7,13 @@ import (
 	"io"
 	"iter"
 	"net"
+	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -121,6 +124,7 @@ type config struct {
 	verifySource     func(net.Addr) bool
 	hooks            []EndpointHooks
 	custom           []CustomTransport
+	proxy            func(*url.URL) (*url.URL, error)
 }
 
 // Option configures an [Endpoint] at [Bind] time.
@@ -299,6 +303,53 @@ func WithRelayMode(mode relay.Mode) Option {
 	return func(c *config) error {
 		c.relayMode = mode
 		return nil
+	}
+}
+
+// WithProxy routes relay connections and net report HTTP requests through the
+// proxy returned for each target URL. A nil proxy URL means connect directly.
+// The proxy function may be called concurrently.
+func WithProxy(proxy func(*url.URL) (*url.URL, error)) Option {
+	return func(c *config) error {
+		if proxy == nil {
+			c.proxy = nil
+			return nil
+		}
+		c.proxy = func(target *url.URL) (*url.URL, error) {
+			proxyURL, err := proxy(target)
+			if err != nil || proxyURL == nil {
+				return proxyURL, err
+			}
+			scheme := strings.ToLower(proxyURL.Scheme)
+			if (scheme != "http" && scheme != "https") || proxyURL.Hostname() == "" || proxyURL.Opaque != "" || (proxyURL.Path != "" && proxyURL.Path != "/") || proxyURL.RawQuery != "" || proxyURL.Fragment != "" {
+				return nil, fmt.Errorf("iroh: invalid proxy URL %s", proxyURL.Redacted())
+			}
+			return proxyURL, nil
+		}
+		return nil
+	}
+}
+
+// ProxyFromEnvironment selects a proxy using the same rules as
+// [http.ProxyFromEnvironment]. It selects HTTP_PROXY for HTTP requests and
+// HTTPS_PROXY for HTTPS requests, honors NO_PROXY, and bypasses loopback
+// targets.
+func ProxyFromEnvironment(target *url.URL) (*url.URL, error) {
+	if target == nil {
+		return nil, errors.New("iroh: nil proxy target")
+	}
+	return http.ProxyFromEnvironment(&http.Request{URL: target})
+}
+
+// ProxyURL returns a proxy function that always returns u. The URL must use
+// the http or https scheme and include a host.
+func ProxyURL(u *url.URL) func(*url.URL) (*url.URL, error) {
+	return func(*url.URL) (*url.URL, error) {
+		if u == nil {
+			return nil, errors.New("iroh: nil proxy URL")
+		}
+		copy := *u
+		return &copy, nil
 	}
 }
 
@@ -562,6 +613,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		relayActor = socket.NewRelayActor(socket.RelayActorConfig{
 			SecretKey: c.secretKey,
 			Map:       relayMap,
+			Proxy:     c.proxy,
 		})
 	}
 
@@ -684,6 +736,7 @@ func endpointNetReportRunner(c config, relayMap *relay.Map, dialer netreport.QAD
 		return nil
 	}
 	client := netreport.NewClient(relayMap)
+	client = client.WithProxy(c.proxy)
 	if dialer != nil {
 		client = client.WithQADDialer(dialer)
 	}

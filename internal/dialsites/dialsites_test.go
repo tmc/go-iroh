@@ -29,6 +29,7 @@ var dialMethods = []string{"Dial", "DialAddr", "DialAddrEarly", "DialContext"}
 var sites = map[string]string{
 	"internal/relayclient/client.go:Dial":        "relay WebSocket; the endpoint comes from the caller's relay map",
 	"internal/relayclient/client.go:DialContext": "HTTP client beneath the WebSocket dial above",
+	"internal/relayclient/proxy.go:DialContext":  "configured proxy for a caller-selected relay",
 	"internal/netreport/qad.go:Dial":             "QUIC address discovery against a relay",
 	"iroh/endpoint.go:Dial":                      "QUIC address discovery from the endpoint",
 	"internal/qng/client.go:Dial":                "transport primitive beneath the callers above",
