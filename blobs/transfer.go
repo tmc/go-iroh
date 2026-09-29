@@ -50,11 +50,11 @@ var (
 // MaxRequestSize is the largest request a server reads, as in iroh-blobs.
 const MaxRequestSize = 1 << 20
 
-// ServeBlob serves one full-range raw blob request on s.
+// ServeBlob serves one raw blob or hash-sequence get request on s.
 //
-// The client must send a full [RequestGet] request, then close its send side.
-// ServeBlob writes the full-range BAO response, or the hash-sequence root and
-// children for [GetAll], and closes its send side. A request longer than
+// The client must send a [RequestGet] request, then close its send side.
+// ServeBlob writes the requested blob ranges, or the selected hash-sequence
+// root and child ranges, and closes its send side. A request longer than
 // [MaxRequestSize] fails with [ErrRequestTooLarge].
 func ServeBlob(ctx context.Context, s BidiStream, store Store) error {
 	return serveBlob(ctx, s, store, false, true)
@@ -186,8 +186,22 @@ func writeGet(ctx context.Context, s io.Writer, store Store, req GetRequest, sin
 	if req.Ranges.IsBlob() {
 		return writeBlob(ctx, s, store, req.Hash, singleLeaf)
 	}
-	if !req.Ranges.IsAll() {
-		return writeBlobRange(ctx, s, store, req.Hash, req.Ranges.At(0))
+	rootRanges := req.Ranges.At(0)
+	childrenRequested := !req.Ranges.At(1).IsEmpty()
+	for _, entry := range req.Ranges.Entries() {
+		if entry.Offset > 0 && !entry.Ranges.IsEmpty() {
+			childrenRequested = true
+			break
+		}
+	}
+	if !childrenRequested {
+		if rootRanges.IsEmpty() {
+			return nil
+		}
+		if rootRanges.IsAll() {
+			return writeBlob(ctx, s, store, req.Hash, singleLeaf)
+		}
+		return writeBlobRange(ctx, s, store, req.Hash, rootRanges)
 	}
 	root, err := ReadBlob(ctx, store, req.Hash)
 	if err != nil {
@@ -197,11 +211,26 @@ func writeGet(ctx context.Context, s io.Writer, store Store, req GetRequest, sin
 	if err != nil {
 		return fmt.Errorf("blobs: parse hash sequence: %w", err)
 	}
-	if err := writeBlobBytes(s, req.Hash, root, encoderFor(singleLeaf)); err != nil {
-		return err
+	if !rootRanges.IsEmpty() {
+		if rootRanges.IsAll() {
+			if err := writeBlobBytes(s, req.Hash, root, encoderFor(singleLeaf)); err != nil {
+				return err
+			}
+		} else if err := writeBlobRange(ctx, s, store, req.Hash, rootRanges); err != nil {
+			return err
+		}
 	}
-	for _, hash := range seq.hashes {
-		if err := writeBlob(ctx, s, store, hash, singleLeaf); err != nil {
+	for i, hash := range seq.hashes {
+		ranges := req.Ranges.At(uint64(i) + 1)
+		if ranges.IsEmpty() {
+			continue
+		}
+		if ranges.IsAll() {
+			err = writeBlob(ctx, s, store, hash, singleLeaf)
+		} else {
+			err = writeBlobRange(ctx, s, store, hash, ranges)
+		}
+		if err != nil {
 			return err
 		}
 	}

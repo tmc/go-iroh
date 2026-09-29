@@ -1,6 +1,7 @@
 package blobs
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -386,6 +387,102 @@ func TestGetHashSequenceBytes(t *testing.T) {
 		}
 	}
 	if err := <-errc; err != nil {
+		t.Fatalf("ServeBlob: %v", err)
+	}
+}
+
+func TestServeHashSequenceSelectedChildren(t *testing.T) {
+	data := [][]byte{
+		vectorData(0),
+		vectorData(1024),
+		vectorData(BlockSize),
+		vectorData(BlockSize + 1024),
+		vectorData(100000),
+	}
+	var hashes []Hash
+	blobs := make(map[Hash][]byte)
+	for _, b := range data {
+		hash := NewHash(b)
+		hashes = append(hashes, hash)
+		blobs[hash] = append([]byte(nil), b...)
+	}
+	seq := NewHashSequence(hashes)
+	root := NewHash(seq.Bytes())
+	blobs[root] = seq.Bytes()
+
+	// Sequence offset zero is the hash-sequence root. Request children one
+	// and three, as a resumed download would, without requesting the root.
+	ranges := ChunkRangesSeqFromRanges([]ChunkRanges{
+		RangeEmpty(),
+		RangeEmpty(), RangeAll(),
+		RangeEmpty(), RangeAll(),
+	})
+	store := mustStore(t, blobValues(blobs)...)
+	client, server := newTestBidiStreamPair()
+	errch := make(chan error, 1)
+	go func() {
+		errch <- ServeBlob(context.Background(), server, store)
+	}()
+	if _, err := client.Write(EncodeGetRequestBytes(NewGetRequest(root, ranges))); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+
+	r := bufio.NewReader(client)
+	for _, i := range []int{1, 3} {
+		got, err := DecodeBlobReader(hashes[i], r)
+		if err != nil {
+			t.Fatalf("decode child %d: %v", i, err)
+		}
+		if !bytes.Equal(got, data[i]) {
+			t.Fatalf("child %d = %d bytes, want %d", i, len(got), len(data[i]))
+		}
+	}
+	if _, err := r.ReadByte(); err != io.EOF {
+		t.Fatalf("response trailing data/error = %v, want EOF", err)
+	}
+	if err := <-errch; err != nil {
+		t.Fatalf("ServeBlob: %v", err)
+	}
+}
+
+func TestServeHashSequenceSelectedChildRange(t *testing.T) {
+	data := vectorData(3 * BlockSize)
+	hash := NewHash(data)
+	seq := NewHashSequence([]Hash{hash})
+	root := NewHash(seq.Bytes())
+
+	// Request the first complete BAO block of child zero, without the root.
+	ranges := ChunkRangesSeqFromRanges([]ChunkRanges{
+		RangeEmpty(), RangeChunks(0, BlockSize/ChunkSize),
+	})
+	store := mustStore(t, seq.Bytes(), data)
+	client, server := newTestBidiStreamPair()
+	errch := make(chan error, 1)
+	go func() {
+		errch <- ServeBlob(context.Background(), server, store)
+	}()
+	if _, err := client.Write(EncodeGetRequestBytes(NewGetRequest(root, ranges))); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+
+	var got bytes.Buffer
+	const length = BlockSize
+	if err := DecodeBlobRangeToWriter(hash, bufio.NewReader(client), 0, length, &got); err != nil {
+		t.Fatalf("decode child range: %v", err)
+	}
+	if !bytes.Equal(got.Bytes(), data[:length]) {
+		t.Fatal("decoded child range does not match requested bytes")
+	}
+	if _, err := client.Read(make([]byte, 1)); err != io.EOF {
+		t.Fatalf("response trailing data/error = %v, want EOF", err)
+	}
+	if err := <-errch; err != nil {
 		t.Fatalf("ServeBlob: %v", err)
 	}
 }
