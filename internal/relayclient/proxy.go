@@ -17,8 +17,9 @@ import (
 	"github.com/tmc/go-iroh/internal/proxyurl"
 )
 
-// dialProxy opens a CONNECT tunnel to target. TLS to the relay is performed by
-// the caller so relay authentication is derived from the tunneled TLS session.
+// dialProxy opens a CONNECT tunnel to target. relayTLS configures the TLS
+// connection to an https proxy. For a TLS relay, the caller performs the relay
+// handshake over the tunnel so relay authentication is derived from that session.
 func dialProxy(ctx context.Context, proxy *url.URL, target string, relayTLS *tls.Config) (net.Conn, error) {
 	if err := proxyurl.Validate(proxy); err != nil {
 		return nil, fmt.Errorf("invalid proxy URL")

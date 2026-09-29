@@ -106,10 +106,19 @@ func TestProxyURLReturnsCopy(t *testing.T) {
 }
 
 func ExampleProxyURL() {
-	proxyURL, _ := url.Parse("http://proxy.example:3128")
+	proxyURL, err := url.Parse("http://proxy.example:3128")
+	if err != nil {
+		panic(err)
+	}
 	proxy := ProxyURL(proxyURL)
-	target, _ := url.Parse("https://relay.example")
-	selected, _ := proxy(target)
+	target, err := url.Parse("https://relay.example")
+	if err != nil {
+		panic(err)
+	}
+	selected, err := proxy(target)
+	if err != nil {
+		panic(err)
+	}
 	fmt.Println(selected.Scheme, selected.Host)
 	// Output: http proxy.example:3128
 }
