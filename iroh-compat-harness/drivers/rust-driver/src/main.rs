@@ -5,6 +5,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use bao_tree::{
+    BlockSize, ChunkNum, ChunkRanges,
+    io::{outboard::PreOrderMemOutboard, sync::encode_ranges_validated},
+};
 use data_encoding::HEXLOWER;
 use iroh_base::{CustomAddr, EndpointAddr, SecretKey, TransportAddr};
 use iroh_tickets::{Ticket, endpoint::EndpointTicket};
@@ -29,6 +33,7 @@ struct Corpus {
     endpoint_ticket: TicketVector,
     custom_addr_tickets: Vec<CustomAddrTicketVector>,
     ip_tickets: Vec<IpTicketVector>,
+    bao: Vec<BaoVector>,
     pkarr: PkarrVector,
 }
 
@@ -123,6 +128,15 @@ struct IpTicketDecodeResult {
     addrs: Vec<String>,
     relays: Vec<String>,
     bytes: String,
+}
+
+#[derive(Serialize)]
+struct BaoVector {
+    size: u64,
+    name: &'static str,
+    ranges: Vec<u64>,
+    hash: String,
+    encoded: String,
 }
 
 #[derive(Serialize)]
@@ -544,6 +558,7 @@ fn write_corpus() -> Result<(), Box<dyn std::error::Error>> {
 
     let custom_addr_tickets = custom_addr_ticket_vectors(&ticket_key);
     let ip_tickets = ip_ticket_vectors(&ticket_key)?;
+    let bao = bao_vectors()?;
 
     let pkarr_bytes = signed_packet(
         &ticket_key,
@@ -561,7 +576,7 @@ fn write_corpus() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let corpus = Corpus {
-        schema: "go-iroh-l0/3",
+        schema: "go-iroh-l0/4",
         iroh: "1.3.0",
         keys,
         postcard_uint,
@@ -571,6 +586,7 @@ fn write_corpus() -> Result<(), Box<dyn std::error::Error>> {
         endpoint_ticket,
         custom_addr_tickets,
         ip_tickets,
+        bao,
         pkarr,
     };
     serde_json::to_writer_pretty(std::io::stdout(), &corpus)?;
@@ -707,6 +723,64 @@ fn ip_ticket_vectors(
             })
         })
         .collect()
+}
+
+// BAO_SIZES straddle the chunk (1024 bytes) and block (16 chunks) boundaries
+// and include multi-block blobs.
+const BAO_SIZES: &[u64] = &[0, 1, 1024, 1025, 16383, 16384, 16385, 100_000, 300_000];
+
+// bao_ranges lists the chunk ranges encoded for a blob of size bytes. Every
+// range except "all" selects part of a 16-chunk block, which is where an
+// iroh-blobs proof descends inside the block rather than sending it whole.
+fn bao_ranges(size: u64) -> Vec<(&'static str, ChunkRanges)> {
+    let last = ChunkNum::chunks(size).0.saturating_sub(1);
+    let mut ranges = vec![
+        (
+            "last-chunk",
+            ChunkRanges::from(ChunkNum(last)..ChunkNum(last + 1)),
+        ),
+        // iroh-blobs' ChunkRanges::last_chunk: a proof of the blob's size.
+        ("chunk-at-infinity", ChunkRanges::from(ChunkNum(u64::MAX)..)),
+        ("mid-block", ChunkRanges::from(ChunkNum(5)..ChunkNum(7))),
+        (
+            "two-spans-one-block",
+            ChunkRanges::from(ChunkNum(1)..ChunkNum(2))
+                | ChunkRanges::from(ChunkNum(4)..ChunkNum(6)),
+        ),
+        (
+            "crosses-block-boundary",
+            ChunkRanges::from(ChunkNum(14)..ChunkNum(18)),
+        ),
+    ];
+    // A whole multi-block blob is plain full-blob encoding, which other
+    // vectors already cover, and would add hundreds of kilobytes here.
+    if size <= 16_385 {
+        ranges.push(("all", ChunkRanges::all()));
+    }
+    ranges
+}
+
+// bao_vectors encodes each range as an iroh-blobs response body: the blob
+// size as a little-endian u64, then bao-tree's encoding with 16-chunk blocks.
+// The blob's byte i is i % 251.
+fn bao_vectors() -> Result<Vec<BaoVector>, Box<dyn std::error::Error>> {
+    let mut vectors = Vec::new();
+    for &size in BAO_SIZES {
+        let data: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+        let outboard = PreOrderMemOutboard::create(&data, BlockSize::from_chunk_log(4));
+        for (name, ranges) in bao_ranges(size) {
+            let mut encoded = size.to_le_bytes().to_vec();
+            encode_ranges_validated(&data[..], &outboard, &ranges, &mut encoded)?;
+            vectors.push(BaoVector {
+                size,
+                name,
+                ranges: ranges.boundaries().iter().map(|c| c.0).collect(),
+                hash: outboard.root.to_hex().to_string(),
+                encoded: HEXLOWER.encode(&encoded),
+            });
+        }
+    }
+    Ok(vectors)
 }
 
 // ip_ticket_decode reads Go-encoded tickets and reports what Rust decodes from
