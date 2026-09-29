@@ -132,6 +132,58 @@ wire changes whose evidence is a single matrix row rather than the whole table.
 Regenerating the report preserves everything from this heading to the end of the
 file.
 
+### v0.2.2
+
+Two methods added, two deprecated, and a set of fixes that bound what a
+remote peer can make an endpoint do or learn. Nothing was removed and no
+exported signature changed.
+
+`docs.MemoryStore` gained `InitialMessageInNamespace` and
+`ProcessMessageInNamespace`. `InitialMessage` and `ProcessMessage` are
+deprecated; they still compile and still reconcile across every namespace in
+the store, which is what the accepting side of a sync used to do after
+authorizing a single namespace. `docs.Handler` and live sync now scope each
+round to the negotiated namespace, and live sync no longer broadcasts inserts
+from namespaces its neighbors did not ask for. A nil `docs.Handler.Allow`
+still authorizes every peer for every namespace; that default is documented
+now, and changing it is planned for v0.3.0.
+
+Three docs changes are visible on the wire. A sync frame is capped at 16 MiB
+instead of 1 GiB, and the reader grows its buffer as bytes arrive rather than
+allocating the claimed length up front. The write side shares the constant,
+so a go-iroh peer never sends a frame it would reject. Remote entries dated
+more than `MaxTimestampFutureShift` ahead are now rejected on insert.
+
+relayserver sends a departure notice only to the peers the departing session
+sent to, not to every connected client. A client could otherwise learn the
+identity of every endpoint that disconnected by staying connected. Each
+session keeps a bounded set of destinations, cleared when full, so a client
+that talks to many peers may miss some notices; the per-departure cost drops
+from O(N) to O(k).
+
+The remaining fixes change no API. pkarr relay responses are read up to
+`MaxSignedPacketSize`, so an oversized body fails the length check instead
+of being buffered. After verifying a blob, the download paths check for
+trailing data by reading one byte rather than draining the stream. The
+socket's received-address cache is capped and emptied when full, since a
+sender varying its source address could otherwise grow it for the life of the
+socket; a miss costs one allocation, never a wrong address. irpc and gossip
+reject a frame length that does not fit in an `int`, which on 32-bit
+platforms became negative and passed the size check.
+
+`StreamListener` no longer stops when one peer's handshake is rejected by an
+`AfterHandshake` hook ([#25](https://github.com/tmc/go-iroh/issues/25),
+regression test from [#26](https://github.com/tmc/go-iroh/pull/26)). Errors
+scoped to one peer drop that peer and retry after a short pause; only a
+cancelled listener, a closed endpoint, or an endpoint without ALPNs ends it.
+
+Three gossip fixes, each a case where a subscriber heard a topic but never
+became anyone's neighbor in it. A Join, or a ForwardJoin carrying one, from a
+peer we had already answered went unanswered if that peer had dropped our
+answer, so its new subscription never saw `NeighborUp`. go-iroh now answers
+it, as upstream iroh-gossip does for a Join. Closing a topic's last subscription left
+its old neighbors in `Neighbors` and `IsJoined` after a resubscribe.
+
 ### v0.2.1
 
 Two struct fields added, several loss-recovery and path-selection behaviour
