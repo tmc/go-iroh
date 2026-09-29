@@ -169,7 +169,11 @@ func (l *StreamListener) run() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			conn, err := accepting.Connection(l.ctx)
+			ctx, admitted := l.ep.admissions.admit(l.ctx, accepting.qc)
+			conn, err := accepting.Connection(ctx)
+			if admitted() != nil {
+				return
+			}
 			if err != nil {
 				if l.ctx.Err() == nil && !errors.Is(err, ErrConnClosedDuringHandshake) {
 					l.logger.Warn("iroh: stream listener rejected peer", "err", err)

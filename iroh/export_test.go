@@ -1,4 +1,5 @@
 package iroh
 
-// AcceptBacklog is the bound on Accept's handshakes in flight or waiting.
-const AcceptBacklog = acceptBacklog
+// SetMaxAdmitting sets how many incoming connections e admits at once. Call it
+// before e starts accepting.
+func SetMaxAdmitting(e *Endpoint, n int) { e.admissions.max = n }

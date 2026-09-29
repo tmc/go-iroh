@@ -155,6 +155,13 @@ func testAcceptIsolation(t *testing.T, run acceptServer, mb misbehavior) {
 	time.Sleep(100 * time.Millisecond)
 	synctest.Wait()
 
+	acceptedWithin(t, good, srv, alpn, accepted)
+}
+
+// acceptedWithin checks that good can connect to srv and open a stream, and
+// that srv accepts it, within isolationBudget.
+func acceptedWithin(t *testing.T, good, srv *irohtest.Peer, alpn string, accepted <-chan key.EndpointID) {
+	t.Helper()
 	irohtest.Within(t, isolationBudget, func(ctx context.Context) error {
 		conn, err := good.Connect(ctx, srv.Addr(), alpn)
 		if err != nil {
@@ -266,93 +273,84 @@ func TestAcceptStaleHandshake(t *testing.T) {
 	}
 }
 
-// TestAcceptBacklog pins that Accept keeps at most [iroh.AcceptBacklog]
-// handshakes in flight or waiting. When stalled peers hold every slot, later
-// peers wait for a slot rather than being dropped, and are accepted once one
-// frees.
-func TestAcceptBacklog(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		const alpn = "iroh-backlog/0"
-		const flood = iroh.AcceptBacklog + 8
-		release := make(chan struct{})
-		n := irohtest.NewNet(t)
-		var bad []*irohtest.Peer
-		for range flood {
-			bad = append(bad, n.Peer())
-		}
-		good := n.Peer()
-		stall := irohtest.StallFrom(release, bad...)
-		var mu sync.Mutex
-		stalled, maxStalled := 0, 0
-		hooks := irohtest.Hooks{After: func(ctx context.Context, conn *iroh.Conn) error {
-			mu.Lock()
-			stalled++
-			maxStalled = max(maxStalled, stalled)
-			mu.Unlock()
-			defer func() {
-				mu.Lock()
-				stalled--
-				mu.Unlock()
-			}()
-			return stall.After(ctx, conn)
-		}}
-		srv := n.Peer(iroh.WithALPNs(alpn), iroh.WithHooks(hooks))
-
-		accepted := make(chan key.EndpointID, flood+1)
-		go func() {
-			for {
-				conn, err := srv.Accept(context.Background())
-				if errors.Is(err, iroh.ErrEndpointClosed) {
-					return
-				}
-				if err != nil {
-					continue
-				}
-				accepted <- conn.RemoteID()
-			}
-		}()
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		// Stagger the dials: a burst of handshakes arriving at one instant
-		// overflows the server's receive queue, and the lost datagrams cost
-		// seconds of retransmission.
-		for _, p := range bad {
-			go p.Connect(ctx, srv.Addr(), alpn)
-			time.Sleep(5 * time.Millisecond)
-		}
-		time.Sleep(time.Second)
-		synctest.Wait()
-		mu.Lock()
-		got := maxStalled
-		mu.Unlock()
-		if got != iroh.AcceptBacklog {
-			t.Fatalf("stalled handshakes = %d, want %d", got, iroh.AcceptBacklog)
-		}
-
-		close(release)
-		want := map[key.EndpointID]bool{good.ID(): true}
-		for _, p := range bad {
-			want[p.ID()] = true
-		}
-		irohtest.Within(t, isolationBudget, func(ctx context.Context) error {
-			if _, err := good.Connect(ctx, srv.Addr(), alpn); err != nil {
-				return err
-			}
-			for len(want) > 0 {
-				select {
-				case id := <-accepted:
-					delete(want, id)
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-			}
-			return nil
+// TestAdmissionsAbandonOldest pins that every accept path admits at most
+// the endpoint's maximum of handshakes at once, and that a new peer abandons
+// the oldest pending one rather than waiting behind it: peers stalled in a
+// hook cannot keep a good peer out, however many there are.
+func TestAdmissionsAbandonOldest(t *testing.T) {
+	for _, srv := range acceptServers {
+		t.Run(srv.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				testAdmissionsAbandonOldest(t, srv.run)
+			})
 		})
+	}
+}
+
+func testAdmissionsAbandonOldest(t *testing.T, run acceptServer) {
+	const (
+		alpn  = "iroh-admit/0"
+		limit = 4
+		flood = 3 * limit
+	)
+	release := make(chan struct{})
+	defer close(release)
+	n := irohtest.NewNet(t)
+	var bad []*irohtest.Peer
+	for range flood {
+		bad = append(bad, n.Peer())
+	}
+	good := n.Peer()
+	stall := irohtest.StallFrom(release, bad...)
+	var mu sync.Mutex
+	stalled, maxStalled := 0, 0
+	hooks := irohtest.Hooks{After: func(ctx context.Context, conn *iroh.Conn) error {
 		mu.Lock()
-		defer mu.Unlock()
-		if maxStalled > iroh.AcceptBacklog {
-			t.Fatalf("max stalled handshakes = %d, want <= %d", maxStalled, iroh.AcceptBacklog)
+		stalled++
+		maxStalled = max(maxStalled, stalled)
+		mu.Unlock()
+		defer func() {
+			mu.Lock()
+			stalled--
+			mu.Unlock()
+		}()
+		return stall.After(ctx, conn)
+	}}
+	srv := n.Peer(iroh.WithALPNs(alpn), iroh.WithHooks(hooks))
+	iroh.SetMaxAdmitting(srv.Endpoint, limit)
+	accepted := make(chan key.EndpointID, flood+1)
+	run(t, srv.Endpoint, alpn, accepted)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	conns := make(chan *iroh.Conn, flood)
+	for _, p := range bad {
+		go func() {
+			conn, err := p.Connect(ctx, srv.Addr(), alpn)
+			if err != nil {
+				conn = nil
+			}
+			conns <- conn
+		}()
+	}
+	time.Sleep(time.Second)
+	synctest.Wait()
+
+	abandoned := 0
+	for range flood {
+		conn := <-conns
+		if conn == nil || conn.Context().Err() != nil {
+			abandoned++
 		}
-	})
+	}
+	if want := flood - limit; abandoned != want {
+		t.Errorf("abandoned bad peers = %d, want %d", abandoned, want)
+	}
+
+	acceptedWithin(t, good, srv, alpn, accepted)
+	mu.Lock()
+	defer mu.Unlock()
+	if maxStalled > limit {
+		t.Fatalf("max stalled handshakes = %d, want <= %d", maxStalled, limit)
+	}
 }
