@@ -8,6 +8,13 @@
       "detail": "Measured at released upstream 1.2.0 (17c0612f): Go accepted 6/6 Rust tickets and Rust accepted 6/6 Go tickets. Upstream moved to go-iroh's length-prefixed byte format; no go-iroh codec change is required. The superseded 1.0.3 enum encoding is kept as a frozen negative fixture in vectors/legacy_custom_addr.json, which go-iroh must keep rejecting."
     },
     {
+      "surface": "IPv6 addresses in endpoint tickets",
+      "tier": "stable",
+      "upstream_version": "1.3 (1.3.0)",
+      "status": "observed-incompatible",
+      "detail": "go-iroh writes a flowinfo and a scope id varint after every IPv6 port, and reads them back unconditionally (endpointticket/ticket.go, since 955f0117). iroh-tickets serializes a SocketAddrV6 through serde as (ip, port) only. Go therefore misreads every Rust ticket that holds an IPv6 address, and Rust rejects a Go ticket in which an IPv6 address is not the last entry. The vectors/ip-ticket-* scenarios expect fail until go-iroh writes and reads (ip, port) only."
+    },
+    {
       "surface": "Non-canonical varints",
       "tier": "stable",
       "upstream_version": "1.2 (1.2.0)",

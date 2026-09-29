@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
+	"slices"
 	"time"
 
 	"github.com/tmc/go-iroh/endpointticket"
@@ -27,9 +29,14 @@ var customAddrScenarios = []string{
 	"vectors/custom-addr-ticket-go-to-rust",
 }
 
+var ipTicketScenarios = []string{
+	"vectors/ip-ticket-rust-to-go",
+	"vectors/ip-ticket-go-to-rust",
+}
+
 const canonicalScenario = "vectors/postcard-varint-strictness"
 
-var vectorScenarios = append(append(append([]string(nil), ordinaryVectorScenarios...), customAddrScenarios...), canonicalScenario)
+var vectorScenarios = slices.Concat(ordinaryVectorScenarios, customAddrScenarios, ipTicketScenarios, []string{canonicalScenario})
 
 func RunVectorCorpus(bin, corpus, version string) []Cell {
 	if bin == "" {
@@ -67,6 +74,7 @@ func RunVectorCorpus(bin, corpus, version string) []Cell {
 		cells[i].DurationMS = duration
 	}
 	cells = append(cells, customAddrCells(bin, want, version, digest, pid, peer, duration)...)
+	cells = append(cells, ipTicketCells(bin, want, version, digest, pid, peer, duration)...)
 	cells = append(cells, canonicalVarintCell(bin, want, version, digest, peer))
 	return cells
 }
@@ -210,4 +218,162 @@ func customAddrMatches(ticket endpointticket.Ticket, length int) bool {
 		}
 	}
 	return false
+}
+
+type ipTicketCorpus struct {
+	Tickets []ipTicket `json:"ip_tickets"`
+}
+
+type ipTicket struct {
+	Name    string   `json:"name"`
+	Addrs   []string `json:"addrs"`
+	Relay   string   `json:"relay"`
+	Encoded string   `json:"encoded"`
+	Bytes   string   `json:"bytes"`
+}
+
+type ipTicketDecodeRequest struct {
+	Name    string `json:"name"`
+	Encoded string `json:"encoded"`
+}
+
+type ipTicketDecodeResult struct {
+	Name   string   `json:"name"`
+	Error  *string  `json:"error"`
+	Addrs  []string `json:"addrs"`
+	Relays []string `json:"relays"`
+	Bytes  string   `json:"bytes"`
+}
+
+// ipTicketCells checks endpoint tickets carrying IPv6 addresses in both
+// directions. Rust to Go: go-iroh decodes each corpus ticket to the same
+// addresses and relay. Go to Rust: Rust decodes each Go-encoded ticket to the
+// same addresses and relay and re-encodes it to Go's bytes.
+func ipTicketCells(bin string, corpus []byte, version, digest string, corpusPID int, peer string, duration int64) []Cell {
+	var vectors ipTicketCorpus
+	if err := json.Unmarshal(corpus, &vectors); err != nil || len(vectors.Tickets) == 0 {
+		return vectorCellsFor(ipTicketScenarios, version, SetupError, "decode IP ticket vectors", digest, corpusPID, peer)
+	}
+	names := make([]string, len(vectors.Tickets))
+	for i, v := range vectors.Tickets {
+		names[i] = v.Name
+	}
+
+	var goRejected []string
+	for _, v := range vectors.Tickets {
+		ticket, err := endpointticket.Parse(v.Encoded)
+		if err != nil || !ipTicketMatches(ticket.Addr(), v) {
+			goRejected = append(goRejected, v.Name)
+		}
+	}
+	rustToGo := Cell{
+		Scenario: ipTicketScenarios[0], Iroh: version, Result: verdictFor(goRejected),
+		Detail: fmt.Sprintf("Go decoded %d/%d Rust IP tickets to the same addresses", len(vectors.Tickets)-len(goRejected), len(vectors.Tickets)),
+		Peer:   peer, PeerPID: corpusPID, PeerDigest: digest, DurationMS: duration,
+		Evidence: map[string]any{"names": names, "mismatched": goRejected},
+	}
+	setup := func(detail string, pid int) []Cell {
+		return []Cell{rustToGo, {Scenario: ipTicketScenarios[1], Iroh: version, Result: SetupError, Detail: detail, Peer: peer, PeerPID: pid, PeerDigest: digest}}
+	}
+
+	requests := make([]ipTicketDecodeRequest, len(vectors.Tickets))
+	goBytes := make([]string, len(vectors.Tickets))
+	for i, v := range vectors.Tickets {
+		ticket, err := goIPTicket(v)
+		if err != nil {
+			return setup(fmt.Sprintf("build Go IP ticket %s: %v", v.Name, err), 0)
+		}
+		requests[i] = ipTicketDecodeRequest{Name: v.Name, Encoded: ticket.String()}
+		goBytes[i] = fmt.Sprintf("%x", ticket.EncodeBytes())
+	}
+	input, err := json.Marshal(requests)
+	if err != nil {
+		return setup("encode Go IP tickets", 0)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "ip-ticket-decode")
+	cmd.Stdin = bytes.NewReader(input)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	start := time.Now()
+	if err := cmd.Start(); err != nil {
+		return setup(fmt.Sprintf("start Rust IP ticket decoder: %v", err), 0)
+	}
+	pid := cmd.Process.Pid
+	if err := cmd.Wait(); err != nil {
+		return setup(fmt.Sprintf("Rust IP ticket decoder: %v: %s", err, stderr.String()), pid)
+	}
+	var results []ipTicketDecodeResult
+	if err := json.Unmarshal(stdout.Bytes(), &results); err != nil || len(results) != len(requests) {
+		return setup("decode Rust IP ticket results", pid)
+	}
+	var rustRejected []string
+	rustErrors := map[string]string{}
+	for i, r := range results {
+		v := vectors.Tickets[i]
+		switch {
+		case r.Error != nil:
+			rustErrors[v.Name] = *r.Error
+			rustRejected = append(rustRejected, v.Name)
+		case r.Bytes != goBytes[i] || !slices.Equal(r.Addrs, slices.Sorted(slices.Values(v.Addrs))) || !slices.Equal(r.Relays, wantRelays(v)):
+			rustRejected = append(rustRejected, v.Name)
+		}
+	}
+	goToRust := Cell{
+		Scenario: ipTicketScenarios[1], Iroh: version, Result: verdictFor(rustRejected),
+		Detail: fmt.Sprintf("Rust decoded %d/%d Go IP tickets to the same addresses and bytes", len(results)-len(rustRejected), len(results)),
+		Peer:   peer, PeerPID: pid, PeerDigest: digest, DurationMS: time.Since(start).Milliseconds(),
+		Evidence: map[string]any{"names": names, "mismatched": rustRejected, "errors": rustErrors},
+	}
+	return []Cell{rustToGo, goToRust}
+}
+
+func verdictFor(mismatched []string) Verdict {
+	if len(mismatched) == 0 {
+		return Pass
+	}
+	return Fail
+}
+
+func wantRelays(v ipTicket) []string {
+	if v.Relay == "" {
+		return []string{}
+	}
+	return []string{v.Relay}
+}
+
+func goIPTicket(v ipTicket) (endpointticket.Ticket, error) {
+	var seed [key.SeedSize]byte
+	for i := range seed {
+		seed[i] = 0x2a
+	}
+	addr := netaddr.NewEndpointAddr(key.NewSecretKey(seed).Public().EndpointID())
+	for _, s := range v.Addrs {
+		ap, err := netip.ParseAddrPort(s)
+		if err != nil {
+			return endpointticket.Ticket{}, err
+		}
+		addr = addr.WithIP(ap)
+	}
+	if v.Relay != "" {
+		u, err := netaddr.ParseRelayURL(v.Relay)
+		if err != nil {
+			return endpointticket.Ticket{}, err
+		}
+		addr = addr.WithRelayURL(u)
+	}
+	return endpointticket.New(addr), nil
+}
+
+func ipTicketMatches(addr netaddr.EndpointAddr, v ipTicket) bool {
+	addrs := []string{}
+	for _, ap := range addr.IPAddrs() {
+		addrs = append(addrs, ap.String())
+	}
+	relays := []string{}
+	for _, u := range addr.RelayURLs() {
+		relays = append(relays, u.String())
+	}
+	return slices.Equal(slices.Sorted(slices.Values(addrs)), slices.Sorted(slices.Values(v.Addrs))) && slices.Equal(relays, wantRelays(v))
 }
