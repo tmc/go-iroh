@@ -329,6 +329,15 @@ func TestDiscoveryLoopback(t *testing.T) {
 	data := dns.NewEndpointData(netaddr.IPAddr{Addr: server.LocalAddr()})
 	serverDiscovery.Publish(data)
 
+	// The server must be subscribed before the client's Join arrives: a
+	// message for a topic an endpoint has not joined is dropped, and the
+	// client does not join again.
+	serverTopic, err := serverGossip.Subscribe(ctx, topic, nil)
+	if err != nil {
+		t.Fatalf("subscribe server: %v", err)
+	}
+	defer serverTopic.Close()
+
 	startErr := make(chan error, 2)
 	go func() { startErr <- serverDiscovery.Start(ctx) }()
 	go func() { startErr <- clientDiscovery.Start(ctx) }()
