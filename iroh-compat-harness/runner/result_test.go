@@ -126,7 +126,7 @@ func TestMarkdownNamesRustCounterpart(t *testing.T) {
 		"1.2 (1.2.0)",
 		"Every scenario is measured against the released 1.0 (1.0.3) pin.",
 		"The released 1.2 (1.2.0) column is partial: 1 of 2 scenarios are measured and the rest remain untested for 1.2.",
-		"| echo | stable | upstream CLI | pass [2] | pass [3] | — |",
+		"| echo | stable | upstream CLI | pass [2] | pass [3] |",
 		"fail (expected)",
 		"Rust accepted 0/1 datagrams",
 		"### Peers",

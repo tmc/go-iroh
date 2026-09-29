@@ -312,7 +312,7 @@ func (r *Report) Markdown() []byte {
 	b.WriteString("- `unsupported` means go-iroh lacks the feature, not that the feature is broken.\n")
 	b.WriteString("- `setup-error` means the environment could not run the scenario, so it makes no compatibility claim.\n")
 	b.WriteString("- `—` means the scenario was not run for that version.\n\n")
-	b.WriteString("Released columns are compatibility claims against a pinned Rust release. A `-pre` column is expected-enforced evidence against a pinned upstream commit, not a claim about a shipped version. The `tip` column is a moving, advisory signal refreshed nightly and is never a committed compatibility claim. Experimental rows may change wire format to track upstream without a major go-iroh version bump.\n\n")
+	b.WriteString("Released columns are compatibility claims against a pinned Rust release. A `-pre` column is expected-enforced evidence against a pinned upstream commit, not a claim about a shipped version. Experimental rows may change wire format to track upstream without a major go-iroh version bump.\n\n")
 	b.WriteString("The Rust counterpart is either an **upstream CLI**, a program shipped by upstream iroh and built from a pinned upstream commit, or a **Rust test driver**, a purpose-built peer linked to the pinned upstream libraries. CLI results have the strongest black-box provenance; test-driver results cover protocol behavior that upstream CLIs do not expose. Where an upstream CLI's own release does not target the pinned iroh train, or where building it required any deviation from upstream sources, that is recorded against the peer in the **Peers** table; read those notes as part of the claim.\n\n")
 	b.WriteString("Matrix cells reference the **Peers** table below. Each peer entry records the Rust executable and its SHA-256 digest. The machine-readable result also records the peer process ID, so a pass cannot be emitted without evidence of a real Rust process.\n\n")
 	b.WriteString("## Compatibility envelope\n\n")
@@ -326,11 +326,11 @@ func (r *Report) Markdown() []byte {
 	for _, pin := range r.Pins {
 		fmt.Fprintf(&b, " %s |", pin.label())
 	}
-	b.WriteString(" tip (advisory) |\n|---|---|---|")
+	b.WriteString("\n|---|---|---|")
 	for range r.Pins {
 		b.WriteString(":---:|")
 	}
-	b.WriteString(":---:|\n")
+	b.WriteString("\n")
 	byScenario := make(map[string]map[string]Cell)
 	firstCell := make(map[string]Cell)
 	var scenarios []string
@@ -353,7 +353,7 @@ func (r *Report) Markdown() []byte {
 			}
 			fmt.Fprintf(&b, " %s |", formatAdjudication(cell, peerRefs[cell.Peer+"\x00"+cell.Iroh]))
 		}
-		b.WriteString(" — |\n")
+		b.WriteString("\n")
 	}
 	b.WriteString("\n" + r.coverageNote(scenarios, byScenario))
 	noteIndex := make(map[string]int)
@@ -416,8 +416,7 @@ func (r *Report) coverageNote(scenarios []string, byScenario map[string]map[stri
 			fmt.Fprintf(&b, "The released %s column is partial: %d of %d scenarios are measured and the rest remain untested for %s. ", pin.label(), measured, len(scenarios), pin.Train)
 		}
 	}
-	b.WriteString("The `tip` column is populated only in the nightly advisory report.\n")
-	return b.String()
+	return strings.TrimSpace(b.String()) + "\n"
 }
 
 func (p Pin) label() string {
