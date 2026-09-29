@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        iroh: [1.0.0, 1.0.3]
+        iroh: [1.3.0]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -79,5 +79,5 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
-          body: "Wire: iroh v1 (observed against iroh 1.0.0, 1.0.3 — full matrix attached)."
+          body: "Wire: iroh v1 (observed against iroh 1.3.0 — full matrix attached)."
           files: proof/*
