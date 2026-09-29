@@ -45,8 +45,8 @@ make vectors       # regenerate with Rust and require byte identity
 go test ./vectors  # verify the committed corpus with Go only
 ```
 
-`TestIPTicketVectors` and `TestBaoVectors` fail until go-iroh fixes the bugs
-they cover; `make parity-native` skips them and reports the matching
+`TestBaoVectors` fails until go-iroh fixes the bug
+it covers; `make parity-native` skips it and reports the matching
 `vectors/` scenarios against their expected verdicts instead.
 
 The image builds reuse cargo's registry and target directories through BuildKit

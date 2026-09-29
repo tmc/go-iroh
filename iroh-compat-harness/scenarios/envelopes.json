@@ -11,8 +11,8 @@
       "surface": "IPv6 addresses in endpoint tickets",
       "tier": "stable",
       "upstream_version": "1.3 (1.3.0)",
-      "status": "observed-incompatible",
-      "detail": "go-iroh writes a flowinfo and a scope id varint after every IPv6 port, and reads them back unconditionally (endpointticket/ticket.go, since 955f0117). iroh-tickets serializes a SocketAddrV6 through serde as (ip, port) only. Go therefore misreads every Rust ticket that holds an IPv6 address, and Rust rejects a Go ticket in which an IPv6 address is not the last entry. The vectors/ip-ticket-* scenarios expect fail until go-iroh writes and reads (ip, port) only."
+      "status": "verified-interop",
+      "detail": "Measured at released upstream 1.3.0 (0072d7d8): Go decoded 5/5 Rust tickets holding IPv6 addresses and Rust decoded 5/5 Go tickets, re-encoding them to Go's bytes. go-iroh once wrote a flowinfo and a scope id varint after every IPv6 port (endpointticket/ticket.go, since 955f0117); iroh-tickets serializes a SocketAddrV6 through serde as (ip, port) only, and go-iroh now writes and reads that form."
     },
     {
       "surface": "Blob requests for hash sequence children",
