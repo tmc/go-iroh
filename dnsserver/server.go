@@ -30,16 +30,30 @@ const (
 )
 
 type storedPacket struct {
+	keyLabel string
 	payload  []byte
 	packet   *dns.SignedPacket
 	storedAt time.Time
+
+	// prev and next link the packet into Server.order.
+	prev, next *storedPacket
 }
 
 // Server stores pkarr relay payloads in memory and serves them over HTTP and
 // DNS. It is safe for concurrent use.
+//
+// The store holds at most 10,000 records and drops a record 7 days after it
+// was last stored. Storing a record first drops expired records and then, if
+// the store is full, the record stored least recently; storing a newer packet
+// for a key replaces the old one and counts as storing it again.
+// The cap is global, not per publisher: anyone who can PUT 10,000 fresh keys
+// within the retention window displaces every other record, and those records
+// stay gone until their owners publish again. Deployments facing untrusted
+// publishers should rate limit PUTs in front of the server.
 type Server struct {
 	mu         sync.Mutex
-	store      map[string]storedPacket
+	store      map[string]*storedPacket
+	order      storedPacket // sentinel; order.next is the least recently stored
 	maxPackets int
 	retention  time.Duration
 	now        func() time.Time
@@ -54,12 +68,15 @@ type dnsMetrics struct {
 
 // New returns an empty DNS server.
 func New() *Server {
-	return &Server{
-		store:      make(map[string]storedPacket),
+	s := &Server{
+		store:      make(map[string]*storedPacket),
 		maxPackets: maxStoredPackets,
 		retention:  packetRetention,
 		now:        time.Now,
 	}
+	s.order.prev = &s.order
+	s.order.next = &s.order
+	return s
 }
 
 // Snapshot returns the server's counter snapshot for [metrics.Registry].
@@ -224,8 +241,8 @@ func (s *Server) get(keyLabel string) ([]byte, bool) {
 	if !ok {
 		return nil, false
 	}
-	if s.now().Sub(stored.storedAt) >= s.retention {
-		delete(s.store, keyLabel)
+	if s.expired(stored, s.now()) {
+		s.remove(stored)
 		return nil, false
 	}
 	return bytes.Clone(stored.payload), true
@@ -244,38 +261,40 @@ func (s *Server) put(keyLabel string, payload []byte, packet *dns.SignedPacket) 
 		if old.packet.MoreRecentThan(packet) {
 			return false
 		}
-		s.store[keyLabel] = storedPacket{bytes.Clone(payload), packet, now}
-		return true
+		s.remove(old)
 	}
 
-	s.evictExpired(now)
-	if len(s.store) >= s.maxPackets {
-		s.evictOldest()
+	// Records are ordered by storedAt, so the expired ones are at the front.
+	for oldest := s.order.next; oldest != &s.order && s.expired(oldest, now); oldest = s.order.next {
+		s.remove(oldest)
 	}
-	s.store[keyLabel] = storedPacket{bytes.Clone(payload), packet, now}
+	if len(s.store) >= s.maxPackets {
+		s.remove(s.order.next)
+	}
+	stored := &storedPacket{
+		keyLabel: keyLabel,
+		payload:  bytes.Clone(payload),
+		packet:   packet,
+		storedAt: now,
+		prev:     s.order.prev,
+		next:     &s.order,
+	}
+	stored.prev.next = stored
+	s.order.prev = stored
+	s.store[keyLabel] = stored
 	return true
 }
 
-func (s *Server) evictExpired(now time.Time) {
-	for keyLabel, packet := range s.store {
-		if now.Sub(packet.storedAt) >= s.retention {
-			delete(s.store, keyLabel)
-		}
-	}
+func (s *Server) expired(stored *storedPacket, now time.Time) bool {
+	return now.Sub(stored.storedAt) >= s.retention
 }
 
-func (s *Server) evictOldest() {
-	var oldestKey string
-	var oldest time.Time
-	for keyLabel, packet := range s.store {
-		if oldestKey == "" || packet.storedAt.Before(oldest) || packet.storedAt.Equal(oldest) && keyLabel < oldestKey {
-			oldestKey = keyLabel
-			oldest = packet.storedAt
-		}
-	}
-	if oldestKey != "" {
-		delete(s.store, oldestKey)
-	}
+// remove deletes stored from the store and from s.order.
+func (s *Server) remove(stored *storedPacket) {
+	stored.prev.next = stored.next
+	stored.next.prev = stored.prev
+	stored.prev, stored.next = nil, nil
+	delete(s.store, stored.keyLabel)
 }
 
 func packetFromRelayPayload(keyLabel string, payload []byte) (*dns.SignedPacket, error) {

@@ -3,10 +3,13 @@ package dnsserver
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -113,37 +116,133 @@ func TestServerPutRejectsExpiredPacket(t *testing.T) {
 	}
 }
 
-func TestServerEvictsStoredPackets(t *testing.T) {
-	now := time.Unix(1, 0)
+func TestServerEviction(t *testing.T) {
+	type op struct {
+		name string // "put", "get", or "wait"
+		key  int
+		d    time.Duration
+	}
+	put := func(key int) op { return op{name: "put", key: key} }
+	get := func(key int) op { return op{name: "get", key: key} }
+	wait := func(d time.Duration) op { return op{name: "wait", d: d} }
+	tests := []struct {
+		name string
+		ops  []op
+		want []int // stored keys, least recently stored first
+	}{
+		{"under cap", []op{put(0), put(1)}, []int{0, 1}},
+		{"oldest evicted first", []op{put(0), put(1), put(2), put(3), put(4)}, []int{2, 3, 4}},
+		{"replace refreshes position", []op{put(0), put(1), put(2), put(0), put(3)}, []int{2, 0, 3}},
+		{"replace at cap evicts nothing", []op{put(0), put(1), put(2), put(1)}, []int{0, 2, 1}},
+		{"expired dropped on admit", []op{put(0), put(1), wait(30 * time.Minute), put(2), wait(30 * time.Minute), put(3)}, []int{2, 3}},
+		{"expired dropped before live", []op{put(0), wait(30 * time.Minute), put(1), put(2), wait(30 * time.Minute), put(3)}, []int{1, 2, 3}},
+		{"get drops expired", []op{put(0), put(1), wait(time.Hour), get(1)}, []int{0}},
+		{"get keeps live", []op{put(0), put(1), wait(time.Hour - time.Second), get(0)}, []int{0, 1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Unix(1, 0)
+			srv := New()
+			srv.maxPackets = 3
+			srv.retention = time.Hour
+			srv.now = func() time.Time { return now }
+			var keys []string
+			var packets []*dns.SignedPacket
+			for i := range 5 {
+				var seed [32]byte
+				seed[0] = byte(i + 1)
+				sk, packet := testPacketWithData(t, key.NewSecretKey(seed), "hello")
+				keys = append(keys, sk.Public().EndpointID().Z32())
+				packets = append(packets, packet)
+			}
+			for _, op := range tt.ops {
+				switch op.name {
+				case "put":
+					if !srv.put(keys[op.key], packets[op.key].RelayPayload(), packets[op.key]) {
+						t.Fatalf("put(%d) rejected", op.key)
+					}
+				case "get":
+					srv.get(keys[op.key])
+				case "wait":
+					now = now.Add(op.d)
+				}
+			}
+			var got []int
+			for p := srv.order.next; p != &srv.order; p = p.next {
+				got = append(got, slices.Index(keys, p.keyLabel))
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("stored keys = %v, want %v", got, tt.want)
+			}
+			if len(srv.store) != len(got) {
+				t.Errorf("len(store) = %d, want %d", len(srv.store), len(got))
+			}
+		})
+	}
+}
+
+// TestServerFloodDisplacesRecords pins the documented global cap: one client
+// publishing cap fresh keys displaces records other clients stored earlier,
+// and later publishers are still admitted.
+func TestServerFloodDisplacesRecords(t *testing.T) {
 	srv := New()
-	srv.maxPackets = 2
-	srv.retention = time.Hour
-	srv.now = func() time.Time { return now }
-
-	var keys []string
-	for i := range 3 {
-		var seed [32]byte
-		seed[0] = byte(i + 1)
-		sk, packet := testPacketWithData(t, key.NewSecretKey(seed), "hello")
+	srv.maxPackets = 16
+	put := func(t *testing.T, remote string, seed byte, n uint32) string {
+		t.Helper()
+		var s [32]byte
+		s[0] = seed
+		binary.BigEndian.PutUint32(s[1:], n)
+		sk, packet := testPacketWithData(t, key.NewSecretKey(s), "hello")
 		keyLabel := sk.Public().EndpointID().Z32()
-		keys = append(keys, keyLabel)
-		if !srv.put(keyLabel, packet.RelayPayload(), packet) {
-			t.Fatal("put rejected a new packet")
+		req := httptest.NewRequest(http.MethodPut, "/pkarr/"+keyLabel, bytes.NewReader(packet.RelayPayload()))
+		req.RemoteAddr = remote
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, req)
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("PUT from %s status = %d, want %d", remote, w.Code, http.StatusNoContent)
 		}
-		now = now.Add(time.Second)
+		return keyLabel
 	}
-	if _, ok := srv.get(keys[0]); ok {
-		t.Fatal("oldest packet was not evicted")
+	before := put(t, "192.0.2.1:4000", 1, 0)
+	for n := range uint32(srv.maxPackets) {
+		put(t, "198.51.100.7:5000", 2, n)
 	}
-	for _, keyLabel := range keys[1:] {
-		if _, ok := srv.get(keyLabel); !ok {
-			t.Fatalf("packet %q was evicted", keyLabel)
-		}
+	after := put(t, "192.0.2.2:4000", 3, 0)
+	if _, ok := srv.get(before); ok {
+		t.Error("record stored before the flood survived it")
 	}
+	if _, ok := srv.get(after); !ok {
+		t.Error("record stored after the flood was not admitted")
+	}
+	if len(srv.store) != srv.maxPackets {
+		t.Errorf("len(store) = %d, want %d", len(srv.store), srv.maxPackets)
+	}
+}
 
-	now = now.Add(time.Hour)
-	if _, ok := srv.get(keys[2]); ok {
-		t.Fatal("expired packet was not evicted")
+// BenchmarkServerPutFull measures admitting a fresh key into a store that is
+// already at its cap, so that every put evicts a record.
+func BenchmarkServerPutFull(b *testing.B) {
+	for _, size := range []int{1_000, 10_000, 100_000} {
+		b.Run(fmt.Sprint(size), func(b *testing.B) {
+			now := time.Unix(1, 0)
+			srv := New()
+			srv.maxPackets = size
+			srv.now = func() time.Time { return now }
+			_, packet := testPacketWithData(b, testSecretKey(b), "hello")
+			payload := packet.RelayPayload()
+			keys := make([]string, size+b.N)
+			for i := range keys {
+				keys[i] = fmt.Sprint("key", i)
+			}
+			for _, keyLabel := range keys[:size] {
+				srv.put(keyLabel, payload, packet)
+			}
+			b.ResetTimer()
+			for _, keyLabel := range keys[size:] {
+				now = now.Add(time.Microsecond)
+				srv.put(keyLabel, payload, packet)
+			}
+		})
 	}
 }
 
@@ -216,7 +315,7 @@ func testPacket(t *testing.T) (key.SecretKey, *dns.SignedPacket) {
 	return testPacketWithData(t, testSecretKey(t), "hello")
 }
 
-func testSecretKey(t *testing.T) key.SecretKey {
+func testSecretKey(t testing.TB) key.SecretKey {
 	t.Helper()
 	sk, err := key.ParseSecretKey("vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia")
 	if err != nil {
@@ -225,7 +324,7 @@ func testSecretKey(t *testing.T) key.SecretKey {
 	return sk
 }
 
-func testPacketWithData(t *testing.T, sk key.SecretKey, data string) (key.SecretKey, *dns.SignedPacket) {
+func testPacketWithData(t testing.TB, sk key.SecretKey, data string) (key.SecretKey, *dns.SignedPacket) {
 	t.Helper()
 	userData, err := dns.NewUserData(data)
 	if err != nil {
