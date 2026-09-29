@@ -67,7 +67,8 @@ func TestDiscoveryPeerDataRustVectors(t *testing.T) {
 
 // TestDiscoveryPeersBounded checks that a flood of peer data under distinct
 // identities, which any topic member can send, cannot grow the discovery
-// cache without bound or evict the local endpoint's own entry.
+// cache without bound or evict the local endpoint's own entry or a recently
+// updated peer.
 func TestDiscoveryPeersBounded(t *testing.T) {
 	self := key.UncheckedEndpointID([32]byte{0xff})
 	d := New(self)
@@ -76,6 +77,9 @@ func TestDiscoveryPeersBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// kept is updated as often as new identities arrive, so it is never
+	// the least recently updated.
+	kept := key.UncheckedEndpointID([32]byte{0xfe})
 	const count = 4 * discoveryPeerCap
 	var last key.EndpointID
 	for i := range count {
@@ -83,6 +87,9 @@ func TestDiscoveryPeersBounded(t *testing.T) {
 		binary.BigEndian.PutUint32(id[:], uint32(i))
 		last = key.UncheckedEndpointID(id)
 		if err := d.handlePeerData(last, b); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.handlePeerData(kept, b); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -97,5 +104,34 @@ func TestDiscoveryPeersBounded(t *testing.T) {
 	}
 	if _, ok := d.item(last); !ok {
 		t.Error("newest peer missing")
+	}
+	if _, ok := d.item(kept); !ok {
+		t.Error("recently updated peer evicted")
+	}
+}
+
+// BenchmarkDiscoveryPeerChurn measures caching peer data for a new identity
+// once the cache is full, so that every call evicts a peer.
+func BenchmarkDiscoveryPeerChurn(b *testing.B) {
+	d := New(key.UncheckedEndpointID([32]byte{0xff}))
+	d.Publish(dns.NewEndpointData())
+	data, err := encodeDiscoveryPeerData(dns.NewEndpointData(netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:2")}))
+	if err != nil {
+		b.Fatal(err)
+	}
+	var id [32]byte
+	for i := range discoveryPeerCap {
+		binary.BigEndian.PutUint32(id[:], uint32(i))
+		if err := d.handlePeerData(key.UncheckedEndpointID(id), data); err != nil {
+			b.Fatal(err)
+		}
+	}
+	i := discoveryPeerCap
+	for b.Loop() {
+		binary.BigEndian.PutUint32(id[:], uint32(i))
+		i++
+		if err := d.handlePeerData(key.UncheckedEndpointID(id), data); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

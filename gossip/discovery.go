@@ -64,14 +64,17 @@ type Discovery struct {
 	timeout   time.Duration
 
 	mu      sync.Mutex
-	peers   map[key.EndpointID]discoveryPeer
+	peers   map[key.EndpointID]*discoveryPeer
+	updated discoveryPeer // sentinel of a list of remote peers, most recently updated first
 	topic   *Topic
 	pending *dns.EndpointData
 }
 
 type discoveryPeer struct {
+	id          key.EndpointID
 	data        dns.EndpointData
 	lastUpdated uint64
+	prev, next  *discoveryPeer
 }
 
 // New returns a Discovery for id.
@@ -80,8 +83,9 @@ func New(id key.EndpointID, opts ...Option) *Discovery {
 		id:      id,
 		topicID: DefaultDiscoveryTopic,
 		timeout: defaultDiscoveryTimeout,
-		peers:   make(map[key.EndpointID]discoveryPeer),
+		peers:   make(map[key.EndpointID]*discoveryPeer),
 	}
+	d.updated.prev, d.updated.next = &d.updated, &d.updated
 	for _, opt := range opts {
 		opt(d)
 	}
@@ -145,7 +149,9 @@ func (d *Discovery) Publish(data dns.EndpointData) {
 	}
 	d.mu.Lock()
 	d.pending = &data
-	d.peers[d.id] = discoveryPeer{
+	// The local entry is not on the recency list, so it is never evicted.
+	d.peers[d.id] = &discoveryPeer{
+		id:          d.id,
 		data:        cloneEndpointData(data),
 		lastUpdated: uint64(time.Now().UnixMicro()),
 	}
@@ -234,43 +240,45 @@ func (d *Discovery) handlePeerData(id key.EndpointID, b []byte) error {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if _, ok := d.peers[id]; !ok && len(d.peers) >= discoveryPeerCap {
-		d.evictLocked()
+	p, ok := d.peers[id]
+	if ok {
+		unlinkPeer(p)
+	} else {
+		if oldest := d.updated.prev; len(d.peers) >= discoveryPeerCap && oldest != &d.updated {
+			unlinkPeer(oldest)
+			delete(d.peers, oldest.id)
+		}
+		p = &discoveryPeer{id: id}
+		d.peers[id] = p
 	}
-	d.peers[id] = discoveryPeer{
-		data:        cloneEndpointData(data),
-		lastUpdated: uint64(time.Now().UnixMicro()),
-	}
+	p.data = cloneEndpointData(data)
+	p.lastUpdated = uint64(time.Now().UnixMicro())
+	p.prev, p.next = &d.updated, d.updated.next
+	p.next.prev = p
+	d.updated.next = p
 	return nil
 }
 
-// evictLocked forgets the least recently updated peer other than d itself.
-// d.mu must be held.
-func (d *Discovery) evictLocked() {
-	var oldest key.EndpointID
-	found := false
-	for id, p := range d.peers {
-		if id.Equal(d.id) {
-			continue
-		}
-		if !found || p.lastUpdated < d.peers[oldest].lastUpdated {
-			oldest, found = id, true
-		}
-	}
-	if found {
-		delete(d.peers, oldest)
-	}
+// unlinkPeer removes p from the recency list. d.mu must be held.
+func unlinkPeer(p *discoveryPeer) {
+	p.prev.next, p.next.prev = p.next, p.prev
+	p.prev, p.next = nil, nil
 }
 
 func (d *Discovery) item(id key.EndpointID) (iroh.Item, bool) {
 	d.mu.Lock()
 	peer, ok := d.peers[id]
+	var data dns.EndpointData
+	var lastUpdated uint64
+	if ok {
+		data, lastUpdated = cloneEndpointData(peer.data), peer.lastUpdated
+	}
 	d.mu.Unlock()
 	if !ok {
 		return iroh.Item{}, false
 	}
-	info := dns.EndpointInfo{ID: id, Data: cloneEndpointData(peer.data)}
-	return iroh.NewItem(info, Provenance, &peer.lastUpdated), true
+	info := dns.EndpointInfo{ID: id, Data: data}
+	return iroh.NewItem(info, Provenance, &lastUpdated), true
 }
 
 type discoveryAddrInfo struct {
