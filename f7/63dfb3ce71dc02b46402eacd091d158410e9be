@@ -1,3 +1,3 @@
 commit: f763dfb3ce71dc02b46402eacd091d158410e9be
 date: 2026-09-29T04:56:31Z
-cherry-picked from f6ac480f on local branch fix/iroh-1.3-blob-compat, authored by the Claude Code session in iTerm FA9F00FD; picked unchanged onto compat-harness by claude-code 2.1.280 (Claude Code), model claude-opus-5-5[1m], tty not a tty, pid 38882, ITERM_SESSION_ID=w8t6p4:4150190C-FE58-4FB6-B305-8B7CF0F49868, session=76dda00a-e4bc-4ad2-97a3-b101305fb7ee
+cherry-picked from f6ac480f on local branch fix/iroh-1.3-blob-compat, authored by session FA9F00FD, GPT-6; picked unchanged onto compat-harness by claude-code 2.1.280 (Claude Code), model claude-opus-5-5[1m], tty not a tty, pid 38882, ITERM_SESSION_ID=w8t6p4:4150190C-FE58-4FB6-B305-8B7CF0F49868, session=76dda00a-e4bc-4ad2-97a3-b101305fb7ee
