@@ -9,6 +9,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/tmc/go-iroh/blobs"
 	"github.com/tmc/go-iroh/endpointticket"
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
@@ -36,6 +37,7 @@ type corpus struct {
 	} `json:"endpoint_ticket"`
 	CustomAddrTickets []customAddrTicketVector `json:"custom_addr_tickets"`
 	IPTickets         []ipTicketVector         `json:"ip_tickets"`
+	Bao               []baoVector              `json:"bao"`
 	Pkarr             struct {
 		Bytes  string   `json:"bytes"`
 		Name   string   `json:"name"`
@@ -89,13 +91,21 @@ type ipTicketVector struct {
 	Bytes   string   `json:"bytes"`
 }
 
+type baoVector struct {
+	Size    uint64   `json:"size"`
+	Name    string   `json:"name"`
+	Ranges  []uint64 `json:"ranges"`
+	Hash    string   `json:"hash"`
+	Encoded string   `json:"encoded"`
+}
+
 func load(t *testing.T) corpus {
 	t.Helper()
 	var c corpus
 	if err := json.Unmarshal(corpusJSON, &c); err != nil {
 		t.Fatal(err)
 	}
-	if c.Schema != "go-iroh-l0/3" || c.Iroh != "1.3.0" {
+	if c.Schema != "go-iroh-l0/4" || c.Iroh != "1.3.0" {
 		t.Fatalf("corpus identity = %q, %q", c.Schema, c.Iroh)
 	}
 	return c
@@ -250,6 +260,66 @@ func ipTicket(t *testing.T, v ipTicketVector) endpointticket.Ticket {
 		addr = addr.WithRelayURL(u)
 	}
 	return endpointticket.New(addr)
+}
+
+// TestBaoVectors checks go-iroh's range proofs against bao-tree's. For each
+// blob size and chunk range, the Go encoding must equal Rust's bytes, and Go
+// must decode Rust's bytes. A range go-iroh's byte-offset API cannot express
+// fails: more than one span, or a start past the end of the blob, which
+// bao-tree answers with a proof of the last chunk.
+func TestBaoVectors(t *testing.T) {
+	vectors := load(t).Bao
+	if len(vectors) == 0 {
+		t.Fatal("no bao vectors")
+	}
+	for _, v := range vectors {
+		t.Run(fmt.Sprintf("%d/%s", v.Size, v.Name), func(t *testing.T) {
+			data := make([]byte, v.Size)
+			for i := range data {
+				data[i] = byte(i % 251)
+			}
+			offset, length, ok := baoByteRange(v.Ranges, v.Size)
+			if !ok {
+				t.Fatalf("chunk ranges %v of a %d-byte blob have no byte-range form", v.Ranges, v.Size)
+			}
+			hash, got, err := blobs.EncodeBlobRange(data, offset, length)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if h := hex.EncodeToString(hash[:]); h != v.Hash {
+				t.Fatalf("hash = %s, want %s", h, v.Hash)
+			}
+			want := mustHex(t, v.Encoded)
+			if !slices.Equal(got, want) {
+				t.Errorf("Go encoding (%d bytes) differs from Rust's (%d bytes)", len(got), len(want))
+			}
+			decoded, err := blobs.DecodeBlobRange(hash, want, offset, length)
+			if err != nil {
+				t.Fatalf("decode Rust encoding: %v", err)
+			}
+			if !slices.Equal(decoded, data[offset:offset+length]) {
+				t.Errorf("decoded Rust encoding to the wrong %d bytes", len(decoded))
+			}
+		})
+	}
+}
+
+// baoByteRange returns the byte range that chunk range boundaries select in a
+// blob of size bytes, if they form one span that starts inside the blob.
+func baoByteRange(boundaries []uint64, size uint64) (offset, length uint64, ok bool) {
+	const chunkSize = 1024
+	if len(boundaries) == 0 || len(boundaries) > 2 {
+		return 0, 0, false
+	}
+	start := boundaries[0]
+	if start > (size-min(size, 1))/chunkSize {
+		return 0, 0, false
+	}
+	end := size
+	if len(boundaries) == 2 {
+		end = min(boundaries[1]*chunkSize, size)
+	}
+	return start * chunkSize, end - start*chunkSize, true
 }
 
 // TestCustomAddrTicketVectors checks that the CustomAddr endpoint tickets the

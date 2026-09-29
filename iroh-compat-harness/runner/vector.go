@@ -36,7 +36,7 @@ var ipTicketScenarios = []string{
 
 const canonicalScenario = "vectors/postcard-varint-strictness"
 
-var vectorScenarios = slices.Concat(ordinaryVectorScenarios, customAddrScenarios, ipTicketScenarios, []string{canonicalScenario})
+var vectorScenarios = slices.Concat(ordinaryVectorScenarios, customAddrScenarios, ipTicketScenarios, []string{baoScenario, canonicalScenario})
 
 func RunVectorCorpus(bin, corpus, version string) []Cell {
 	if bin == "" {
@@ -75,6 +75,7 @@ func RunVectorCorpus(bin, corpus, version string) []Cell {
 	}
 	cells = append(cells, customAddrCells(bin, want, version, digest, pid, peer, duration)...)
 	cells = append(cells, ipTicketCells(bin, want, version, digest, pid, peer, duration)...)
+	cells = append(cells, baoCell(want, version, digest, pid, peer, duration))
 	cells = append(cells, canonicalVarintCell(bin, want, version, digest, peer))
 	return cells
 }

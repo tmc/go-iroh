@@ -15,6 +15,13 @@
       "detail": "go-iroh writes a flowinfo and a scope id varint after every IPv6 port, and reads them back unconditionally (endpointticket/ticket.go, since 955f0117). iroh-tickets serializes a SocketAddrV6 through serde as (ip, port) only. Go therefore misreads every Rust ticket that holds an IPv6 address, and Rust rejects a Go ticket in which an IPv6 address is not the last entry. The vectors/ip-ticket-* scenarios expect fail until go-iroh writes and reads (ip, port) only."
     },
     {
+      "surface": "Partial-block blob range proofs",
+      "tier": "stable",
+      "upstream_version": "1.3 (1.3.0)",
+      "status": "observed-incompatible",
+      "detail": "go-iroh's range proofs (blobs.EncodeBlobRange, ExtractBlobRange, and the decoders) cover whole 16 KiB chunk groups: for chunks 5..7 of a 100000-byte blob Go writes 16584 bytes where bao-tree 0.16.1 writes 2568. iroh-blobs descends inside a chunk group and sends only the selected chunks and their in-group parent hashes. The two forms match only when the range covers every chunk in its groups, so Go and Rust reject each other's proof for 15 of the 26 corpus ranges that go-iroh's byte-offset API can express, including sendme's last-chunk request for every blob larger than one chunk group. The corpus proofs match those of go-iroh-examples' sendme encoder byte for byte. vectors/bao-range-proofs expects fail until go-iroh writes and reads bao-tree's form."
+    },
+    {
       "surface": "Non-canonical varints",
       "tier": "stable",
       "upstream_version": "1.2 (1.2.0)",
