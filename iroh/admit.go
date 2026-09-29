@@ -34,30 +34,39 @@ type admissions struct {
 }
 
 type admission struct {
-	qc     *quic.Conn
-	cancel context.CancelCauseFunc
-	elem   *list.Element // nil once removed
+	abandon   func() // closes the connection
+	cancel    context.CancelCauseFunc
+	elem      *list.Element // nil once removed
+	abandoned bool
 }
 
 // admit registers qc and returns the context under which to finish its
 // handshake and run its hooks, and a func to call once that is done. The
 // func reports errAdmissionAbandoned if the admission was abandoned, in which
-// case qc is already closed and the caller must not use the connection. It
-// may be called more than once.
+// case qc is already closed or being closed and the caller must not use the
+// connection. It may be called more than once.
 func (a *admissions) admit(ctx context.Context, qc *quic.Conn) (context.Context, func() error) {
+	return a.add(ctx, func() { qc.CloseWithError(0, "handshake abandoned") })
+}
+
+// add is admit with abandon in place of closing a connection.
+func (a *admissions) add(ctx context.Context, abandon func()) (context.Context, func() error) {
 	ctx, cancel := context.WithCancelCause(ctx)
-	ad := &admission{qc: qc, cancel: cancel}
+	ad := &admission{abandon: abandon, cancel: cancel}
 	a.mu.Lock()
 	var oldest *admission
 	if a.list.Len() >= a.max {
 		oldest = a.list.Remove(a.list.Front()).(*admission)
 		oldest.elem = nil
+		// Record the abandonment before unlocking: the oldest's finisher
+		// may run before the cancel below and must see it.
+		oldest.abandoned = true
 	}
 	ad.elem = a.list.PushBack(ad)
 	a.mu.Unlock()
 	if oldest != nil {
+		oldest.abandon()
 		oldest.cancel(errAdmissionAbandoned)
-		oldest.qc.CloseWithError(0, "handshake abandoned")
 	}
 	return ctx, func() error {
 		a.mu.Lock()
@@ -65,9 +74,10 @@ func (a *admissions) admit(ctx context.Context, qc *quic.Conn) (context.Context,
 			a.list.Remove(ad.elem)
 			ad.elem = nil
 		}
+		abandoned := ad.abandoned
 		a.mu.Unlock()
 		cancel(nil)
-		if errors.Is(context.Cause(ctx), errAdmissionAbandoned) {
+		if abandoned {
 			return errAdmissionAbandoned
 		}
 		return nil
