@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -83,44 +84,48 @@ func connector(ep *irohtest.Peer) blobs.BlobConnector {
 	})
 }
 
+var stalledHash = blobs.NewHash([]byte("never sent"))
+
+// fetchers are the fetch helpers, each fetching stalledHash, which no
+// provider in these tests ever sends.
+var fetchers = []struct {
+	name  string
+	fetch func(context.Context, blobs.BidiStream) error
+}{
+	{"DownloadBlob", func(ctx context.Context, s blobs.BidiStream) error {
+		return blobs.DownloadBlob(ctx, s, stalledHash, new(bytes.Buffer))
+	}},
+	{"DownloadBlobRange", func(ctx context.Context, s blobs.BidiStream) error {
+		return blobs.DownloadBlobRange(ctx, s, stalledHash, 0, 1, new(bytes.Buffer))
+	}},
+	{"GetBlobBytes", func(ctx context.Context, s blobs.BidiStream) error {
+		_, err := blobs.GetBlobBytes(ctx, s, stalledHash)
+		return err
+	}},
+	{"GetSingleLeaf", func(ctx context.Context, s blobs.BidiStream) error {
+		_, err := blobs.GetSingleLeaf(ctx, s, stalledHash)
+		return err
+	}},
+	{"GetManyBlobBytes", func(ctx context.Context, s blobs.BidiStream) error {
+		_, err := blobs.GetManyBlobBytes(ctx, s, []blobs.Hash{stalledHash})
+		return err
+	}},
+	{"GetHashSequenceBytes", func(ctx context.Context, s blobs.BidiStream) error {
+		_, _, err := blobs.GetHashSequenceBytes(ctx, s, stalledHash)
+		return err
+	}},
+	{"Observe", func(ctx context.Context, s blobs.BidiStream) error {
+		for _, err := range blobs.Observe(ctx, s, stalledHash) {
+			return err
+		}
+		return nil
+	}},
+}
+
 // TestFetchCanceledByStalledProvider pins that every fetch helper returns
 // when its context ends, even if the provider never answers.
 func TestFetchCanceledByStalledProvider(t *testing.T) {
-	hash := blobs.NewHash([]byte("never sent"))
-	tests := []struct {
-		name  string
-		fetch func(context.Context, blobs.BidiStream) error
-	}{
-		{"DownloadBlob", func(ctx context.Context, s blobs.BidiStream) error {
-			return blobs.DownloadBlob(ctx, s, hash, new(bytes.Buffer))
-		}},
-		{"DownloadBlobRange", func(ctx context.Context, s blobs.BidiStream) error {
-			return blobs.DownloadBlobRange(ctx, s, hash, 0, 1, new(bytes.Buffer))
-		}},
-		{"GetBlobBytes", func(ctx context.Context, s blobs.BidiStream) error {
-			_, err := blobs.GetBlobBytes(ctx, s, hash)
-			return err
-		}},
-		{"GetSingleLeaf", func(ctx context.Context, s blobs.BidiStream) error {
-			_, err := blobs.GetSingleLeaf(ctx, s, hash)
-			return err
-		}},
-		{"GetManyBlobBytes", func(ctx context.Context, s blobs.BidiStream) error {
-			_, err := blobs.GetManyBlobBytes(ctx, s, []blobs.Hash{hash})
-			return err
-		}},
-		{"GetHashSequenceBytes", func(ctx context.Context, s blobs.BidiStream) error {
-			_, _, err := blobs.GetHashSequenceBytes(ctx, s, hash)
-			return err
-		}},
-		{"Observe", func(ctx context.Context, s blobs.BidiStream) error {
-			for _, err := range blobs.Observe(ctx, s, hash) {
-				return err
-			}
-			return nil
-		}},
-	}
-	for _, tt := range tests {
+	for _, tt := range fetchers {
 		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				n := irohtest.NewNet(t)
@@ -140,6 +145,102 @@ func TestFetchCanceledByStalledProvider(t *testing.T) {
 				err = finishes(t, isolationBudget, func() error { return tt.fetch(ctx, s) })
 				if !errors.Is(err, context.DeadlineExceeded) {
 					t.Fatalf("fetch error = %v, want %v", err, context.DeadlineExceeded)
+				}
+			})
+		})
+	}
+}
+
+// hungStream is a BidiStream without CancelRead whose Read waits until the
+// test releases it. Its Close ends only the send side, as the BidiStream
+// contract allows, so nothing a helper can do unblocks a pending Read.
+type hungStream struct{ release chan struct{} }
+
+func (s hungStream) Read([]byte) (int, error) {
+	<-s.release
+	return 0, io.EOF
+}
+
+func (s hungStream) Write(p []byte) (int, error) { return len(p), nil }
+func (s hungStream) Close() error                { return nil }
+
+// TestFetchCanceledWithoutCancelRead pins that the helpers return when their
+// context ends even if the stream cannot abandon a pending Read.
+func TestFetchCanceledWithoutCancelRead(t *testing.T) {
+	tests := append(slices.Clip(fetchers), struct {
+		name  string
+		fetch func(context.Context, blobs.BidiStream) error
+	}{"ServeBlob", func(ctx context.Context, s blobs.BidiStream) error {
+		return blobs.ServeBlob(ctx, s, mustBlobStore(t))
+	}})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s := hungStream{release: make(chan struct{})}
+				defer close(s.release)
+				ctx, cancel := context.WithTimeout(context.Background(), isolationBudget/2)
+				defer cancel()
+				err := finishes(t, isolationBudget, func() error { return tt.fetch(ctx, s) })
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("fetch error = %v, want %v", err, context.DeadlineExceeded)
+				}
+			})
+		})
+	}
+}
+
+// trickleStream is a BidiStream without CancelRead that delivers its data
+// 256 bytes per millisecond and ignores Close.
+type trickleStream struct{ r io.Reader }
+
+func (s trickleStream) Read(p []byte) (int, error) {
+	time.Sleep(time.Millisecond)
+	return s.r.Read(p[:min(len(p), 256)])
+}
+
+func (s trickleStream) Write(p []byte) (int, error) { return len(p), nil }
+func (s trickleStream) Close() error                { return nil }
+
+// TestDownloadBlobCanceledStopsWriting pins that a download abandoned on a
+// stream that cannot cancel its read does not write to the caller's writer
+// after it returns.
+func TestDownloadBlobCanceledStopsWriting(t *testing.T) {
+	data := bytes.Repeat([]byte("x"), 64<<10)
+	hash, encoded, err := blobs.EncodeBlob(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name     string
+		download func(context.Context, blobs.BidiStream, io.Writer) error
+	}{
+		{"DownloadBlob", func(ctx context.Context, s blobs.BidiStream, w io.Writer) error {
+			return blobs.DownloadBlob(ctx, s, hash, w)
+		}},
+		{"DownloadBlobRange", func(ctx context.Context, s blobs.BidiStream, w io.Writer) error {
+			return blobs.DownloadBlobRange(ctx, s, hash, 0, uint64(len(data)), w)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s := trickleStream{r: bytes.NewReader(encoded)}
+				// Cancel halfway through the response.
+				ctx, cancel := context.WithTimeout(context.Background(), time.Duration(len(encoded)/512)*time.Millisecond)
+				defer cancel()
+				var buf bytes.Buffer
+				err := finishes(t, isolationBudget, func() error { return tt.download(ctx, s, &buf) })
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("download error = %v, want %v", err, context.DeadlineExceeded)
+				}
+				n := buf.Len()
+				if n == 0 {
+					t.Fatal("nothing written before cancel")
+				}
+				// Let the stream deliver the rest.
+				time.Sleep(isolationBudget)
+				if buf.Len() != n {
+					t.Fatalf("writer grew from %d to %d bytes after download returned", n, buf.Len())
 				}
 			})
 		})

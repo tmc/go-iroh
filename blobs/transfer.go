@@ -22,8 +22,9 @@ import (
 //
 // If a stream implements CancelRead(code uint64), as iroh.Stream does, the
 // helpers call it to abandon a response when their context ends. Otherwise a
-// helper waiting on a peer that never answers returns only when the stream
-// fails.
+// helper still returns when its context ends, but leaves a goroutine blocked
+// in Read until the stream fails; the helper stops writing to the caller's
+// writer before it returns.
 type BidiStream interface {
 	io.Reader
 	io.Writer
@@ -323,24 +324,48 @@ func Observe(ctx context.Context, s BidiStream, hash Hash) iter.Seq2[Bitfield, e
 			yield(Bitfield{}, fmt.Errorf("blobs: close observe request: %w", err))
 			return
 		}
-		r := bufio.NewReader(s)
+		type item struct {
+			bitfield Bitfield
+			err      error
+		}
+		items := make(chan item)
+		go func() {
+			r := bufio.NewReader(s)
+			for {
+				bitfield, err := readObserveItem(r)
+				select {
+				case items <- item{bitfield, err}:
+				case <-done:
+					return
+				}
+				if err != nil {
+					return
+				}
+			}
+		}()
 		for {
-			bitfield, err := readObserveItem(r)
-			if err == nil {
-				if !yield(bitfield, nil) {
+			var it item
+			select {
+			case it = <-items:
+			case <-ctx.Done():
+				yield(Bitfield{}, ctx.Err())
+				return
+			}
+			if it.err == nil {
+				if !yield(it.bitfield, nil) {
 					abort(s)
 					return
 				}
 				continue
 			}
-			if errors.Is(err, io.EOF) {
+			if errors.Is(it.err, io.EOF) {
 				return
 			}
 			if ctx.Err() != nil {
 				yield(Bitfield{}, ctx.Err())
 				return
 			}
-			yield(Bitfield{}, fmt.Errorf("blobs: read observe response: %w", err))
+			yield(Bitfield{}, fmt.Errorf("blobs: read observe response: %w", it.err))
 			return
 		}
 	}
@@ -374,9 +399,10 @@ func DownloadBlob(ctx context.Context, s BidiStream, hash Hash, w io.Writer) err
 	if err := closeWrite(s); err != nil {
 		return fmt.Errorf("blobs: close request: %w", err)
 	}
+	dw := &detachableWriter{w: w}
 	errc := make(chan error, 1)
 	go func() {
-		if err := DecodeBlobToWriter(hash, s, w); err != nil {
+		if err := DecodeBlobToWriter(hash, s, dw); err != nil {
 			errc <- fmt.Errorf("blobs: decode response: %w", err)
 			return
 		}
@@ -394,7 +420,7 @@ func DownloadBlob(ctx context.Context, s BidiStream, hash Hash, w io.Writer) err
 		return err
 	case <-ctx.Done():
 		abort(s)
-		<-errc
+		dw.detach()
 		return ctx.Err()
 	}
 }
@@ -443,9 +469,10 @@ func DownloadBlobRange(ctx context.Context, s BidiStream, hash Hash, offset, len
 	if err := closeWrite(s); err != nil {
 		return fmt.Errorf("blobs: close request: %w", err)
 	}
+	dw := &detachableWriter{w: w}
 	errc := make(chan error, 1)
 	go func() {
-		if err := DecodeBlobRangeToWriter(hash, s, offset, length, w); err != nil {
+		if err := DecodeBlobRangeToWriter(hash, s, offset, length, dw); err != nil {
 			errc <- fmt.Errorf("blobs: decode response: %w", err)
 			return
 		}
@@ -463,7 +490,7 @@ func DownloadBlobRange(ctx context.Context, s BidiStream, hash Hash, offset, len
 		return err
 	case <-ctx.Done():
 		abort(s)
-		<-errc
+		dw.detach()
 		return ctx.Err()
 	}
 }
@@ -666,10 +693,6 @@ func GetManyBlobBytes(ctx context.Context, s BidiStream, hashes []Hash) ([][]byt
 		return res.data, res.err
 	case <-ctx.Done():
 		abort(s)
-		res := <-done
-		if res.err != nil {
-			return nil, ctx.Err()
-		}
 		return nil, ctx.Err()
 	}
 }
@@ -724,10 +747,6 @@ func GetHashSequenceBytes(ctx context.Context, s BidiStream, root Hash) (HashSeq
 		return res.seq, res.data, res.err
 	case <-ctx.Done():
 		abort(s)
-		res := <-done
-		if res.err != nil {
-			return HashSequence{}, nil, ctx.Err()
-		}
 		return HashSequence{}, nil, ctx.Err()
 	}
 }
@@ -769,6 +788,34 @@ func abort(s BidiStream) {
 	}
 	_ = s.Close()
 }
+
+// detachableWriter passes writes to w until detach is called, after which it
+// rejects them. A helper that returns without waiting for its reader
+// goroutine detaches the caller's writer first, so the goroutine never
+// writes to it after the helper has returned.
+type detachableWriter struct {
+	mu       sync.Mutex
+	w        io.Writer
+	detached bool
+}
+
+func (w *detachableWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.detached {
+		return 0, errDetached
+	}
+	return w.w.Write(p)
+}
+
+// detach waits for any Write in progress and rejects later ones.
+func (w *detachableWriter) detach() {
+	w.mu.Lock()
+	w.detached = true
+	w.mu.Unlock()
+}
+
+var errDetached = errors.New("blobs: download abandoned")
 
 func closeWrite(s BidiStream) error {
 	if c, ok := s.(interface{ CloseWrite() error }); ok {
@@ -816,11 +863,7 @@ func readAllContext(ctx context.Context, s BidiStream, limit int64) ([]byte, err
 		return res.b, res.err
 	case <-ctx.Done():
 		abort(s)
-		res := <-done
-		if res.err != nil {
-			return nil, ctx.Err()
-		}
-		return res.b, ctx.Err()
+		return nil, ctx.Err()
 	}
 }
 
