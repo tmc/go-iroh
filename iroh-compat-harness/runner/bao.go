@@ -9,7 +9,10 @@ import (
 	"github.com/tmc/go-iroh/blobs"
 )
 
-const baoScenario = "vectors/bao-range-proofs"
+var baoScenarios = []string{
+	"vectors/bao-range-proofs",
+	"vectors/bao-chunk-ranges",
+}
 
 type baoCorpus struct {
 	Vectors []baoVector `json:"bao"`
@@ -23,15 +26,17 @@ type baoVector struct {
 	Encoded string   `json:"encoded"`
 }
 
-// baoCell checks go-iroh's range proofs against bao-tree's. For each corpus
-// vector, go-iroh must encode the same bytes for the same range of the same
-// blob and must verify and decode bao-tree's encoding. Ranges that go-iroh's
-// byte-offset API cannot express (several spans, or a start past the end) are
-// listed as unchecked and do not affect the verdict.
-func baoCell(corpus []byte, version, digest string, pid int, peer string, duration int64) Cell {
+// baoCells checks go-iroh's range proofs against bao-tree's. For each corpus
+// vector that go-iroh's byte-offset API can express, go-iroh must encode the
+// same bytes for the same range of the same blob and must verify and decode
+// bao-tree's encoding; that is the first cell. The second cell holds the
+// vectors it cannot express (several spans, the chunk at infinity, or a start
+// past the end, which is how iroh-blobs asks for a size proof). It fails
+// while go-iroh has no entry point that takes bao-tree chunk ranges.
+func baoCells(corpus []byte, version, digest string, pid int, peer string, duration int64) []Cell {
 	var vectors baoCorpus
 	if err := json.Unmarshal(corpus, &vectors); err != nil || len(vectors.Vectors) == 0 {
-		return Cell{Scenario: baoScenario, Iroh: version, Result: SetupError, Detail: "decode bao vectors", Peer: peer, PeerPID: pid, PeerDigest: digest}
+		return vectorCellsFor(baoScenarios, version, SetupError, "decode bao vectors", digest, pid, peer)
 	}
 	var encodeDiffers, decodeRejects, unchecked []string
 	for _, v := range vectors.Vectors {
@@ -48,7 +53,7 @@ func baoCell(corpus []byte, version, digest string, pid int, peer string, durati
 		}
 		want, err := hex.DecodeString(v.Encoded)
 		if err != nil {
-			return Cell{Scenario: baoScenario, Iroh: version, Result: SetupError, Detail: "decode bao vector " + name, Peer: peer, PeerPID: pid, PeerDigest: digest}
+			return vectorCellsFor(baoScenarios, version, SetupError, "decode bao vector "+name, digest, pid, peer)
 		}
 		decoded, err := blobs.DecodeBlobRange(hash, want, offset, length)
 		if err != nil || !slices.Equal(decoded, data[offset:offset+length]) {
@@ -57,12 +62,17 @@ func baoCell(corpus []byte, version, digest string, pid int, peer string, durati
 	}
 	mismatched := slices.Compact(slices.Sorted(slices.Values(slices.Concat(encodeDiffers, decodeRejects))))
 	checked := len(vectors.Vectors) - len(unchecked)
-	return Cell{
-		Scenario: baoScenario, Iroh: version, Result: verdictFor(mismatched),
-		Detail: fmt.Sprintf("Go matched bao-tree on %d/%d range proofs (%d not expressible as a byte range)", checked-len(mismatched), checked, len(unchecked)),
+	return []Cell{{
+		Scenario: baoScenarios[0], Iroh: version, Result: verdictFor(mismatched),
+		Detail: fmt.Sprintf("Go matched bao-tree on %d/%d byte-range proofs", checked-len(mismatched), checked),
 		Peer:   peer, PeerPID: pid, PeerDigest: digest, DurationMS: duration,
-		Evidence: map[string]any{"encode_differs": encodeDiffers, "decode_rejects": decodeRejects, "unchecked": unchecked},
-	}
+		Evidence: map[string]any{"encode_differs": encodeDiffers, "decode_rejects": decodeRejects},
+	}, {
+		Scenario: baoScenarios[1], Iroh: version, Result: verdictFor(unchecked),
+		Detail: fmt.Sprintf("go-iroh has no chunk-range proof API; %d/%d bao-tree ranges are not expressible as a byte range", len(unchecked), len(vectors.Vectors)),
+		Peer:   peer, PeerPID: pid, PeerDigest: digest, DurationMS: duration,
+		Evidence: map[string]any{"inexpressible": unchecked},
+	}}
 }
 
 // baoData returns the corpus blob of the given size: byte i is i mod 251.
