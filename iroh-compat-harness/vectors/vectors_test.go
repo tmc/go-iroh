@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"slices"
 	"testing"
 
@@ -34,6 +35,7 @@ type corpus struct {
 		Bytes   string `json:"bytes"`
 	} `json:"endpoint_ticket"`
 	CustomAddrTickets []customAddrTicketVector `json:"custom_addr_tickets"`
+	IPTickets         []ipTicketVector         `json:"ip_tickets"`
 	Pkarr             struct {
 		Bytes  string   `json:"bytes"`
 		Name   string   `json:"name"`
@@ -79,13 +81,21 @@ type customAddrTicketVector struct {
 	Bytes   string `json:"bytes"`
 }
 
+type ipTicketVector struct {
+	Name    string   `json:"name"`
+	Addrs   []string `json:"addrs"`
+	Relay   string   `json:"relay"`
+	Encoded string   `json:"encoded"`
+	Bytes   string   `json:"bytes"`
+}
+
 func load(t *testing.T) corpus {
 	t.Helper()
 	var c corpus
 	if err := json.Unmarshal(corpusJSON, &c); err != nil {
 		t.Fatal(err)
 	}
-	if c.Schema != "go-iroh-l0/2" || c.Iroh != "1.3.0" {
+	if c.Schema != "go-iroh-l0/3" || c.Iroh != "1.3.0" {
 		t.Fatalf("corpus identity = %q, %q", c.Schema, c.Iroh)
 	}
 	return c
@@ -170,6 +180,76 @@ func TestEndpointTicketVector(t *testing.T) {
 	if got := ticket.String(); got != v.Encoded {
 		t.Fatalf("ticket re-encode = %s, want %s", got, v.Encoded)
 	}
+}
+
+// TestIPTicketVectors checks endpoint tickets whose addresses include IPv6.
+// Each Rust ticket must decode in go-iroh to the same addresses and relay, and
+// the same address set built in Go must encode to Rust's bytes.
+func TestIPTicketVectors(t *testing.T) {
+	wantNames := []string{"one-ipv6", "two-ipv6", "ipv4-and-ipv6", "ipv6-and-relay", "ipv4-mapped-ipv6"}
+	vectors := load(t).IPTickets
+	if len(vectors) != len(wantNames) {
+		t.Fatalf("IP ticket count = %d, want %d", len(vectors), len(wantNames))
+	}
+	for i, v := range vectors {
+		if v.Name != wantNames[i] {
+			t.Fatalf("vector %d name = %q, want %q", i, v.Name, wantNames[i])
+		}
+		t.Run(v.Name, func(t *testing.T) {
+			want := mustHex(t, v.Bytes)
+			if got := ipTicket(t, v).EncodeBytes(); !slices.Equal(got, want) {
+				t.Errorf("Go encoding = %x, want %x", got, want)
+			}
+			ticket, err := endpointticket.Parse(v.Encoded)
+			if err != nil {
+				t.Fatalf("parse Rust ticket: %v", err)
+			}
+			addr := ticket.Addr()
+			var addrs []string
+			for _, ap := range addr.IPAddrs() {
+				addrs = append(addrs, ap.String())
+			}
+			if want := slices.Sorted(slices.Values(v.Addrs)); !slices.Equal(slices.Sorted(slices.Values(addrs)), want) {
+				t.Errorf("decoded addrs = %v, want %v", addrs, want)
+			}
+			var relays []string
+			for _, u := range addr.RelayURLs() {
+				relays = append(relays, u.String())
+			}
+			var wantRelays []string
+			if v.Relay != "" {
+				wantRelays = []string{v.Relay}
+			}
+			if !slices.Equal(relays, wantRelays) {
+				t.Errorf("decoded relays = %v, want %v", relays, wantRelays)
+			}
+		})
+	}
+}
+
+// ipTicket builds in Go the ticket that v describes, keyed like the Rust driver.
+func ipTicket(t *testing.T, v ipTicketVector) endpointticket.Ticket {
+	t.Helper()
+	var seed [key.SeedSize]byte
+	for i := range seed {
+		seed[i] = 0x2a
+	}
+	addr := netaddr.NewEndpointAddr(key.NewSecretKey(seed).Public().EndpointID())
+	for _, s := range v.Addrs {
+		ap, err := netip.ParseAddrPort(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr = addr.WithIP(ap)
+	}
+	if v.Relay != "" {
+		u, err := netaddr.ParseRelayURL(v.Relay)
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr = addr.WithRelayURL(u)
+	}
+	return endpointticket.New(addr)
 }
 
 // TestCustomAddrTicketVectors checks that the CustomAddr endpoint tickets the

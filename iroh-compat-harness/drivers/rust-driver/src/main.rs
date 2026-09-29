@@ -28,6 +28,7 @@ struct Corpus {
     postcard_non_canonical: Vec<NonCanonicalVector>,
     endpoint_ticket: TicketVector,
     custom_addr_tickets: Vec<CustomAddrTicketVector>,
+    ip_tickets: Vec<IpTicketVector>,
     pkarr: PkarrVector,
 }
 
@@ -101,6 +102,30 @@ struct CustomAddrDecodeRequest {
 }
 
 #[derive(Serialize)]
+struct IpTicketVector {
+    name: &'static str,
+    addrs: &'static [&'static str],
+    relay: Option<&'static str>,
+    encoded: String,
+    bytes: String,
+}
+
+#[derive(Deserialize)]
+struct IpTicketDecodeRequest {
+    name: String,
+    encoded: String,
+}
+
+#[derive(Serialize)]
+struct IpTicketDecodeResult {
+    name: String,
+    error: Option<String>,
+    addrs: Vec<String>,
+    relays: Vec<String>,
+    bytes: String,
+}
+
+#[derive(Serialize)]
 struct PkarrVector {
     bytes: String,
     name: &'static str,
@@ -168,6 +193,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Err("postcard-decode accepts no arguments".into());
             }
             return postcard_decode();
+        }
+        if command == "ip-ticket-decode" {
+            if args.next().is_some() {
+                return Err("ip-ticket-decode accepts no arguments".into());
+            }
+            return ip_ticket_decode();
         }
         if command == "custom-addr-decode" {
             if args.next().is_some() {
@@ -512,6 +543,7 @@ fn write_corpus() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let custom_addr_tickets = custom_addr_ticket_vectors(&ticket_key);
+    let ip_tickets = ip_ticket_vectors(&ticket_key)?;
 
     let pkarr_bytes = signed_packet(
         &ticket_key,
@@ -529,7 +561,7 @@ fn write_corpus() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let corpus = Corpus {
-        schema: "go-iroh-l0/2",
+        schema: "go-iroh-l0/3",
         iroh: "1.3.0",
         keys,
         postcard_uint,
@@ -538,6 +570,7 @@ fn write_corpus() -> Result<(), Box<dyn std::error::Error>> {
         postcard_non_canonical: non_canonical_vectors(),
         endpoint_ticket,
         custom_addr_tickets,
+        ip_tickets,
         pkarr,
     };
     serde_json::to_writer_pretty(std::io::stdout(), &corpus)?;
@@ -626,6 +659,90 @@ fn custom_addr_ticket_vectors(ticket_key: &SecretKey) -> Vec<CustomAddrTicketVec
             }
         })
         .collect()
+}
+
+// IP_TICKETS are endpoint tickets whose IP addresses exercise the SocketAddrV6
+// wire form. serde writes a SocketAddrV6 as (ip, port) only, so flowinfo and
+// the scope id never reach the ticket.
+const IP_TICKETS: &[(&str, &[&str], Option<&str>)] = &[
+    ("one-ipv6", &["[2001:db8::1]:4433"], None),
+    (
+        "two-ipv6",
+        &["[2001:db8::1]:4433", "[2001:db8::2]:4434"],
+        None,
+    ),
+    (
+        "ipv4-and-ipv6",
+        &["127.0.0.1:4433", "[2001:db8::1]:4433"],
+        None,
+    ),
+    (
+        "ipv6-and-relay",
+        &["[2001:db8::1]:4433"],
+        Some("https://relay.example/"),
+    ),
+    ("ipv4-mapped-ipv6", &["[::ffff:192.0.2.1]:4433"], None),
+];
+
+fn ip_ticket_vectors(
+    ticket_key: &SecretKey,
+) -> Result<Vec<IpTicketVector>, Box<dyn std::error::Error>> {
+    IP_TICKETS
+        .iter()
+        .map(|&(name, addrs, relay)| {
+            let mut addr = EndpointAddr::new(ticket_key.public());
+            for a in addrs {
+                addr = addr.with_ip_addr(SocketAddr::from_str(a)?);
+            }
+            if let Some(relay) = relay {
+                addr = addr.with_relay_url(relay.parse()?);
+            }
+            let ticket = EndpointTicket::new(addr);
+            Ok(IpTicketVector {
+                name,
+                addrs,
+                relay,
+                encoded: ticket.encode_string(),
+                bytes: HEXLOWER.encode(&ticket.encode_bytes()),
+            })
+        })
+        .collect()
+}
+
+// ip_ticket_decode reads Go-encoded tickets and reports what Rust decodes from
+// each, together with Rust's own re-encoding, so the caller can compare both
+// the address set and the bytes.
+fn ip_ticket_decode() -> Result<(), Box<dyn std::error::Error>> {
+    let requests: Vec<IpTicketDecodeRequest> = serde_json::from_reader(std::io::stdin())?;
+    let results: Vec<IpTicketDecodeResult> = requests
+        .into_iter()
+        .map(
+            |request| match EndpointTicket::decode_string(&request.encoded) {
+                Ok(ticket) => {
+                    let addr = ticket.endpoint_addr();
+                    let mut addrs: Vec<String> = addr.ip_addrs().map(|a| a.to_string()).collect();
+                    addrs.sort();
+                    IpTicketDecodeResult {
+                        name: request.name,
+                        error: None,
+                        addrs,
+                        relays: addr.relay_urls().map(|u| u.to_string()).collect(),
+                        bytes: HEXLOWER.encode(&ticket.encode_bytes()),
+                    }
+                }
+                Err(err) => IpTicketDecodeResult {
+                    name: request.name,
+                    error: Some(err.to_string()),
+                    addrs: Vec::new(),
+                    relays: Vec::new(),
+                    bytes: String::new(),
+                },
+            },
+        )
+        .collect();
+    serde_json::to_writer(std::io::stdout(), &results)?;
+    println!();
+    Ok(())
 }
 
 fn custom_addr_decode() -> Result<(), Box<dyn std::error::Error>> {
