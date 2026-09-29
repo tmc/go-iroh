@@ -1,12 +1,15 @@
 package runner
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 
 	"github.com/tmc/go-iroh/blobs"
+	"lukechampine.com/blake3/bao"
 )
 
 var baoScenarios = []string{
@@ -26,53 +29,115 @@ type baoVector struct {
 	Encoded string   `json:"encoded"`
 }
 
-// baoCells checks go-iroh's range proofs against bao-tree's. For each corpus
-// vector that go-iroh's byte-offset API can express, go-iroh must encode the
-// same bytes for the same range of the same blob and must verify and decode
-// bao-tree's encoding; that is the first cell. The second cell holds the
-// vectors it cannot express (several spans, the chunk at infinity, or a start
-// past the end, which is how iroh-blobs asks for a size proof). It fails
-// while go-iroh has no entry point that takes bao-tree chunk ranges.
+// baoCells checks go-iroh's chunk-range proofs against bao-tree's. For each
+// corpus vector, go-iroh must encode the same bytes for the same ranges of the
+// same blob, and must verify bao-tree's encoding and decode it to the selected
+// chunks. The first cell holds the vectors a single byte range can express; the
+// second holds the rest (several spans, the chunk at infinity, or a start past
+// the end, which is how iroh-blobs asks for a size proof).
 func baoCells(corpus []byte, version, digest string, pid int, peer string, duration int64) []Cell {
 	var vectors baoCorpus
 	if err := json.Unmarshal(corpus, &vectors); err != nil || len(vectors.Vectors) == 0 {
 		return vectorCellsFor(baoScenarios, version, SetupError, "decode bao vectors", digest, pid, peer)
 	}
-	var encodeDiffers, decodeRejects, unchecked []string
+	var sets [2]struct {
+		total                        int
+		encodeDiffers, decodeRejects []string
+	}
 	for _, v := range vectors.Vectors {
 		name := fmt.Sprintf("%d/%s", v.Size, v.Name)
-		offset, length, ok := baoByteRange(v.Ranges, v.Size)
-		if !ok {
-			unchecked = append(unchecked, name)
-			continue
-		}
-		data := baoData(v.Size)
-		hash, got, err := blobs.EncodeBlobRange(data, offset, length)
-		if err != nil || hex.EncodeToString(hash[:]) != v.Hash || hex.EncodeToString(got) != v.Encoded {
-			encodeDiffers = append(encodeDiffers, name)
-		}
 		want, err := hex.DecodeString(v.Encoded)
 		if err != nil {
 			return vectorCellsFor(baoScenarios, version, SetupError, "decode bao vector "+name, digest, pid, peer)
 		}
-		decoded, err := blobs.DecodeBlobRange(hash, want, offset, length)
-		if err != nil || !slices.Equal(decoded, data[offset:offset+length]) {
-			decodeRejects = append(decodeRejects, name)
+		set := &sets[1]
+		if _, _, ok := baoByteRange(v.Ranges, v.Size); ok {
+			set = &sets[0]
+		}
+		set.total++
+		ranges, ok := baoChunkRanges(v.Ranges)
+		if !ok {
+			set.encodeDiffers = append(set.encodeDiffers, name)
+			set.decodeRejects = append(set.decodeRejects, name)
+			continue
+		}
+		data := baoData(v.Size)
+		outboard, root := bao.EncodeBuf(data, 4, true)
+		hash := blobs.Hash(root)
+		var got bytes.Buffer
+		err = blobs.EncodeBlobChunks(&got, hash, v.Size, bytes.NewReader(data), bytes.NewReader(outboard), ranges)
+		if err != nil || hex.EncodeToString(hash[:]) != v.Hash || !bytes.Equal(got.Bytes(), want) {
+			set.encodeDiffers = append(set.encodeDiffers, name)
+		}
+		decoded, size, err := blobs.DecodeBlobChunks(hash, want, ranges)
+		if err != nil || size != v.Size || !bytes.Equal(decoded, baoSelected(data, v.Ranges)) {
+			set.decodeRejects = append(set.decodeRejects, name)
 		}
 	}
-	mismatched := slices.Compact(slices.Sorted(slices.Values(slices.Concat(encodeDiffers, decodeRejects))))
-	checked := len(vectors.Vectors) - len(unchecked)
-	return []Cell{{
-		Scenario: baoScenarios[0], Iroh: version, Result: verdictFor(mismatched),
-		Detail: fmt.Sprintf("Go matched bao-tree on %d/%d byte-range proofs", checked-len(mismatched), checked),
-		Peer:   peer, PeerPID: pid, PeerDigest: digest, DurationMS: duration,
-		Evidence: map[string]any{"encode_differs": encodeDiffers, "decode_rejects": decodeRejects},
-	}, {
-		Scenario: baoScenarios[1], Iroh: version, Result: verdictFor(unchecked),
-		Detail: fmt.Sprintf("go-iroh has no chunk-range proof API; %d/%d bao-tree ranges are not expressible as a byte range", len(unchecked), len(vectors.Vectors)),
-		Peer:   peer, PeerPID: pid, PeerDigest: digest, DurationMS: duration,
-		Evidence: map[string]any{"inexpressible": unchecked},
-	}}
+	kinds := [2]string{"byte-range", "multi-span, infinite, and past-the-end chunk-range"}
+	cells := make([]Cell, len(baoScenarios))
+	for i, set := range sets {
+		mismatched := slices.Compact(slices.Sorted(slices.Values(slices.Concat(set.encodeDiffers, set.decodeRejects))))
+		cells[i] = Cell{
+			Scenario: baoScenarios[i], Iroh: version, Result: verdictFor(mismatched),
+			Detail: fmt.Sprintf("Go matched bao-tree on %d/%d %s proofs", set.total-len(mismatched), set.total, kinds[i]),
+			Peer:   peer, PeerPID: pid, PeerDigest: digest, DurationMS: duration,
+			Evidence: map[string]any{"encode_differs": set.encodeDiffers, "decode_rejects": set.decodeRejects},
+		}
+		if set.total == 0 {
+			cells[i].Result, cells[i].Detail = SetupError, "corpus has no "+kinds[i]+" vectors"
+		}
+	}
+	return cells
+}
+
+// baoChunkRanges converts bao-tree range-set boundaries to go-iroh chunk
+// ranges: pairs are half-open spans and an odd final boundary opens a span
+// to infinity. It reports false for spans followed by an open span, which
+// go-iroh's constructors cannot combine and the corpus does not contain.
+func baoChunkRanges(boundaries []uint64) (blobs.ChunkRanges, bool) {
+	switch {
+	case len(boundaries) == 1:
+		return blobs.RangeChunksFrom(boundaries[0]), true
+	case len(boundaries)%2 != 0:
+		return blobs.ChunkRanges{}, false
+	}
+	var spans []blobs.ChunkRange
+	for i := 0; i < len(boundaries); i += 2 {
+		spans = append(spans, blobs.ChunkRange{Start: boundaries[i], End: boundaries[i+1]})
+	}
+	return blobs.RangeChunksMany(spans...), true
+}
+
+// baoSelected returns the bytes of data that bao-tree's encoding of the
+// range-set boundaries carries: the selected chunks in order, where a span
+// starting at or past the last chunk selects the last chunk.
+func baoSelected(data []byte, boundaries []uint64) []byte {
+	const chunkSize = 1024
+	chunks := (uint64(len(data)) + chunkSize - 1) / chunkSize
+	if chunks == 0 {
+		return nil
+	}
+	selected := make([]bool, chunks)
+	for i := 0; i < len(boundaries); i += 2 {
+		start, end := boundaries[i], uint64(math.MaxUint64)
+		if i+1 < len(boundaries) {
+			end = boundaries[i+1]
+		}
+		if start >= chunks {
+			start, end = chunks-1, chunks
+		}
+		for c := start; c < min(end, chunks); c++ {
+			selected[c] = true
+		}
+	}
+	var out []byte
+	for c, ok := range selected {
+		if ok {
+			out = append(out, data[uint64(c)*chunkSize:min(uint64(c+1)*chunkSize, uint64(len(data)))]...)
+		}
+	}
+	return out
 }
 
 // baoData returns the corpus blob of the given size: byte i is i mod 251.

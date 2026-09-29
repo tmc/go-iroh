@@ -44,10 +44,6 @@ peer-image-%:
 		--build-arg IROH_VERSION=$* \
 		-t go-iroh-compat:iroh-$* .
 
-# The bao vectors cover an open go-iroh bug. The runner reports
-# them against their expected verdicts, so the corpus check here skips them.
-KNOWN_BUG_VECTORS := TestBaoVectors
-
 # parity-release measures one release, IROH_VERSION, with the Rust peers named
 # by the RUST_*_BIN variables, and writes results/runs/iroh-$(IROH_VERSION).json.
 parity-release:
@@ -61,7 +57,7 @@ parity-release:
 # parity-report verifies every release's vector corpus with Go and merges the
 # run files of RELEASES into results.json, badge.json, and COMPATIBILITY.md.
 parity-report:
-	go test -skip '$(KNOWN_BUG_VECTORS)' ./vectors
+	go test ./vectors
 	go run ./cmd/iroh-compat -merge $(RELEASES:%=results/runs/iroh-%.json)
 
 test:
