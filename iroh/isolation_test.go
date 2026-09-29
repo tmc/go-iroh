@@ -3,6 +3,7 @@ package iroh_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -177,6 +178,181 @@ func testAcceptIsolation(t *testing.T, run acceptServer, mb misbehavior) {
 			case <-ctx.Done():
 				return ctx.Err()
 			}
+		}
+	})
+}
+
+// TestAcceptStaleHandshake pins that a handshake started by an Accept that has
+// since returned, and that finishes after another loop has taken over
+// accepting, is closed rather than kept for a later Accept.
+func TestAcceptStaleHandshake(t *testing.T) {
+	owners := []struct {
+		name string
+		take func(t *testing.T, ep *iroh.Endpoint, alpn string) (release func())
+	}{
+		{"ListenStreams", func(t *testing.T, ep *iroh.Endpoint, _ string) func() {
+			ln, err := ep.ListenStreams()
+			if err != nil {
+				t.Fatal(err)
+			}
+			return func() { ln.Close() }
+		}},
+		{"Router", func(t *testing.T, ep *iroh.Endpoint, alpn string) func() {
+			r, err := iroh.NewRouter(ep, map[string]iroh.ProtocolHandler{
+				alpn: iroh.ProtocolHandlerFunc(func(ctx context.Context, conn *iroh.Conn) error {
+					return nil
+				}),
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return func() { r.Shutdown(context.Background()) }
+		}},
+	}
+	for _, o := range owners {
+		t.Run(o.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				const alpn = "iroh-stale/0"
+				release := make(chan struct{})
+				n := irohtest.NewNet(t)
+				bad := n.Peer()
+				srv := n.Peer(iroh.WithALPNs(alpn), iroh.WithHooks(irohtest.StallFrom(release, bad)))
+
+				ctx, cancel := context.WithCancel(context.Background())
+				acceptErr := make(chan error, 1)
+				go func() {
+					_, err := srv.Accept(ctx)
+					acceptErr <- err
+				}()
+				dialed := make(chan *iroh.Conn, 1)
+				go func() {
+					conn, err := bad.Connect(context.Background(), srv.Addr(), alpn)
+					if err != nil {
+						t.Error(err)
+					}
+					dialed <- conn
+				}()
+				time.Sleep(100 * time.Millisecond)
+				synctest.Wait()
+				cancel()
+				if err := <-acceptErr; !errors.Is(err, context.Canceled) {
+					t.Fatalf("Accept = %v, want context.Canceled", err)
+				}
+
+				releaseOwner := o.take(t, srv.Endpoint, alpn)
+				defer releaseOwner()
+				close(release)
+				conn := <-dialed
+				if conn == nil {
+					t.FailNow()
+				}
+				irohtest.Within(t, isolationBudget, func(ctx context.Context) error {
+					select {
+					case <-conn.Context().Done():
+						return nil
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				})
+
+				releaseOwner()
+				ctx, cancel = context.WithTimeout(context.Background(), isolationBudget)
+				defer cancel()
+				if c, err := srv.Accept(ctx); err == nil {
+					t.Fatalf("Accept returned stale conn from %v", c.RemoteID())
+				}
+			})
+		})
+	}
+}
+
+// TestAcceptBacklog pins that Accept keeps at most [iroh.AcceptBacklog]
+// handshakes in flight or waiting. When stalled peers hold every slot, later
+// peers wait for a slot rather than being dropped, and are accepted once one
+// frees.
+func TestAcceptBacklog(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const alpn = "iroh-backlog/0"
+		const flood = iroh.AcceptBacklog + 8
+		release := make(chan struct{})
+		n := irohtest.NewNet(t)
+		var bad []*irohtest.Peer
+		for range flood {
+			bad = append(bad, n.Peer())
+		}
+		good := n.Peer()
+		stall := irohtest.StallFrom(release, bad...)
+		var mu sync.Mutex
+		stalled, maxStalled := 0, 0
+		hooks := irohtest.Hooks{After: func(ctx context.Context, conn *iroh.Conn) error {
+			mu.Lock()
+			stalled++
+			maxStalled = max(maxStalled, stalled)
+			mu.Unlock()
+			defer func() {
+				mu.Lock()
+				stalled--
+				mu.Unlock()
+			}()
+			return stall.After(ctx, conn)
+		}}
+		srv := n.Peer(iroh.WithALPNs(alpn), iroh.WithHooks(hooks))
+
+		accepted := make(chan key.EndpointID, flood+1)
+		go func() {
+			for {
+				conn, err := srv.Accept(context.Background())
+				if errors.Is(err, iroh.ErrEndpointClosed) {
+					return
+				}
+				if err != nil {
+					continue
+				}
+				accepted <- conn.RemoteID()
+			}
+		}()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		// Stagger the dials: a burst of handshakes arriving at one instant
+		// overflows the server's receive queue, and the lost datagrams cost
+		// seconds of retransmission.
+		for _, p := range bad {
+			go p.Connect(ctx, srv.Addr(), alpn)
+			time.Sleep(5 * time.Millisecond)
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+		mu.Lock()
+		got := maxStalled
+		mu.Unlock()
+		if got != iroh.AcceptBacklog {
+			t.Fatalf("stalled handshakes = %d, want %d", got, iroh.AcceptBacklog)
+		}
+
+		close(release)
+		want := map[key.EndpointID]bool{good.ID(): true}
+		for _, p := range bad {
+			want[p.ID()] = true
+		}
+		irohtest.Within(t, isolationBudget, func(ctx context.Context) error {
+			if _, err := good.Connect(ctx, srv.Addr(), alpn); err != nil {
+				return err
+			}
+			for len(want) > 0 {
+				select {
+				case id := <-accepted:
+					delete(want, id)
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			return nil
+		})
+		mu.Lock()
+		defer mu.Unlock()
+		if maxStalled > iroh.AcceptBacklog {
+			t.Fatalf("max stalled handshakes = %d, want <= %d", maxStalled, iroh.AcceptBacklog)
 		}
 	})
 }

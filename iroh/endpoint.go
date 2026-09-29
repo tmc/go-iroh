@@ -70,9 +70,14 @@ type Endpoint struct {
 	acceptOwner acceptOwner
 	// accepted holds the outcomes of handshakes that Accept started and
 	// finished after the call that started them returned, for the next
-	// Accept. acceptReady is signalled when one is added.
+	// Accept. acceptReady is signalled when one is added. acceptSlots holds
+	// a token for each handshake Accept has in flight or in accepted.
+	// acceptGen advances when another loop takes over accepting, so that a
+	// handshake started before then is not kept.
 	accepted    []acceptResult
 	acceptReady chan struct{}
+	acceptSlots chan struct{}
+	acceptGen   uint64
 	addrWatch   *watch.Value[netaddr.EndpointAddr]
 	// externalPinned holds addresses pinned via AddExternalAddr until
 	// RemoveExternalAddr. externalDiscovered holds the latest net report's
@@ -91,6 +96,12 @@ type Endpoint struct {
 	lastGood map[key.EndpointID]string
 	metrics  endpointMetrics
 }
+
+// acceptBacklog bounds the handshakes Accept has in flight or finished but not
+// yet returned. When all are taken, Accept takes no new connection until one
+// frees; further connections wait in the QUIC listener's own queue, which
+// holds as many again before refusing. It matches that queue's size.
+const acceptBacklog = 32
 
 type acceptOwner int
 
@@ -611,6 +622,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		lookup:       c.lookup,
 		closedCh:     make(chan struct{}),
 		acceptReady:  make(chan struct{}, 1),
+		acceptSlots:  make(chan struct{}, acceptBacklog),
 		stableIDs:    make(map[*quic.Conn]uint64),
 	}
 	// Assigned after the literal: the runner needs ep.transport so QAD
@@ -1632,11 +1644,12 @@ func (e *Endpoint) acceptIncoming(ctx context.Context) (*Incoming, error) {
 }
 
 // Accept blocks until an incoming connection completes its handshake, then
-// returns it as a [Conn]. Handshakes proceed concurrently, so a slow or stalled
-// peer does not hold up others. It returns an error if the endpoint is closed
-// or has no configured ALPNs, and [ErrHandshakeRejected] (or the hook's own
-// error) when an [EndpointHooks.AfterHandshake] hook turns a peer away; after
-// the latter, call Accept again. ctx cancels the wait.
+// returns it as a [Conn]. Up to 32 handshakes proceed concurrently, so a slow
+// or stalled peer does not hold up others unless 32 stall at once. It returns
+// an error if the endpoint is closed or has no configured ALPNs, and
+// [ErrHandshakeRejected] (or the hook's own error) when an
+// [EndpointHooks.AfterHandshake] hook turns a peer away; after the latter,
+// call Accept again. ctx cancels the wait.
 func (e *Endpoint) Accept(ctx context.Context) (*Conn, error) {
 	e.metrics.acceptsStarted.Add(1)
 	if err := e.acquireAcceptOwner(acceptOwnerAccept); err != nil {
@@ -1661,19 +1674,34 @@ type acceptResult struct {
 // accept returns the next connection to finish its handshake, or the error
 // that ended one. Handshakes run concurrently, each on its own goroutine, so a
 // peer that stalls its handshake or is held in an AfterHandshake hook delays
-// only itself. A handshake still running when accept returns is finished
-// anyway and its outcome kept for the next call.
+// only itself, until [acceptBacklog] of them are running or waiting. A
+// handshake still running when accept returns is finished anyway and its
+// outcome kept for the next call, unless another loop has taken over
+// accepting by then.
 func (e *Endpoint) accept(ctx context.Context) (*Conn, error) {
+	e.mu.Lock()
+	gen := e.acceptGen
+	e.mu.Unlock()
 	pullCtx, stop := context.WithCancel(ctx)
 	pullErr := make(chan error, 1)
 	go func() {
 		for {
+			select {
+			case e.acceptSlots <- struct{}{}:
+			case <-pullCtx.Done():
+				pullErr <- pullCtx.Err()
+				return
+			case <-e.closedCh:
+				pullErr <- ErrEndpointClosed
+				return
+			}
 			in, err := e.acceptIncoming(pullCtx)
 			if err != nil {
+				<-e.acceptSlots
 				pullErr <- err
 				return
 			}
-			go e.finishAccept(in.qc)
+			go e.finishAccept(in.qc, gen)
 		}
 	}()
 	defer func() {
@@ -1698,21 +1726,25 @@ func (e *Endpoint) accept(ctx context.Context) (*Conn, error) {
 	}
 }
 
-func (e *Endpoint) finishAccept(qc *quic.Conn) {
+func (e *Endpoint) finishAccept(qc *quic.Conn, gen uint64) {
 	conn, err := e.finishAccepting(e.serveCtx, qc)
 	if errors.Is(err, ErrConnClosedDuringHandshake) || e.serveCtx.Err() != nil {
 		// A connection attempt that dies before its handshake completes, or
 		// one cut short by shutdown, is not something to report.
+		<-e.acceptSlots
 		if conn != nil {
 			conn.Close()
 		}
 		return
 	}
 	e.mu.Lock()
-	if e.closed {
+	if e.closed || e.acceptGen != gen {
+		// No Accept will return a connection finished after the endpoint
+		// closed or another loop took over accepting.
 		e.mu.Unlock()
+		<-e.acceptSlots
 		if conn != nil {
-			conn.Close()
+			conn.CloseWithError(0, "not accepted")
 		}
 		return
 	}
@@ -1733,6 +1765,7 @@ func (e *Endpoint) popAccepted() (acceptResult, bool) {
 	r := e.accepted[0]
 	e.accepted[0] = acceptResult{}
 	e.accepted = e.accepted[1:]
+	<-e.acceptSlots
 	return r, true
 }
 
@@ -1963,6 +1996,7 @@ func (e *Endpoint) Shutdown(ctx context.Context) error {
 	e.accepted = nil
 	e.mu.Unlock()
 	for _, r := range accepted {
+		<-e.acceptSlots
 		if r.conn != nil {
 			r.conn.Close()
 		}
@@ -2008,9 +2042,11 @@ func (e *Endpoint) acquireAcceptOwner(owner acceptOwner) error {
 	}
 	e.acceptOwner = owner
 	if owner != acceptOwnerAccept {
-		// Connections Accept finished but never returned will not be
-		// returned now that another loop owns accepting.
+		// Connections Accept finished or is finishing but never returned
+		// will not be returned now that another loop owns accepting.
+		e.acceptGen++
 		for _, r := range e.accepted {
+			<-e.acceptSlots
 			if r.conn != nil {
 				r.conn.CloseWithError(0, "not accepted")
 			}
