@@ -8,6 +8,13 @@ Review as the Go project would: see [Go Code Review
 Comments](https://go.dev/wiki/CodeReviewComments). Prefer specific findings
 about correctness, compatibility, and documentation accuracy over style notes.
 
+## Severity
+
+Report Medium and High findings. Omit Low findings about style, naming, or
+wording. Two kinds are always worth reporting, whatever their severity: a doc
+comment that claims more than the code does, and a discarded error in an
+example. If nothing qualifies, say so rather than padding the review.
+
 ## Compatibility
 
 Pre-1.0. A patch release (v0.1.x) may add exported symbols but never remove one
