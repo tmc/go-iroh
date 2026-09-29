@@ -21,9 +21,9 @@ parity: doctor-image-build
 		docker compose build $(NO_CACHE) parity; \
 		docker compose run --rm parity
 
-# The IP ticket and bao vectors cover open go-iroh bugs. The runner reports
+# The bao vectors cover an open go-iroh bug. The runner reports
 # them against their expected verdicts, so the corpus check here skips them.
-KNOWN_BUG_VECTORS := TestIPTicketVectors|TestBaoVectors
+KNOWN_BUG_VECTORS := TestBaoVectors
 
 parity-native:
 	go test -skip '$(KNOWN_BUG_VECTORS)' ./vectors
