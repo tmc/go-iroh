@@ -253,7 +253,7 @@ func TestDownloadBlobParallelRetriesRange(t *testing.T) {
 	}
 }
 
-func TestBlobRangeTransferRejectsDisjointRanges(t *testing.T) {
+func TestBlobRangeTransferSupportsDisjointRanges(t *testing.T) {
 	data := vectorData(BlockSize)
 	hash := NewHash(data)
 	client, server := newTestBidiStreamPair()
@@ -261,15 +261,17 @@ func TestBlobRangeTransferRejectsDisjointRanges(t *testing.T) {
 	go func() {
 		errc <- ServeBlob(context.Background(), server, mustStore(t, data))
 	}()
-	ranges := ChunkRanges{ranges: []ChunkRange{{Start: 0, End: 1}, {Start: 3, End: 4}}}
-	if _, err := client.Write(EncodeGetRequestBytes(GetBlobRanges(hash, ranges))); err != nil {
-		t.Fatal(err)
+	ranges := RangeChunksMany(ChunkRange{Start: 0, End: 1}, ChunkRange{Start: 3, End: 4})
+	got, size, err := GetBlobChunksBytes(context.Background(), client, hash, ranges)
+	if err != nil {
+		t.Fatalf("GetBlobChunksBytes: %v", err)
 	}
-	if err := client.Close(); err != nil {
-		t.Fatal(err)
+	want := append(append([]byte(nil), data[:ChunkSize]...), data[3*ChunkSize:4*ChunkSize]...)
+	if size != uint64(len(data)) || !bytes.Equal(got, want) {
+		t.Fatalf("disjoint ranges size/data mismatch: size=%d bytes=%d", size, len(got))
 	}
-	if err := <-errc; !errors.Is(err, ErrUnsupportedRequest) {
-		t.Fatalf("ServeBlob disjoint range error = %v, want %v", err, ErrUnsupportedRequest)
+	if err := <-errc; err != nil {
+		t.Fatalf("ServeBlob: %v", err)
 	}
 }
 

@@ -244,11 +244,17 @@ func writeBlobRange(ctx context.Context, s io.Writer, store Store, hash Hash, ra
 	if !blob.IsComplete() || !verified {
 		return ErrBlobNotFound
 	}
-	offset, length, ok := singleByteRange(ranges, size)
-	if !ok {
-		return ErrUnsupportedRequest
+	data, err := blob.DataReader(ctx)
+	if err != nil {
+		return fmt.Errorf("blobs: open data: %w", err)
 	}
-	return extractRange(ctx, s, blob, offset, length)
+	defer data.Close()
+	outboard, err := blob.Outboard(ctx)
+	if err != nil {
+		return fmt.Errorf("blobs: open outboard: %w", err)
+	}
+	defer outboard.Close()
+	return EncodeBlobChunks(s, hash, size, data, outboard, ranges)
 }
 
 // extractRange streams [offset, offset+length) of blob to s as a BAO slice.
@@ -441,6 +447,66 @@ func GetBlobRangeBytes(ctx context.Context, s BidiStream, hash Hash, ranges Chun
 	return out.Bytes(), nil
 }
 
+// GetBlobChunksBytes requests arbitrary chunk ranges and returns their
+// concatenated bytes together with the verified full blob size.
+func GetBlobChunksBytes(ctx context.Context, s BidiStream, hash Hash, ranges ChunkRanges) ([]byte, uint64, error) {
+	var out bytes.Buffer
+	size, err := DownloadBlobChunks(ctx, s, hash, ranges, &out)
+	if err != nil {
+		return nil, 0, err
+	}
+	return out.Bytes(), size, nil
+}
+
+// DownloadBlobChunks requests and validates arbitrary chunk ranges from hash.
+// Selected chunks are written in increasing order, concatenated without gaps.
+// The returned size is read from the verified BAO response.
+func DownloadBlobChunks(ctx context.Context, s BidiStream, hash Hash, ranges ChunkRanges, w io.Writer) (uint64, error) {
+	return downloadBlobChunks(ctx, s, hash, ranges, w, nil)
+}
+
+func downloadBlobChunks(ctx context.Context, s BidiStream, hash Hash, ranges ChunkRanges, w io.Writer, checkSize func(uint64) error) (uint64, error) {
+	if w == nil {
+		return 0, errors.New("blobs: nil blob writer")
+	}
+	if _, err := s.Write(EncodeGetRequestBytes(GetBlobRanges(hash, ranges))); err != nil {
+		_ = s.Close()
+		return 0, fmt.Errorf("blobs: write request: %w", err)
+	}
+	if err := closeWrite(s); err != nil {
+		return 0, fmt.Errorf("blobs: close request: %w", err)
+	}
+	dw := &detachableWriter{w: w}
+	type result struct {
+		size uint64
+		err  error
+	}
+	errch := make(chan result, 1)
+	go func() {
+		size, err := decodeBlobChunksToWriter(hash, s, ranges, dw, checkSize)
+		if err != nil {
+			abort(s)
+		} else {
+			err = readTrailingByte(s)
+			if err != nil {
+				abort(s)
+			}
+		}
+		errch <- result{size: size, err: err}
+	}()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case result := <-errch:
+		return result.size, result.err
+	case <-ctx.Done():
+		abort(s)
+		dw.detach()
+		return 0, ctx.Err()
+	}
+}
+
 // DownloadBlobRange requests and validates [offset, offset+length) from hash.
 //
 // The request is encoded as iroh-blobs chunk ranges, so offset must start on a
@@ -461,38 +527,56 @@ func DownloadBlobRange(ctx context.Context, s BidiStream, hash Hash, offset, len
 	}
 	startChunk := offset / ChunkSize
 	endChunk := (end-1)/ChunkSize + 1
-	req := GetBlobRanges(hash, RangeChunks(startChunk, endChunk))
-	if _, err := s.Write(EncodeGetRequestBytes(req)); err != nil {
-		_ = s.Close()
-		return fmt.Errorf("blobs: write request: %w", err)
-	}
-	if err := closeWrite(s); err != nil {
-		return fmt.Errorf("blobs: close request: %w", err)
-	}
-	dw := &detachableWriter{w: w}
-	errc := make(chan error, 1)
-	go func() {
-		if err := DecodeBlobRangeToWriter(hash, s, offset, length, dw); err != nil {
-			errc <- fmt.Errorf("blobs: decode response: %w", err)
-			return
+	var want uint64
+	trim := &chunkRangeTrimWriter{w: w, skip: offset % ChunkSize, remain: length}
+	_, err := downloadBlobChunks(ctx, s, hash, RangeChunks(startChunk, endChunk), trim, func(size uint64) error {
+		if offset > size {
+			return fmt.Errorf("%w: range starts beyond blob size", ErrInvalidBlob)
 		}
-		if err := readTrailingByte(s); err != nil {
-			errc <- err
-			return
-		}
-		errc <- nil
-	}()
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	select {
-	case err := <-errc:
+		want = min(length, size-offset)
+		trim.remain = want
+		return nil
+	})
+	if err != nil {
 		return err
-	case <-ctx.Done():
-		abort(s)
-		dw.detach()
-		return ctx.Err()
 	}
+	if trim.written != want {
+		return fmt.Errorf("%w: range returned %d bytes, want %d", ErrInvalidBlob, trim.written, want)
+	}
+	return nil
+}
+
+type chunkRangeTrimWriter struct {
+	w       io.Writer
+	skip    uint64
+	remain  uint64
+	written uint64
+}
+
+func (w *chunkRangeTrimWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	if w.skip > 0 {
+		drop := min(w.skip, uint64(n))
+		w.skip -= drop
+		p = p[drop:]
+	}
+	if w.remain == 0 {
+		return n, nil
+	}
+	keep := min(w.remain, uint64(len(p)))
+	if keep == 0 {
+		return n, nil
+	}
+	written, err := w.w.Write(p[:keep])
+	w.written += uint64(written)
+	w.remain -= uint64(written)
+	if err != nil {
+		return n - len(p) + written, err
+	}
+	if written != int(keep) {
+		return n - len(p) + written, io.ErrShortWrite
+	}
+	return n, nil
 }
 
 // RangeOpener opens one bidirectional stream to a blob provider.
