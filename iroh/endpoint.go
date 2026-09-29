@@ -1673,7 +1673,8 @@ type acceptResult struct {
 // running when accept returns is finished anyway and its outcome kept for the
 // next call, unless another loop has taken over accepting by then. accept
 // starts new handshakes only while none are kept, so the kept outcomes are
-// bounded by the admissions.
+// bounded by the admissions, plus one connection that may already have been
+// pulled when the first was kept.
 func (e *Endpoint) accept(ctx context.Context) (*Conn, error) {
 	if r, ok := e.popAccepted(); ok {
 		return r.conn, r.err
@@ -1685,6 +1686,12 @@ func (e *Endpoint) accept(ctx context.Context) (*Conn, error) {
 	pullErr := make(chan error, 1)
 	go func() {
 		for {
+			if e.hasAccepted() {
+				// Let the wait below take it; pulling more would keep
+				// results beyond those admitted.
+				pullErr <- pullCtx.Err()
+				return
+			}
 			in, err := e.acceptIncoming(pullCtx)
 			if err != nil {
 				pullErr <- err
@@ -1743,6 +1750,12 @@ func (e *Endpoint) finishAccept(qc *quic.Conn, gen uint64) {
 	case e.acceptReady <- struct{}{}:
 	default:
 	}
+}
+
+func (e *Endpoint) hasAccepted() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.accepted) > 0
 }
 
 func (e *Endpoint) popAccepted() (acceptResult, bool) {
