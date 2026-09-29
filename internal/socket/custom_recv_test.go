@@ -8,71 +8,56 @@ import (
 	"github.com/tmc/go-iroh/netaddr"
 )
 
-// burstTransport pushes n datagrams at recv without reading anything back and
-// records what recv reported, plus whether ctx was done at that moment.
+// burstTransport pushes n datagrams at recv and reports each result on
+// results.
 type burstTransport struct {
 	n       int
-	results []bool
-	ctxDone []bool
-	done    chan struct{}
+	results chan bool
 }
 
 func (t *burstTransport) Serve(ctx context.Context, recv func(CustomDatagram) bool) {
-	defer close(t.done)
 	for range t.n {
-		ok := recv(CustomDatagram{
+		t.results <- recv(CustomDatagram{
 			Remote: netaddr.NewCustomAddr(7, []byte("peer")),
 			Data:   []byte("x"),
 		})
-		t.results = append(t.results, ok)
-		t.ctxDone = append(t.ctxDone, ctx.Err() != nil)
 	}
+	<-ctx.Done()
 }
 
 func (t *burstTransport) Send(netaddr.CustomAddr, *netaddr.CustomAddr, []byte) bool { return true }
 
-// TestCustomTransportRecvFalseIsNotShutdown pins the recv contract: under a
-// burst that outruns the receive queue, recv reports false while ctx is still
-// live. A transport that reads false as "shutting down" and returns would tear
-// itself down on the first burst; shutdown is reported through ctx alone.
-func TestCustomTransportRecvFalseIsNotShutdown(t *testing.T) {
+// TestCustomTransportRecvBlocks pins the recv contract: when the receive queue
+// is full, recv waits for room instead of dropping the datagram, and reports
+// false only once ctx is done.
+func TestCustomTransportRecvBlocks(t *testing.T) {
 	const queue = 2
 	recvCh := make(chan recvBatch, queue)
-	fake := &burstTransport{n: queue + 4, done: make(chan struct{})}
+	fake := &burstTransport{n: queue + 2, results: make(chan bool, queue+2)}
 	ct := newCustomTransport(fake, recvCh)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go ct.Serve(ctx)
 
+	for i := range queue {
+		if !<-fake.results {
+			t.Fatalf("recv %d = false, want true while the queue has room", i)
+		}
+	}
 	select {
-	case <-fake.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Serve did not return")
+	case ok := <-fake.results:
+		t.Fatalf("recv into a full queue returned %v, want it to wait", ok)
+	case <-time.After(50 * time.Millisecond):
 	}
 
-	if got := len(fake.results); got != queue+4 {
-		t.Fatalf("recv called %d times, want %d", got, queue+4)
+	<-recvCh // make room
+	if !<-fake.results {
+		t.Fatal("recv after the queue drained = false, want true")
 	}
-	for i := range queue {
-		if !fake.results[i] {
-			t.Errorf("recv %d = false, want true while the queue has room", i)
-		}
-	}
-	sawDrop := false
-	for i := queue; i < len(fake.results); i++ {
-		if fake.results[i] {
-			continue
-		}
-		sawDrop = true
-		if fake.ctxDone[i] {
-			t.Errorf("recv %d reported false with ctx already done", i)
-		}
-	}
-	if !sawDrop {
-		t.Fatal("no datagram was dropped; the queue never filled")
-	}
-	if len(recvCh) != queue {
-		t.Errorf("queued %d datagrams, want %d", len(recvCh), queue)
+
+	cancel()
+	if <-fake.results {
+		t.Fatal("recv after ctx is done = true, want false")
 	}
 }

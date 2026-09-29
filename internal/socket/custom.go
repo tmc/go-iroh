@@ -30,12 +30,11 @@ type CustomTransport interface {
 	// Serve runs the transport until ctx is done, passing each received
 	// datagram to recv.
 	//
-	// recv reports whether the datagram was taken. A false result means the
-	// datagram was dropped, most often because the receive queue was full
-	// under a burst; it is not a signal to stop. Serve must keep serving and
-	// return only when ctx is done, so `if !recv(d) { return }` tears the
-	// transport down on the first burst. Shutdown is reported through ctx
-	// alone, which is cancelled before the queue stops being drained.
+	// recv blocks until the datagram is queued for the QUIC stack, as the IP
+	// and relay transports do, so a busy endpoint slows its transports
+	// rather than dropping what they deliver. It reports whether the
+	// datagram was taken; it returns false, dropping the datagram, only once
+	// ctx is done. Serve must return when ctx is done.
 	Serve(ctx context.Context, recv func(CustomDatagram) bool)
 
 	// Send sends p to remote. local is nil when qng did not select a specific
@@ -84,8 +83,6 @@ func (t *customTransport) Serve(ctx context.Context) {
 			return true
 		case <-ctx.Done():
 			return false
-		default:
-			return false
 		}
 	})
 }
@@ -100,11 +97,6 @@ func (t *customTransport) servePackets(ctx context.Context, p PacketTransport) {
 		}:
 			return true
 		case <-ctx.Done():
-			if pkt.Free != nil {
-				pkt.Free()
-			}
-			return false
-		default:
 			if pkt.Free != nil {
 				pkt.Free()
 			}
