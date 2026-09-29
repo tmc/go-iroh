@@ -328,3 +328,40 @@ func TestGossipBroadcastHonorsContext(t *testing.T) {
 		}
 	})
 }
+
+// TestGossipDropDuringDialLeavesNoSender checks that a send queue dropped
+// while its writer is dialing, as a timed-out write drops it, does not leave
+// the connection the dial then completes published and unowned.
+func TestGossipDropDuringDialLeavesNoSender(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+
+		var topic gossip.TopicID
+		copy(topic[:], "isolation")
+
+		n := irohtest.NewNet(t)
+		_, ga := netGossipPeer(t, n)
+		b, _ := netGossipPeer(t, n)
+		dropped := false
+		ga.SetDialedHook(func(peer gossip.PeerID) {
+			if !dropped && peer == gossip.PeerID(b.ID().Bytes()) {
+				dropped = true
+				ga.DropPeer(peer)
+			}
+		})
+		ts, err := ga.Subscribe(ctx, topic, []netaddr.EndpointAddr{b.Addr()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ts.Close()
+		time.Sleep(100 * time.Millisecond)
+		synctest.Wait()
+		if !dropped {
+			t.Fatal("dial hook never ran")
+		}
+		if ga.HasSender(gossip.PeerID(b.ID().Bytes())) {
+			t.Fatal("connection dialed for a dropped send queue was published")
+		}
+	})
+}

@@ -123,6 +123,10 @@ type Gossip struct {
 	// joinWait is closed and replaced whenever a topic's neighbor set
 	// changes or a topic closes, waking every Joined caller.
 	joinWait chan struct{}
+
+	// testHookDialed, if set, runs after a dial to peer succeeds and before
+	// its connection is published.
+	testHookDialed func(peer PeerID)
 }
 
 // NewGossip returns a Gossip instance for ep.
@@ -635,12 +639,10 @@ func (g *Gossip) send(q *sendQueue, peer PeerID, msg gossipproto.Message) error 
 		if !hasAddr {
 			return fmt.Errorf("gossip: no address for peer %s", peer)
 		}
-		if err := g.connect(q.ctx, peer, addr); err != nil {
+		var err error
+		if sender, err = g.connect(q, peer, addr); err != nil {
 			return err
 		}
-		g.mu.Lock()
-		sender = g.peerSenders[peer]
-		g.mu.Unlock()
 	}
 	if sender == nil {
 		return fmt.Errorf("gossip: no sender for peer %s", peer)
@@ -655,21 +657,34 @@ func (g *Gossip) send(q *sendQueue, peer PeerID, msg gossipproto.Message) error 
 	return sender.Send(q.ctx, Message(msg))
 }
 
-func (g *Gossip) connect(ctx context.Context, peer PeerID, addr netaddr.EndpointAddr) error {
+// connect dials peer for q's writer and publishes the connection as q's
+// sender. If q is dropped while the dial is in flight, as a timed-out write
+// drops it, the new connection is closed instead: nothing would own it.
+func (g *Gossip) connect(q *sendQueue, peer PeerID, addr netaddr.EndpointAddr) (*Sender, error) {
 	g.metrics.actorTickDialer.Add(1)
-	conn, err := g.ep.Connect(ctx, addr, ALPN)
+	conn, err := g.ep.Connect(q.ctx, addr, ALPN)
 	if err != nil {
 		g.metrics.actorTickDialerFailure.Add(1)
-		return fmt.Errorf("gossip: connect peer: %w", err)
+		return nil, fmt.Errorf("gossip: connect peer: %w", err)
 	}
 	g.metrics.actorTickDialerSuccess.Add(1)
+	if g.testHookDialed != nil {
+		g.testHookDialed(peer)
+	}
+	sender := NewSender(conn, g.maxMessageSize)
 	g.mu.Lock()
-	g.peerSenders[peer] = NewSender(conn, g.maxMessageSize)
+	if q.dropped {
+		g.mu.Unlock()
+		closeConn(sender)
+		return nil, errors.New("gossip: send queue dropped")
+	}
+	g.peerSenders[peer] = sender
+	q.sender = sender
 	g.mu.Unlock()
 	go func() {
 		_ = g.Accept(conn.Context(), conn)
 	}()
-	return nil
+	return sender, nil
 }
 
 // joinWaiter returns a channel closed on the next neighbor-set change. Callers
