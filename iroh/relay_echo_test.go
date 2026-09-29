@@ -3,8 +3,12 @@ package iroh
 import (
 	"context"
 	"io"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,6 +150,76 @@ func TestRelayOnlyEcho(t *testing.T) {
 	}
 	if !res.peer.Equal(client.ID()) {
 		t.Errorf("server saw client id %s, want %s", res.peer, client.ID())
+	}
+}
+
+func TestRelayOnlyOnlineThroughProxy(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	relayServer := newEchoRelayServer(t)
+	relayURL := relayServer.url(t)
+	connectTargets := make(chan string, 8)
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "CONNECT required", http.StatusMethodNotAllowed)
+			return
+		}
+		connectTargets <- r.Host
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "hijacking unsupported", http.StatusInternalServerError)
+			return
+		}
+		client, rw, err := hijacker.Hijack()
+		if err != nil {
+			return
+		}
+		defer client.Close()
+		upstream, err := net.Dial("tcp", r.Host)
+		if err != nil {
+			io.WriteString(rw, "HTTP/1.1 502 Bad Gateway\r\n\r\n")
+			rw.Flush()
+			return
+		}
+		defer upstream.Close()
+		if _, err := io.WriteString(rw, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+			return
+		}
+		if err := rw.Flush(); err != nil {
+			return
+		}
+		go io.Copy(upstream, client)
+		io.Copy(client, upstream)
+	}))
+	t.Cleanup(proxyServer.Close)
+	proxyURL, err := url.Parse(proxyServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mode := relay.ModeCustom(relay.MapFromURLs(relayURL))
+	ep, err := Bind(ctx,
+		WithRelayMode(mode),
+		WithProxy(ProxyURL(proxyURL)),
+		WithoutNetReport(),
+		WithoutIPTransports(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Shutdown(ctx)
+	if err := ep.Online(ctx); err != nil {
+		t.Fatalf("endpoint online through proxy: %v", err)
+	}
+	select {
+	case target := <-connectTargets:
+		want := strings.TrimPrefix(relayServer.ts.URL, "http://")
+		if target != want {
+			t.Fatalf("proxy CONNECT target = %q, want %q", target, want)
+		}
+	default:
+		t.Fatal("proxy received no CONNECT request for the relay")
 	}
 }
 

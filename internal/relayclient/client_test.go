@@ -1,10 +1,19 @@
 package relayclient
 
 import (
+	"bufio"
 	"context"
+	"crypto/tls"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,8 +29,25 @@ import (
 // datagram.
 func fakeRelay(t *testing.T, deny bool) *httptest.Server {
 	t.Helper()
+	return httptest.NewServer(fakeRelayHandler(t, deny, nil))
+}
+
+func fakeRelayTLS(t *testing.T, keyMaterialSeen *atomic.Bool) *httptest.Server {
+	t.Helper()
+	return httptest.NewTLSServer(fakeRelayHandler(t, false, keyMaterialSeen))
+}
+
+func fakeRelayHandler(t *testing.T, deny bool, keyMaterialSeen *atomic.Bool) http.Handler {
+	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
+		if keyMaterialSeen != nil {
+			if r.Header.Get(relayproto.ClientAuthHeader) == "" {
+				t.Error("relay request missing key-material auth header")
+			} else {
+				keyMaterialSeen.Store(true)
+			}
+		}
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			Subprotocols: relayproto.SupportedProtocolVersions(),
 		})
@@ -91,7 +117,227 @@ func fakeRelay(t *testing.T, deny bool) *httptest.Server {
 			}
 		}
 	})
-	return httptest.NewServer(mux)
+	return mux
+}
+
+func TestClientConnectThroughProxy(t *testing.T) {
+	var keyMaterialSeen atomic.Bool
+	relayServer := fakeRelayTLS(t, &keyMaterialSeen)
+	defer relayServer.Close()
+
+	var proxyMu sync.Mutex
+	var connectTarget, proxyAuth string
+	proxy := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyMu.Lock()
+		connectTarget = r.Host
+		proxyAuth = r.Header.Get("Proxy-Authorization")
+		proxyMu.Unlock()
+		if r.Method != http.MethodConnect {
+			http.Error(w, "CONNECT required", http.StatusMethodNotAllowed)
+			return
+		}
+		upstream, err := net.Dial("tcp", r.Host)
+		if err != nil {
+			http.Error(w, "dial target", http.StatusBadGateway)
+			return
+		}
+		client, rw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			upstream.Close()
+			t.Errorf("hijack proxy connection: %v", err)
+			return
+		}
+		fmt.Fprint(rw, "HTTP/1.1 200 Connection Established\r\n\r\n")
+		if err := rw.Flush(); err != nil {
+			upstream.Close()
+			client.Close()
+			return
+		}
+		go func() {
+			defer upstream.Close()
+			defer client.Close()
+			io.Copy(upstream, rw.Reader)
+		}()
+		io.Copy(client, upstream)
+	}))
+	defer proxy.Close()
+
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyURL.User = url.UserPassword("proxy-user", "proxy-secret")
+	sk, _ := key.GenerateSecretKey()
+	client, err := Connect(context.Background(), relayURL(t, relayServer), Options{
+		SecretKey: sk,
+		TLSConfig: &tls.Config{InsecureSkipVerify: true},
+		Proxy:     func(*url.URL) (*url.URL, error) { return proxyURL, nil },
+	})
+	if err != nil {
+		t.Fatalf("Connect through proxy: %v", err)
+	}
+	client.Close()
+
+	proxyMu.Lock()
+	defer proxyMu.Unlock()
+	if connectTarget != strings.TrimPrefix(relayServer.URL, "https://") {
+		t.Errorf("CONNECT target = %q, want %q", connectTarget, strings.TrimPrefix(relayServer.URL, "https://"))
+	}
+	wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("proxy-user:proxy-secret"))
+	if proxyAuth != wantAuth {
+		t.Errorf("Proxy-Authorization = %q, want %q", proxyAuth, wantAuth)
+	}
+	if !keyMaterialSeen.Load() {
+		t.Error("relay did not receive key-material auth from tunneled TLS session")
+	}
+}
+
+func TestClientConnectPlainHTTPThroughConnectProxy(t *testing.T) {
+	relayServer := fakeRelay(t, false)
+	defer relayServer.Close()
+
+	var proxyMu sync.Mutex
+	var proxyMethod, connectTarget string
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyMu.Lock()
+		proxyMethod = r.Method
+		connectTarget = r.Host
+		proxyMu.Unlock()
+		if r.Method != http.MethodConnect {
+			http.Error(w, "CONNECT required", http.StatusMethodNotAllowed)
+			return
+		}
+		upstream, err := net.Dial("tcp", r.Host)
+		if err != nil {
+			http.Error(w, "dial target", http.StatusBadGateway)
+			return
+		}
+		client, rw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			upstream.Close()
+			t.Errorf("hijack proxy connection: %v", err)
+			return
+		}
+		if _, err := fmt.Fprint(rw, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+			upstream.Close()
+			client.Close()
+			return
+		}
+		if err := rw.Flush(); err != nil {
+			upstream.Close()
+			client.Close()
+			return
+		}
+		go func() {
+			defer upstream.Close()
+			defer client.Close()
+			io.Copy(upstream, rw.Reader)
+		}()
+		io.Copy(client, upstream)
+	}))
+	defer proxy.Close()
+
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, _ := key.GenerateSecretKey()
+	client, err := Connect(context.Background(), relayURL(t, relayServer), Options{
+		SecretKey: sk,
+		Proxy:     func(*url.URL) (*url.URL, error) { return proxyURL, nil },
+	})
+	if err != nil {
+		t.Fatalf("Connect through CONNECT-only proxy: %v", err)
+	}
+	client.Close()
+
+	proxyMu.Lock()
+	defer proxyMu.Unlock()
+	if proxyMethod != http.MethodConnect {
+		t.Errorf("proxy method = %q, want CONNECT", proxyMethod)
+	}
+	if connectTarget != strings.TrimPrefix(relayServer.URL, "http://") {
+		t.Errorf("CONNECT target = %q, want %q", connectTarget, strings.TrimPrefix(relayServer.URL, "http://"))
+	}
+}
+
+func TestClientProxyFailureDoesNotLeakCredentials(t *testing.T) {
+	relayServer := fakeRelayTLS(t, nil)
+	defer relayServer.Close()
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "credentials rejected", http.StatusProxyAuthRequired)
+	}))
+	defer proxy.Close()
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyURL.User = url.UserPassword("proxy-user", "proxy-secret")
+	sk, _ := key.GenerateSecretKey()
+	_, err = Connect(context.Background(), relayURL(t, relayServer), Options{
+		SecretKey: sk,
+		TLSConfig: &tls.Config{InsecureSkipVerify: true},
+		Proxy:     func(*url.URL) (*url.URL, error) { return proxyURL, nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), "407") {
+		t.Fatalf("Connect error = %v, want proxy status 407", err)
+	}
+	if strings.Contains(err.Error(), "proxy-secret") {
+		t.Fatalf("Connect error leaked proxy password: %v", err)
+	}
+}
+
+func TestDialProxyPreservesBufferedTunnelBytes(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	done := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer conn.Close()
+		reader := bufio.NewReader(conn)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				done <- err
+				return
+			}
+			if line == "\r\n" {
+				break
+			}
+		}
+		_, err = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\nhello")
+		done <- err
+	}()
+
+	proxyURL, err := url.Parse("http://" + listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := dialProxy(context.Background(), proxyURL, "relay.example:443", nil)
+	if err != nil {
+		t.Fatalf("dialProxy: %v", err)
+	}
+	defer conn.Close()
+	if _, ok := conn.(*bufferedConn); !ok {
+		t.Fatalf("connection = %T, want bufferedConn", conn)
+	}
+	got := make([]byte, 5)
+	if _, err := io.ReadFull(conn, got); err != nil {
+		t.Fatalf("read tunnel bytes: %v", err)
+	}
+	if string(got) != "hello" {
+		t.Fatalf("tunnel bytes = %q, want hello", got)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("proxy: %v", err)
+	}
 }
 
 func relayURL(t *testing.T, ts *httptest.Server) netaddr.RelayURL {

@@ -4,9 +4,14 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,7 +28,7 @@ func tlsInsecure() *tls.Config { return &tls.Config{InsecureSkipVerify: true} }
 // a TLS config when one is supplied.
 func TestNewProbeClient(t *testing.T) {
 	// With no TLS config the transport leaves TLSClientConfig unset.
-	plain := newProbeClient(nil)
+	plain := newProbeClient(nil, nil)
 	tr, ok := plain.Transport.(*http.Transport)
 	if !ok {
 		t.Fatalf("Transport = %T, want *http.Transport", plain.Transport)
@@ -43,10 +48,89 @@ func TestNewProbeClient(t *testing.T) {
 
 	// A supplied TLS config is wired onto the transport.
 	cfg := tlsInsecure()
-	withTLS := newProbeClient(cfg)
+	withTLS := newProbeClient(cfg, nil)
 	tr2 := withTLS.Transport.(*http.Transport)
 	if tr2.TLSClientConfig != cfg {
 		t.Error("TLSClientConfig not applied from config")
+	}
+}
+
+func TestReportHTTPRequestsUseProxy(t *testing.T) {
+	relayServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != relayProbePath {
+			t.Errorf("relay path = %q, want %q", r.URL.Path, relayProbePath)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer relayServer.Close()
+
+	var mu sync.Mutex
+	var gotHTTP, gotHTTPS bool
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodConnect {
+			upstream, err := net.Dial("tcp", r.Host)
+			if err != nil {
+				http.Error(w, "dial target", http.StatusBadGateway)
+				return
+			}
+			client, rw, err := http.NewResponseController(w).Hijack()
+			if err != nil {
+				upstream.Close()
+				t.Errorf("hijack proxy connection: %v", err)
+				return
+			}
+			mu.Lock()
+			gotHTTPS = true
+			mu.Unlock()
+			fmt.Fprint(rw, "HTTP/1.1 200 Connection Established\r\n\r\n")
+			if err := rw.Flush(); err != nil {
+				upstream.Close()
+				client.Close()
+				return
+			}
+			go func() {
+				defer upstream.Close()
+				defer client.Close()
+				io.Copy(upstream, rw.Reader)
+			}()
+			io.Copy(client, upstream)
+			return
+		}
+		if r.URL.Scheme != "http" || r.URL.Path != captivePortalPath {
+			t.Errorf("proxy request = %s %s, want HTTP captive-portal request", r.Method, r.URL)
+		}
+		mu.Lock()
+		gotHTTP = true
+		mu.Unlock()
+		challenge := r.Header.Get(challengeHeader)
+		w.Header().Set(responseHeader, "response "+challenge)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer proxyServer.Close()
+
+	proxyURL, err := url.Parse(proxyServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := func(*url.URL) (*url.URL, error) { return proxyURL, nil }
+	relay, err := netaddr.ParseRelayURL(relayServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runHTTPSProbe(context.Background(), relay, tlsInsecure(), proxy); err != nil {
+		t.Fatalf("runHTTPSProbe through proxy: %v", err)
+	}
+	hasCaptivePortal, err := checkCaptivePortal(context.Background(), relay, nil, proxy)
+	if err != nil {
+		t.Fatalf("checkCaptivePortal through proxy: %v", err)
+	}
+	if hasCaptivePortal {
+		t.Fatal("checkCaptivePortal = true, want false")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !gotHTTPS || !gotHTTP {
+		t.Fatalf("proxy saw HTTPS CONNECT = %v, HTTP captive check = %v; want both", gotHTTPS, gotHTTP)
 	}
 }
 
@@ -112,7 +196,7 @@ func TestJoinPathMissingHostIsMissingHostError(t *testing.T) {
 func TestRunHTTPSProbeMissingHost(t *testing.T) {
 	// A relay URL with no host component cannot be probed; the error must wrap
 	// errMissingHost (mentions "host"). reportgen.rs:817 / joinPath.
-	_, err := runHTTPSProbe(context.Background(), netaddr.RelayURL{}, nil)
+	_, err := runHTTPSProbe(context.Background(), netaddr.RelayURL{}, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for hostless relay URL")
 	}
@@ -131,7 +215,7 @@ func TestCheckCaptivePortalMissingHost(t *testing.T) {
 	if custom.Host() != "" {
 		t.Fatalf("precondition: custom url host = %q, want empty", custom.Host())
 	}
-	_, cperr := checkCaptivePortal(context.Background(), custom, nil)
+	_, cperr := checkCaptivePortal(context.Background(), custom, nil, nil)
 	if !errors.Is(cperr, errMissingHost) {
 		t.Errorf("checkCaptivePortal err = %v, want wrapping errMissingHost", cperr)
 	}

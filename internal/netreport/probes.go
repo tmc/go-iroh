@@ -18,12 +18,12 @@ import (
 //
 // tlsConfig, if non-nil, overrides TLS verification (used in tests with
 // self-signed certs).
-func runHTTPSProbe(ctx context.Context, relay netaddr.RelayURL, tlsConfig *tls.Config) (*probeReport, error) {
+func runHTTPSProbe(ctx context.Context, relay netaddr.RelayURL, tlsConfig *tls.Config, proxy func(*url.URL) (*url.URL, error)) (*probeReport, error) {
 	probeURL, err := joinPath(relay, relayProbePath)
 	if err != nil {
 		return nil, err
 	}
-	client := newProbeClient(tlsConfig)
+	client := newProbeClient(tlsConfig, proxy)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 	if err != nil {
@@ -52,7 +52,7 @@ func runHTTPSProbe(ctx context.Context, relay netaddr.RelayURL, tlsConfig *tls.C
 // 204 status and a matching X-Iroh-Response echo; otherwise a captive portal is
 // assumed. It follows no redirects. Mirrors check_captive_portal
 // (iroh/src/net_report/reportgen.rs:614).
-func checkCaptivePortal(ctx context.Context, relay netaddr.RelayURL, tlsConfig *tls.Config) (bool, error) {
+func checkCaptivePortal(ctx context.Context, relay netaddr.RelayURL, tlsConfig *tls.Config, proxy func(*url.URL) (*url.URL, error)) (bool, error) {
 	host := relay.Host()
 	if host == "" {
 		return false, fmt.Errorf("captive portal: %w", errMissingHost)
@@ -68,7 +68,7 @@ func checkCaptivePortal(ctx context.Context, relay netaddr.RelayURL, tlsConfig *
 	}
 	portalURL := "http://" + authority + captivePortalPath
 
-	client := newProbeClient(tlsConfig)
+	client := newProbeClient(tlsConfig, proxy)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, portalURL, nil)
 	if err != nil {
 		return false, fmt.Errorf("build request: %w", err)
@@ -106,8 +106,13 @@ func joinPath(relay netaddr.RelayURL, path string) (string, error) {
 
 // newProbeClient builds an HTTP client that never follows redirects, mirroring
 // the reqwest builders in reportgen.rs (redirect::Policy::none).
-func newProbeClient(tlsConfig *tls.Config) *http.Client {
+func newProbeClient(tlsConfig *tls.Config, proxy func(*url.URL) (*url.URL, error)) *http.Client {
 	transport := &http.Transport{}
+	if proxy != nil {
+		transport.Proxy = func(req *http.Request) (*url.URL, error) {
+			return proxy(req.URL)
+		}
+	}
 	if tlsConfig != nil {
 		transport.TLSClientConfig = tlsConfig
 	}

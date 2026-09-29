@@ -182,7 +182,7 @@ func TestRunHTTPSProbe(t *testing.T) {
 	defer ts.Close()
 
 	relayURL := mustRelay(t, ts.URL)
-	rep, err := runHTTPSProbe(context.Background(), relayURL, insecureTLS(ts))
+	rep, err := runHTTPSProbe(context.Background(), relayURL, insecureTLS(ts), nil)
 	if err != nil {
 		t.Fatalf("runHTTPSProbe: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestRunHTTPSProbeNon2xx(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	_, err := runHTTPSProbe(context.Background(), mustRelay(t, ts.URL), insecureTLS(ts))
+	_, err := runHTTPSProbe(context.Background(), mustRelay(t, ts.URL), insecureTLS(ts), nil)
 	if err == nil {
 		t.Fatal("expected error for non-2xx response")
 	}
@@ -263,7 +263,7 @@ func TestCheckCaptivePortal(t *testing.T) {
 			// relay url host to the test server so we control the response.
 			relayURL := mustRelay(t, ts.URL)
 
-			got, err := checkCaptivePortal(context.Background(), relayURL, nil)
+			got, err := checkCaptivePortal(context.Background(), relayURL, nil, nil)
 			if err != nil {
 				t.Fatalf("checkCaptivePortal: %v", err)
 			}
@@ -285,7 +285,7 @@ func TestCheckCaptivePortalRequestShape(t *testing.T) {
 	defer ts.Close()
 
 	relayURL := mustRelay(t, ts.URL)
-	got, err := checkCaptivePortal(context.Background(), relayURL, nil)
+	got, err := checkCaptivePortal(context.Background(), relayURL, nil, nil)
 	if err != nil {
 		t.Fatalf("checkCaptivePortal: %v", err)
 	}

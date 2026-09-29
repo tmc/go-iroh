@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"net"
 	"net/netip"
+	"net/url"
 	"sort"
 	"sync"
 	"time"
@@ -40,6 +41,7 @@ type Client struct {
 	dnsResolver *net.Resolver
 	// tlsConfig overrides TLS verification for HTTPS probes (used in tests).
 	tlsConfig *tls.Config
+	proxy     func(*url.URL) (*url.URL, error)
 	// qadTLS supplies the QAD QUIC TLS verification policy. If nil, the relay's
 	// WebPKI certificate is verified against the system roots. Tests set a
 	// config with InsecureSkipVerify to trust a self-signed relay.
@@ -81,6 +83,13 @@ func (c *Client) WithDNSResolver(r *net.Resolver) *Client {
 // tests to trust self-signed relay certificates.
 func (c *Client) WithTLSConfig(cfg *tls.Config) *Client {
 	c.tlsConfig = cfg
+	return c
+}
+
+// WithProxy routes HTTP net report probes through the proxy returned for each
+// target URL. A nil proxy URL means connect directly.
+func (c *Client) WithProxy(proxy func(*url.URL) (*url.URL, error)) *Client {
+	c.proxy = proxy
 	return c
 }
 
@@ -204,7 +213,7 @@ func (c *Client) runProbes(ctx context.Context, relayMap *relay.Map, report *Rep
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r, err := runHTTPSProbe(probeCtx, cfg.URL, c.tlsConfig)
+			r, err := runHTTPSProbe(probeCtx, cfg.URL, c.tlsConfig, c.proxy)
 			if err == nil {
 				add(r)
 			}
@@ -341,7 +350,7 @@ func (c *Client) runCaptivePortal(ctx context.Context, relayMap *relay.Map, repo
 	cpCtx, cancel := context.WithTimeout(ctx, captivePortalTimeout)
 	defer cancel()
 
-	has, err := checkCaptivePortal(cpCtx, urls[0], c.tlsConfig)
+	has, err := checkCaptivePortal(cpCtx, urls[0], c.tlsConfig, c.proxy)
 	if err != nil {
 		return
 	}
