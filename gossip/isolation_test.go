@@ -365,3 +365,73 @@ func TestGossipDropDuringDialLeavesNoSender(t *testing.T) {
 		}
 	})
 }
+
+// fillQueue broadcasts on ts until the send queue of a neighbor that never
+// reads is full, which it reports by a Broadcast waiting out its context.
+func fillQueue(ctx context.Context, t *testing.T, ts *gossip.Topic) {
+	t.Helper()
+	for i := 0; ; i++ {
+		bctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		err := ts.Broadcast(bctx, fill(i))
+		cancel()
+		if errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestGossipCallsHonorContextBehindFullQueue checks that Subscribe and
+// Shutdown, when what they send must wait behind a stalled neighbor's full
+// send queue, return when their context ends rather than at the write limit.
+func TestGossipCallsHonorContextBehindFullQueue(t *testing.T) {
+	calls := []struct {
+		name string
+		call func(ctx context.Context, gs *gossip.Gossip, bad *irohtest.Peer) error
+	}{
+		{"Subscribe", func(ctx context.Context, gs *gossip.Gossip, bad *irohtest.Peer) error {
+			var other gossip.TopicID
+			copy(other[:], "other")
+			_, err := gs.SubscribeWithOpts(ctx, other, gossip.JoinOptions{Bootstrap: []netaddr.EndpointAddr{bad.Addr()}})
+			return err
+		}},
+		{"Shutdown", func(ctx context.Context, gs *gossip.Gossip, _ *irohtest.Peer) error {
+			gs.Shutdown(ctx)
+			return nil
+		}},
+	}
+	for _, c := range calls {
+		t.Run(c.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+
+				var topic gossip.TopicID
+				copy(topic[:], "isolation")
+
+				n := irohtest.NewNet(t)
+				srv, gs := netGossipPeer(t, n)
+				ts, err := gs.Subscribe(ctx, topic, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer ts.Close()
+				bad := joinNeverReading(ctx, t, n, srv.Addr(), topic)
+				fillQueue(ctx, t, ts)
+
+				const wait = time.Second
+				cctx, ccancel := context.WithTimeout(ctx, wait)
+				defer ccancel()
+				start := time.Now()
+				if err := c.call(cctx, gs, bad); err != nil {
+					t.Fatal(err)
+				}
+				if d := time.Since(start); d > wait+10*time.Millisecond {
+					t.Errorf("%s returned %v after its context, want promptly", c.name, d-wait)
+				}
+			})
+		})
+	}
+}

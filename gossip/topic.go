@@ -341,7 +341,7 @@ func (g *Gossip) SubscribeWithOpts(ctx context.Context, topic TopicID, opts Join
 		Now: time.Now(),
 	})
 	g.mu.Unlock()
-	_ = g.dispatch(context.Background(), out)
+	_ = g.dispatch(ctx, out)
 	return t, nil
 }
 
@@ -464,9 +464,13 @@ func (g *Gossip) dispatch(ctx context.Context, events []gossipproto.OutEvent) er
 			g.schedule(ev.After, ev.Timer)
 		case gossipproto.DisconnectPeer:
 			// Behind the peer's queued messages, which include the
-			// Disconnect that goes with this event. The wait is not
-			// abandoned: the write limit bounds it.
-			if ok, _ := g.enqueue(context.Background(), ev.To, sendItem{disconnect: true}, false); !ok {
+			// Disconnect that goes with this event. If ctx ends first,
+			// abandon those messages and disconnect now.
+			ok, qerr := g.enqueue(ctx, ev.To, sendItem{disconnect: true}, false)
+			if qerr != nil {
+				g.abandonQueue(ev.To)
+			}
+			if !ok {
 				g.disconnect(ev.To)
 			}
 		}
@@ -602,6 +606,19 @@ func (g *Gossip) dropPeer(peer PeerID, q *sendQueue) {
 	g.mu.Unlock()
 	closeConn(stuck)
 	_ = g.dispatch(context.Background(), out)
+}
+
+// abandonQueue drops peer's send queue, closing the connection its writer
+// may be blocked on, without telling the protocol: the protocol has already
+// let the peer go.
+func (g *Gossip) abandonQueue(peer PeerID) {
+	g.mu.Lock()
+	var stuck *Sender
+	if q := g.sendQueues[peer]; q != nil && !q.dropped {
+		stuck = g.dropQueueLocked(peer, q)
+	}
+	g.mu.Unlock()
+	closeConn(stuck)
 }
 
 // dropQueueLocked discards q's pending items and stops its writer. It returns
