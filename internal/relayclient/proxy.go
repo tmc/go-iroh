@@ -13,15 +13,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tmc/go-iroh/internal/proxyurl"
 )
 
 // dialProxy opens a CONNECT tunnel to target. TLS to the relay is performed by
 // the caller so relay authentication is derived from the tunneled TLS session.
 func dialProxy(ctx context.Context, proxy *url.URL, target string, relayTLS *tls.Config) (net.Conn, error) {
-	if proxy == nil || proxy.Hostname() == "" {
-		return nil, fmt.Errorf("invalid proxy URL")
-	}
-	if proxy.Opaque != "" || (proxy.Path != "" && proxy.Path != "/") || proxy.RawQuery != "" || proxy.Fragment != "" {
+	if err := proxyurl.Validate(proxy); err != nil {
 		return nil, fmt.Errorf("invalid proxy URL")
 	}
 	scheme := strings.ToLower(proxy.Scheme)
@@ -52,6 +51,7 @@ func dialProxy(ctx context.Context, proxy *url.URL, target string, relayTLS *tls
 	}()
 
 	if scheme == "https" {
+		// Rust uses the relay TLS connector for the proxy TLS layer too.
 		proxyTLS := &tls.Config{}
 		if relayTLS != nil {
 			proxyTLS = relayTLS.Clone()
@@ -72,9 +72,6 @@ func dialProxy(ctx context.Context, proxy *url.URL, target string, relayTLS *tls
 		}
 	}
 	authority := target
-	if host, port, err := net.SplitHostPort(target); err == nil {
-		authority = net.JoinHostPort(host, port)
-	}
 	if _, err := fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Connection: Keep-Alive\r\n", authority, authority); err != nil {
 		stopCancel()
 		return nil, fmt.Errorf("write CONNECT request: %w", err)

@@ -192,6 +192,75 @@ func TestClientConnectThroughProxy(t *testing.T) {
 	}
 }
 
+func TestClientConnectPlainHTTPThroughConnectProxy(t *testing.T) {
+	relayServer := fakeRelay(t, false)
+	defer relayServer.Close()
+
+	var proxyMu sync.Mutex
+	var proxyMethod, connectTarget string
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyMu.Lock()
+		proxyMethod = r.Method
+		connectTarget = r.Host
+		proxyMu.Unlock()
+		if r.Method != http.MethodConnect {
+			http.Error(w, "CONNECT required", http.StatusMethodNotAllowed)
+			return
+		}
+		upstream, err := net.Dial("tcp", r.Host)
+		if err != nil {
+			http.Error(w, "dial target", http.StatusBadGateway)
+			return
+		}
+		client, rw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			upstream.Close()
+			t.Errorf("hijack proxy connection: %v", err)
+			return
+		}
+		if _, err := fmt.Fprint(rw, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+			upstream.Close()
+			client.Close()
+			return
+		}
+		if err := rw.Flush(); err != nil {
+			upstream.Close()
+			client.Close()
+			return
+		}
+		go func() {
+			defer upstream.Close()
+			defer client.Close()
+			io.Copy(upstream, rw.Reader)
+		}()
+		io.Copy(client, upstream)
+	}))
+	defer proxy.Close()
+
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, _ := key.GenerateSecretKey()
+	client, err := Connect(context.Background(), relayURL(t, relayServer), Options{
+		SecretKey: sk,
+		Proxy:     func(*url.URL) (*url.URL, error) { return proxyURL, nil },
+	})
+	if err != nil {
+		t.Fatalf("Connect through CONNECT-only proxy: %v", err)
+	}
+	client.Close()
+
+	proxyMu.Lock()
+	defer proxyMu.Unlock()
+	if proxyMethod != http.MethodConnect {
+		t.Errorf("proxy method = %q, want CONNECT", proxyMethod)
+	}
+	if connectTarget != strings.TrimPrefix(relayServer.URL, "http://") {
+		t.Errorf("CONNECT target = %q, want %q", connectTarget, strings.TrimPrefix(relayServer.URL, "http://"))
+	}
+}
+
 func TestClientProxyFailureDoesNotLeakCredentials(t *testing.T) {
 	relayServer := fakeRelayTLS(t, nil)
 	defer relayServer.Close()

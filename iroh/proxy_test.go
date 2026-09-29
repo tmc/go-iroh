@@ -105,21 +105,6 @@ func TestProxyURLReturnsCopy(t *testing.T) {
 	}
 }
 
-func ExampleWithProxy() {
-	proxyURL, _ := url.Parse("http://proxy.example:3128")
-	option := WithProxy(ProxyURL(proxyURL))
-	_ = option
-	fmt.Println("proxy option configured")
-	// Output: proxy option configured
-}
-
-func ExampleProxyFromEnvironment() {
-	option := WithProxy(ProxyFromEnvironment)
-	_ = option
-	fmt.Println("uses HTTP_PROXY, HTTPS_PROXY, and NO_PROXY")
-	// Output: uses HTTP_PROXY, HTTPS_PROXY, and NO_PROXY
-}
-
 func ExampleProxyURL() {
 	proxyURL, _ := url.Parse("http://proxy.example:3128")
 	proxy := ProxyURL(proxyURL)

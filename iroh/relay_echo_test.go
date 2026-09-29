@@ -3,12 +3,12 @@ package iroh
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/http/httputil"
 	"net/netip"
 	"net/url"
-	"sync/atomic"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,18 +159,39 @@ func TestRelayOnlyOnlineThroughProxy(t *testing.T) {
 
 	relayServer := newEchoRelayServer(t)
 	relayURL := relayServer.url(t)
-	target, err := url.Parse(relayServer.ts.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var proxyRequests atomic.Int32
-	reverseProxy := httputil.NewSingleHostReverseProxy(target)
-	director := reverseProxy.Director
-	reverseProxy.Director = func(r *http.Request) {
-		proxyRequests.Add(1)
-		director(r)
-	}
-	proxyServer := httptest.NewServer(reverseProxy)
+	connectTargets := make(chan string, 8)
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "CONNECT required", http.StatusMethodNotAllowed)
+			return
+		}
+		connectTargets <- r.Host
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "hijacking unsupported", http.StatusInternalServerError)
+			return
+		}
+		client, rw, err := hijacker.Hijack()
+		if err != nil {
+			return
+		}
+		defer client.Close()
+		upstream, err := net.Dial("tcp", r.Host)
+		if err != nil {
+			io.WriteString(rw, "HTTP/1.1 502 Bad Gateway\r\n\r\n")
+			rw.Flush()
+			return
+		}
+		defer upstream.Close()
+		if _, err := io.WriteString(rw, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+			return
+		}
+		if err := rw.Flush(); err != nil {
+			return
+		}
+		go io.Copy(upstream, client)
+		io.Copy(client, upstream)
+	}))
 	t.Cleanup(proxyServer.Close)
 	proxyURL, err := url.Parse(proxyServer.URL)
 	if err != nil {
@@ -181,6 +202,7 @@ func TestRelayOnlyOnlineThroughProxy(t *testing.T) {
 	ep, err := Bind(ctx,
 		WithRelayMode(mode),
 		WithProxy(ProxyURL(proxyURL)),
+		WithoutNetReport(),
 		WithoutIPTransports(),
 	)
 	if err != nil {
@@ -190,8 +212,14 @@ func TestRelayOnlyOnlineThroughProxy(t *testing.T) {
 	if err := ep.Online(ctx); err != nil {
 		t.Fatalf("endpoint online through proxy: %v", err)
 	}
-	if proxyRequests.Load() == 0 {
-		t.Fatal("proxy received no relay requests")
+	select {
+	case target := <-connectTargets:
+		want := strings.TrimPrefix(relayServer.ts.URL, "http://")
+		if target != want {
+			t.Fatalf("proxy CONNECT target = %q, want %q", target, want)
+		}
+	default:
+		t.Fatal("proxy received no CONNECT request for the relay")
 	}
 }
 

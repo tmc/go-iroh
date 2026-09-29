@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +20,7 @@ import (
 	itls "github.com/tmc/go-iroh/internal/itls/tls"
 	"github.com/tmc/go-iroh/internal/netreport"
 	"github.com/tmc/go-iroh/internal/portmapper"
+	"github.com/tmc/go-iroh/internal/proxyurl"
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/qng/qlog"
 	"github.com/tmc/go-iroh/internal/qng/qlogwriter"
@@ -320,8 +320,7 @@ func WithProxy(proxy func(*url.URL) (*url.URL, error)) Option {
 			if err != nil || proxyURL == nil {
 				return proxyURL, err
 			}
-			scheme := strings.ToLower(proxyURL.Scheme)
-			if (scheme != "http" && scheme != "https") || proxyURL.Hostname() == "" || proxyURL.Opaque != "" || (proxyURL.Path != "" && proxyURL.Path != "/") || proxyURL.RawQuery != "" || proxyURL.Fragment != "" {
+			if err := proxyurl.Validate(proxyURL); err != nil {
 				return nil, fmt.Errorf("iroh: invalid proxy URL %s", proxyURL.Redacted())
 			}
 			return proxyURL, nil
@@ -331,7 +330,8 @@ func WithProxy(proxy func(*url.URL) (*url.URL, error)) Option {
 }
 
 // ProxyFromEnvironment selects a proxy using the same rules as
-// [http.ProxyFromEnvironment]. It selects HTTP_PROXY for HTTP requests and
+// [http.ProxyFromEnvironment]. Like net/http, it reads the environment once
+// per process. It selects HTTP_PROXY for HTTP requests and
 // HTTPS_PROXY for HTTPS requests, honors NO_PROXY, and bypasses loopback
 // targets.
 func ProxyFromEnvironment(target *url.URL) (*url.URL, error) {
@@ -348,8 +348,8 @@ func ProxyURL(u *url.URL) func(*url.URL) (*url.URL, error) {
 		if u == nil {
 			return nil, errors.New("iroh: nil proxy URL")
 		}
-		copy := *u
-		return &copy, nil
+		proxyURL := *u
+		return &proxyURL, nil
 	}
 }
 
