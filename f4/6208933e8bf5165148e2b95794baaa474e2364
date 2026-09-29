@@ -1,4 +1,5 @@
-commit: dc4b335c5ac880222c744579e6e8b923a728193d
+commit: f46208933e8bf5165148e2b95794baaa474e2364
+rebased-from: dc4b335c5ac880222c744579e6e8b923a728193d
 cherry-picked from 6cccce6b (fix/endpointticket-ipv6-wire, authored by session FA9F00FD, GPT-6) so the harness can expect pass
 date: 2026-09-28T20:07:26-07:00
 agent: Claude Code 2.1.280 (Claude Code)
