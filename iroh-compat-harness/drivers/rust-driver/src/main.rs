@@ -196,6 +196,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             return pq_client(&policy, &id, &addr).await;
         }
+        if command == "blobs-get" {
+            let id = args.next().ok_or("blobs-get requires an endpoint id")?;
+            let addr = args
+                .next()
+                .ok_or("blobs-get requires an endpoint address")?;
+            let root = args.next().ok_or("blobs-get requires a root hash")?;
+            if args.next().is_some() {
+                return Err("blobs-get accepts an endpoint id, address, and root hash".into());
+            }
+            return blobs_get(&id, &addr, &root).await;
+        }
         if command == "gossip-server" {
             if args.next().is_some() {
                 return Err("gossip-server accepts no arguments".into());
@@ -364,6 +375,152 @@ async fn gossip_server() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     router.shutdown().await?;
+    Ok(())
+}
+
+/// The sizes of the blobs in the hash sequence a Go provider serves to
+/// blobs-get: empty, one chunk, one chunk group, one chunk past it, and a
+/// size that ends inside a chunk group. Byte i of each blob is i mod 251.
+const BLOB_SIZES: [u64; 5] = [0, 1024, 16384, 17408, 100_000];
+
+#[derive(Serialize)]
+struct BlobsGetResult {
+    name: &'static str,
+    error: Option<String>,
+}
+
+/// blobs_get runs two get requests against a Go blobs provider serving a hash
+/// sequence of BLOB_SIZES blobs at root, and prints one result per request.
+/// iroh-blobs verifies every blob in each response against its hash; blobs_get
+/// also checks that the response holds exactly the requested blobs, that each
+/// size header is right, and that whole-blob ranges carry the blob's bytes.
+async fn blobs_get(id: &str, addr: &str, root: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use iroh::{Endpoint, RelayMode, endpoint::presets};
+    use iroh_blobs::protocol::{ChunkRangesExt, ChunkRangesSeq, GetRequest};
+
+    let data: Vec<Vec<u8>> = BLOB_SIZES
+        .iter()
+        .map(|&size| (0..size).map(|i| (i % 251) as u8).collect())
+        .collect();
+    let hashes: Vec<iroh_blobs::Hash> = data.iter().map(iroh_blobs::Hash::new).collect();
+    let root: iroh_blobs::Hash = root.parse()?;
+    let seq: Vec<u8> = hashes.iter().flat_map(|h| *h.as_bytes()).collect();
+    if iroh_blobs::Hash::new(&seq) != root {
+        return Err("root hash is not the hash sequence of BLOB_SIZES".into());
+    }
+
+    let endpoint = Endpoint::builder(presets::Minimal)
+        .relay_mode(RelayMode::Disabled)
+        .bind_addr(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))?
+        .bind()
+        .await?;
+    let remote = EndpointAddr::new(id.parse()?).with_ip_addr(addr.parse()?);
+    let conn = endpoint.connect(remote, iroh_blobs::ALPN).await?;
+
+    // sendme receive asks for the whole hash sequence and the last chunk of
+    // every child, which proves each child's size before any content moves.
+    let sendme =
+        ChunkRangesSeq::from_ranges_infinite([ChunkRanges::all(), ChunkRanges::last_chunk()]);
+    // A resumed download asks only for the children it lacks.
+    let per_child = ChunkRangesSeq::from_ranges([
+        ChunkRanges::empty(),
+        ChunkRanges::empty(),
+        ChunkRanges::all(),
+        ChunkRanges::empty(),
+        ChunkRanges::all(),
+    ]);
+    let mut results = Vec::new();
+    for (name, ranges) in [("sendme-all-last-chunk", sendme), ("per-child", per_child)] {
+        let request = GetRequest::new(root, ranges);
+        let error = blobs_get_one(&conn, request, &seq, &hashes, &data)
+            .await
+            .err()
+            .map(|e| e.to_string());
+        results.push(BlobsGetResult { name, error });
+    }
+    println!("{}", serde_json::to_string(&results)?);
+    conn.close(0u32.into(), b"done");
+    endpoint.close().await;
+    Ok(())
+}
+
+async fn blobs_get_one(
+    conn: &iroh::endpoint::Connection,
+    request: iroh_blobs::protocol::GetRequest,
+    seq: &[u8],
+    hashes: &[iroh_blobs::Hash],
+    data: &[Vec<u8>],
+) -> Result<(), Box<dyn std::error::Error>> {
+    use iroh_blobs::get::fsm::{self, ConnectedNext, EndBlobNext};
+
+    // want lists the offsets the request selects: 0 is the root and i+1 is
+    // child i.
+    let want: Vec<u64> = request
+        .ranges
+        .iter_non_empty_infinite()
+        .map(|(offset, _)| offset)
+        .take_while(|&offset| offset <= hashes.len() as u64)
+        .collect();
+    let mut got = Vec::new();
+    let connected = fsm::start(conn.clone(), request, Default::default())
+        .next()
+        .await?;
+    let mut next = match connected.next().await? {
+        ConnectedNext::StartRoot(root) => {
+            let all = root.ranges().is_all();
+            let (content, size) = root.next().next().await?;
+            if size != seq.len() as u64 {
+                return Err(format!("root size {size}, want {}", seq.len()).into());
+            }
+            let (end, bytes) = content.concatenate_into_vec().await?;
+            if all && bytes != seq {
+                return Err("root bytes differ".into());
+            }
+            got.push(0);
+            end.next()
+        }
+        ConnectedNext::StartChild(child) => EndBlobNext::MoreChildren(child),
+        ConnectedNext::Closing(closing) => EndBlobNext::Closing(closing),
+    };
+    loop {
+        let child = match next {
+            EndBlobNext::MoreChildren(child) => child,
+            EndBlobNext::Closing(closing) => {
+                closing.next().await?;
+                break;
+            }
+        };
+        let offset = child.offset();
+        let Some(i) = offset
+            .checked_sub(1)
+            .map(|i| i as usize)
+            .filter(|&i| i < hashes.len())
+        else {
+            child.finish().next().await?;
+            break;
+        };
+        let all = child.ranges().is_all();
+        let (content, size) = child
+            .next(hashes[i])
+            .next()
+            .await
+            .map_err(|e| format!("child {i}: {e}"))?;
+        if size != data[i].len() as u64 {
+            return Err(format!("child {i} size {size}, want {}", data[i].len()).into());
+        }
+        let (end, bytes) = content
+            .concatenate_into_vec()
+            .await
+            .map_err(|e| format!("child {i}: {e}"))?;
+        if all && bytes != data[i] {
+            return Err(format!("child {i} bytes differ").into());
+        }
+        got.push(offset);
+        next = end.next();
+    }
+    if got != want {
+        return Err(format!("response held offsets {got:?}, want {want:?}").into());
+    }
     Ok(())
 }
 

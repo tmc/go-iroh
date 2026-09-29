@@ -15,6 +15,13 @@
       "detail": "go-iroh writes a flowinfo and a scope id varint after every IPv6 port, and reads them back unconditionally (endpointticket/ticket.go, since 955f0117). iroh-tickets serializes a SocketAddrV6 through serde as (ip, port) only. Go therefore misreads every Rust ticket that holds an IPv6 address, and Rust rejects a Go ticket in which an IPv6 address is not the last entry. The vectors/ip-ticket-* scenarios expect fail until go-iroh writes and reads (ip, port) only."
     },
     {
+      "surface": "Blob requests for hash sequence children",
+      "tier": "stable",
+      "upstream_version": "1.3 (1.3.0)",
+      "status": "observed-incompatible",
+      "detail": "go-iroh's provider (blobs.ServeBlob) answers only the root of a hash sequence: for any ranges other than the whole sequence or the root alone, it sends the root and stops, so no child is ever served. An iroh-blobs 0.103.0 client asking a Go provider for sendme receive's first request, the sequence and every child's last chunk, finds child 0 missing, and one asking for two children in full is sent the root instead. The same client verifies both requests against iroh-blobs' own provider. The blobs/rust-get-* scenarios expect fail until go-iroh answers each entry of the request against its blob; the sendme case also needs the partial-block proofs below."
+    },
+    {
       "surface": "Partial-block blob range proofs",
       "tier": "stable",
       "upstream_version": "1.3 (1.3.0)",
