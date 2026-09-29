@@ -101,6 +101,7 @@ type acceptOwner int
 const (
 	acceptOwnerNone acceptOwner = iota
 	acceptOwnerAccept
+	acceptOwnerIncoming
 	acceptOwnerListenStreams
 	acceptOwnerRouter
 )
@@ -1611,10 +1612,10 @@ func (e *Endpoint) forgetRemote(id key.EndpointID) {
 // AcceptIncoming blocks until an incoming connection attempt arrives. The
 // returned [Incoming] can be accepted, refused, retried, or ignored.
 func (e *Endpoint) AcceptIncoming(ctx context.Context) (*Incoming, error) {
-	if err := e.acquireAcceptOwner(acceptOwnerAccept); err != nil {
+	if err := e.acquireAcceptOwner(acceptOwnerIncoming); err != nil {
 		return nil, err
 	}
-	defer e.releaseAcceptOwner(acceptOwnerAccept)
+	defer e.releaseAcceptOwner(acceptOwnerIncoming)
 	return e.acceptIncoming(ctx)
 }
 

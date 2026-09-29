@@ -215,6 +215,19 @@ func TestAcceptStaleHandshake(t *testing.T) {
 			}
 			return func() { r.Shutdown(context.Background()) }
 		}},
+		{"AcceptIncoming", func(t *testing.T, ep *iroh.Endpoint, _ string) func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				ep.AcceptIncoming(ctx)
+			}()
+			synctest.Wait()
+			return func() {
+				cancel()
+				<-done
+			}
+		}},
 	}
 	for _, o := range owners {
 		t.Run(o.name, func(t *testing.T) {
