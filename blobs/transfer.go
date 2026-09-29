@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"net"
 	"sync"
 )
 
@@ -63,7 +64,9 @@ func ServeBlob(ctx context.Context, s BidiStream, store Store) error {
 // ServeBlobStreams accepts streams until accept returns an error or ctx is
 // canceled, and then waits for the streams it is serving. Each accepted stream
 // is served concurrently with [ServeBlob]; an error serving one stream ends
-// only that stream.
+// only that stream. ServeBlobStreams returns nil when ctx is done or when the
+// accept error matches [net.ErrClosed], as the close errors of an iroh
+// connection do, and returns any other accept error.
 func ServeBlobStreams(ctx context.Context, accept AcceptBlobStream, store Store) error {
 	if accept == nil {
 		return errors.New("blobs: nil stream accepter")
@@ -77,7 +80,10 @@ func ServeBlobStreams(ctx context.Context, accept AcceptBlobStream, store Store)
 		if err != nil {
 			// accept fails when the connection closes, which is how
 			// serving normally ends.
-			return nil
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			return fmt.Errorf("blobs: accept stream: %w", err)
 		}
 		wg.Go(func() { _ = ServeBlob(ctx, s, store) })
 	}

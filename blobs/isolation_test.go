@@ -234,3 +234,71 @@ func TestServeBlobStreamsStreamError(t *testing.T) {
 		})
 	}
 }
+
+// TestServeBlobStreamsAcceptError pins that ServeBlobStreams reports an
+// accept failure unless the connection closed or ctx ended.
+func TestServeBlobStreamsAcceptError(t *testing.T) {
+	errBroken := errors.New("broken accept")
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	tests := []struct {
+		name string
+		ctx  context.Context
+		err  error
+		want error // nil means ServeBlobStreams must return nil
+	}{
+		{"accept failure", context.Background(), errBroken, errBroken},
+		{"connection closed", context.Background(), &iroh.ApplicationError{Remote: true}, nil},
+		{"context canceled", canceled, context.Canceled, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			accept := func(context.Context) (blobs.BidiStream, error) { return nil, tt.err }
+			err := blobs.ServeBlobStreams(tt.ctx, accept, mustBlobStore(t))
+			if tt.want == nil {
+				if err != nil {
+					t.Fatalf("ServeBlobStreams = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("ServeBlobStreams = %v, want %v", err, tt.want)
+			}
+		})
+	}
+}
+
+// TestServeBlobStreamsPeerClose pins that a peer closing its connection
+// ends ServeBlobStreams without an error.
+func TestServeBlobStreamsPeerClose(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		n := irohtest.NewNet(t)
+		served := make(chan error, 1)
+		srv := provide(t, n, func(ctx context.Context, conn *iroh.Conn) error {
+			err := blobs.ServeBlobStreams(ctx, func(ctx context.Context) (blobs.BidiStream, error) {
+				return conn.AcceptStream(ctx)
+			}, mustBlobStore(t))
+			served <- err
+			return err
+		})
+		client := n.Peer()
+		conn, err := client.Connect(context.Background(), srv.Addr(), blobs.ALPN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Open a stream so the server has accepted the connection.
+		s, err := conn.OpenStreamSync(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Write([]byte{0}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+		conn.CloseWithError(0, "")
+		err = finishes(t, isolationBudget, func() error { return <-served })
+		if err != nil {
+			t.Fatalf("ServeBlobStreams = %v, want nil", err)
+		}
+	})
+}
