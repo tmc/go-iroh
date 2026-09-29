@@ -1,0 +1,4 @@
+commit: 97eafbf4f8976fe3177c8ac5a230392c4bcbd18c
+date: 2026-09-29T05:17:02Z
+measured: b81f50e9 in ~/tmp/go-iroh-parity via make parity (concurrent 1.2.0 + 1.3.0 containers)
+agent: claude-code 2.1.280 (Claude Code), model claude-opus-5-5[1m], tty not a tty, pid 24619, ITERM_SESSION_ID=w8t6p4:4150190C-FE58-4FB6-B305-8B7CF0F49868, session=76dda00a-e4bc-4ad2-97a3-b101305fb7ee
