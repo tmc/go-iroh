@@ -12,14 +12,23 @@ import (
 )
 
 // Within runs f with a context that expires after d and fails the test if f
-// returns an error or takes longer than d. Inside a synctest bubble d is
-// virtual time, so the bound is exact rather than a guess about machine speed.
+// returns an error or has not returned after d. It does not rely on f
+// honoring the context, so it also catches code that ignores cancellation.
+// Inside a synctest bubble d is virtual time, so the bound is exact rather
+// than a guess about machine speed. f must not call tb's methods.
 func Within(tb testing.TB, d time.Duration, f func(ctx context.Context) error) {
 	tb.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	start := time.Now()
-	err := f(ctx)
+	done := make(chan error, 1)
+	go func() { done <- f(ctx) }()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(d):
+		tb.Fatalf("irohtest: not done within %v", d)
+	}
 	elapsed := time.Since(start)
 	if errors.Is(err, context.DeadlineExceeded) || elapsed > d {
 		tb.Fatalf("irohtest: not done within %v (took %v): %v", d, elapsed, err)

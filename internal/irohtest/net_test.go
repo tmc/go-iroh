@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"runtime"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -154,4 +155,38 @@ func TestStallAfter(t *testing.T) {
 			t.Fatalf("accepted %v, want %v", conn.RemoteID(), cli.ID())
 		}
 	})
+}
+
+// TestWithinIgnoredContext pins that Within fails when f ignores its context.
+func TestWithinIgnoredContext(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		defer close(release)
+		ft := &fakeTB{TB: t}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			irohtest.Within(ft, time.Second, func(context.Context) error {
+				<-release
+				return nil
+			})
+		}()
+		<-done
+		if !ft.failed {
+			t.Fatal("Within returned without failing for an f that ignores ctx")
+		}
+	})
+}
+
+// fakeTB records a Fatalf and ends the calling goroutine, as testing.T does.
+type fakeTB struct {
+	testing.TB
+	failed bool
+}
+
+func (f *fakeTB) Helper() {}
+
+func (f *fakeTB) Fatalf(format string, args ...any) {
+	f.failed = true
+	runtime.Goexit()
 }
