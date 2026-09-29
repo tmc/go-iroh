@@ -47,6 +47,7 @@ func main() {
 	report.Cells = append(report.Cells, runQAD(*doctor, *releaseKey))
 	report.Cells = append(report.Cells, runTransport(*vector, *releaseKey)...)
 	report.Cells = append(report.Cells, runGossip(*vector, *releaseKey))
+	report.Cells = append(report.Cells, runBlobs(*vector, *releaseKey)...)
 	report.Cells = append(report.Cells, runPQ(*pq, *releaseKey)...)
 	scenarioDir := filepath.Join(root, "iroh-compat-harness", "scenarios")
 	report.Envelopes, err = runner.LoadEnvelopes(scenarioDir)
@@ -88,6 +89,15 @@ func runGossip(rustClient, version string) runner.Cell {
 		return runner.Cell{Scenario: "vectors/gossip-frame", Iroh: version, Result: runner.SetupError, Detail: err.Error()}
 	}
 	return runner.RunGossip(rustClient, version, digest)
+}
+
+func runBlobs(rustClient, version string) []runner.Cell {
+	scenarios := []string{"blobs/rust-get-sendme", "blobs/rust-get-per-child"}
+	digest, err := peerDigest(rustClient, "set the pinned Rust driver binary path")
+	if err != nil {
+		return setupCells(scenarios, version, err.Error())
+	}
+	return runner.RunBlobs(rustClient, version, digest)
 }
 
 func runTransport(rustClient, version string) []runner.Cell {
