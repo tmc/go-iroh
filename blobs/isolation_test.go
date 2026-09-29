@@ -403,3 +403,101 @@ func TestServeBlobStreamsPeerClose(t *testing.T) {
 		}
 	})
 }
+
+const stallTimeout = 5 * time.Second
+
+// trickle is a provider that serves data in 4 KiB pieces, one every
+// stallTimeout/10, so that each 16 KiB verified group arrives well inside
+// stallTimeout while a 64 KiB blob takes longer than stallTimeout.
+func trickle(data []byte) iroh.ProtocolHandlerFunc {
+	return func(ctx context.Context, conn *iroh.Conn) error {
+		s, err := conn.AcceptStream(ctx)
+		if err != nil {
+			return err
+		}
+		defer s.Close()
+		if _, err := io.ReadAll(s); err != nil {
+			return err
+		}
+		_, encoded, err := blobs.EncodeBlob(data)
+		if err != nil {
+			return err
+		}
+		for len(encoded) > 0 {
+			time.Sleep(stallTimeout / 10)
+			n := min(len(encoded), 4<<10)
+			if _, err := s.Write(encoded[:n]); err != nil {
+				return err
+			}
+			encoded = encoded[n:]
+		}
+		s.CloseWrite()
+		<-ctx.Done()
+		return nil
+	}
+}
+
+// TestDownloaderStallTimeout pins that Download abandons a provider that
+// delivers nothing for StallTimeout, and only such a provider.
+func TestDownloaderStallTimeout(t *testing.T) {
+	data := bytes.Repeat([]byte("x"), 64<<10)
+	hash := blobs.NewHash(data)
+	tests := []struct {
+		name      string
+		providers func(*testing.T, *irohtest.Net) []*irohtest.Peer
+		wantErr   error
+		min, max  time.Duration // bounds on how long Download takes
+	}{
+		{"stalled then good", func(t *testing.T, n *irohtest.Net) []*irohtest.Peer {
+			return []*irohtest.Peer{provide(t, n, stall), provide(t, n, serve(mustBlobStore(t, data)))}
+		}, nil, stallTimeout, stallTimeout + isolationBudget},
+		{"all stalled", func(t *testing.T, n *irohtest.Net) []*irohtest.Peer {
+			return []*irohtest.Peer{provide(t, n, stall), provide(t, n, stall)}
+		}, blobs.ErrProviderStalled, 2 * stallTimeout, 2*stallTimeout + isolationBudget},
+		{"slow but progressing", func(t *testing.T, n *irohtest.Net) []*irohtest.Peer {
+			return []*irohtest.Peer{provide(t, n, trickle(data))}
+		}, nil, stallTimeout, 4 * stallTimeout},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				n := irohtest.NewNet(t)
+				var providers []netaddr.EndpointAddr
+				for _, p := range tt.providers(t, n) {
+					providers = append(providers, p.Addr())
+				}
+				client := n.Peer()
+				dst := mustBlobStore(t)
+				d := blobs.NewDownloader(dst, connector(client), blobs.DownloaderOptions{
+					Concurrency:  1,
+					StallTimeout: stallTimeout,
+				})
+				defer d.Close()
+				start := time.Now()
+				err := finishes(t, tt.max, func() error {
+					tag, err := d.Download(context.Background(), hash, providers)
+					if err != nil {
+						return err
+					}
+					return tag.Close()
+				})
+				if elapsed := time.Since(start); elapsed < tt.min {
+					t.Errorf("Download took %v, want at least %v", elapsed, tt.min)
+				}
+				if tt.wantErr != nil {
+					if !errors.Is(err, tt.wantErr) {
+						t.Fatalf("Download error = %v, want %v", err, tt.wantErr)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("Download: %v", err)
+				}
+				got, err := blobs.ReadBlob(context.Background(), dst, hash)
+				if err != nil || !bytes.Equal(got, data) {
+					t.Fatalf("ReadBlob = %d bytes, %v; want %d bytes", len(got), err, len(data))
+				}
+			})
+		})
+	}
+}

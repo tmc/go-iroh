@@ -114,3 +114,47 @@ func testLiveSyncRetriesAfterFailedProvider(t *testing.T, inFlight bool) {
 		})
 	})
 }
+
+// A provider that accepts a request and never answers it must not wedge the
+// live downloader: downloadBlob gives up on it after the default stall
+// timeout.
+func TestLiveDownloadStalledProvider(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		n := irohtest.NewNet(t)
+		bad := n.Peer(iroh.WithALPNs(blobs.ALPN))
+		r, err := iroh.NewRouter(bad.Endpoint, map[string]iroh.ProtocolHandler{
+			blobs.ALPN: iroh.ProtocolHandlerFunc(func(ctx context.Context, conn *iroh.Conn) error {
+				s, err := conn.AcceptStream(ctx)
+				if err != nil {
+					return err
+				}
+				defer s.Close()
+				<-ctx.Done()
+				return nil
+			}),
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Shutdown(context.Background())
+		client := n.Peer()
+		blobStore, err := blobs.NewMemStore()
+		if err != nil {
+			t.Fatal(err)
+		}
+		hash := blobs.NewHash([]byte("never sent"))
+
+		done := make(chan error, 1)
+		go func() {
+			done <- downloadBlob(context.Background(), client.Endpoint, []netaddr.EndpointAddr{bad.Addr()}, blobStore, hash)
+		}()
+		select {
+		case err := <-done:
+			if !errors.Is(err, blobs.ErrProviderStalled) {
+				t.Fatalf("downloadBlob = %v, want %v", err, blobs.ErrProviderStalled)
+			}
+		case <-time.After(blobs.DefaultStallTimeout + time.Second):
+			t.Fatal("downloadBlob did not give up on a stalled provider")
+		}
+	})
+}

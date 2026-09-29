@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
+	"time"
 
 	"github.com/tmc/go-iroh/netaddr"
 )
@@ -61,6 +63,17 @@ type DownloadEvent struct {
 	Err      error
 }
 
+// DefaultStallTimeout is the [DownloaderOptions.StallTimeout] used when it
+// is zero. It matches [github.com/tmc/go-iroh/iroh.RelayPathMaxIdleTimeout],
+// the longest an iroh connection waits on a silent peer: a provider that
+// keeps its connection alive but sends nothing for that long is as good as
+// gone.
+const DefaultStallTimeout = 30 * time.Second
+
+// ErrProviderStalled reports a provider that delivered no verified content
+// for [DownloaderOptions.StallTimeout].
+var ErrProviderStalled = errors.New("blobs: provider stalled")
+
 // DownloaderOptions configures a Downloader.
 type DownloaderOptions struct {
 	// Concurrency is the maximum number of providers tried at once.
@@ -69,6 +82,11 @@ type DownloaderOptions struct {
 	// OnEvent, if non-nil, receives progress events. It is called serially,
 	// so it need not be safe for concurrent use even when Concurrency > 1.
 	OnEvent func(DownloadEvent)
+	// StallTimeout is how long a provider may go without delivering
+	// verified content, counting from when it is first tried, before
+	// Download abandons it with [ErrProviderStalled] and tries the next.
+	// Zero means [DefaultStallTimeout]; a negative value disables the limit.
+	StallTimeout time.Duration
 }
 
 // Downloader downloads blobs from multiple providers.
@@ -93,6 +111,9 @@ type Downloader struct {
 func NewDownloader(store Sink, conn BlobConnector, opts DownloaderOptions) *Downloader {
 	if opts.Concurrency <= 0 {
 		opts.Concurrency = 1
+	}
+	if opts.StallTimeout == 0 {
+		opts.StallTimeout = DefaultStallTimeout
 	}
 	return &Downloader{store: store, conn: conn, opts: opts, conns: make(map[string]BlobConn)}
 }
@@ -227,33 +248,48 @@ type downloadResult struct {
 
 func (d *Downloader) tryProvider(ctx context.Context, hash Hash, addr netaddr.EndpointAddr) downloadResult {
 	d.event(DownloadEvent{Kind: DownloadTryProvider, Hash: hash, Provider: addr})
-	conn, err := d.connection(ctx, addr)
-	if err != nil {
-		err = fmt.Errorf("blobs: connect provider %s: %w", addr.ID, err)
-		d.event(DownloadEvent{Kind: DownloadProviderFailed, Hash: hash, Provider: addr, Err: err})
-		return downloadResult{addr: addr, err: err}
+	progress := func() {}
+	if timeout := d.opts.StallTimeout; timeout > 0 {
+		var cancel context.CancelCauseFunc
+		ctx, cancel = context.WithCancelCause(ctx)
+		defer cancel(nil)
+		timer := time.AfterFunc(timeout, func() { cancel(ErrProviderStalled) })
+		defer timer.Stop()
+		progress = func() { timer.Reset(timeout) }
 	}
-	stream, err := conn.OpenStreamSync(ctx)
-	if err != nil {
-		d.drop(addr)
-		err = fmt.Errorf("blobs: open provider stream %s: %w", addr.ID, err)
-		d.event(DownloadEvent{Kind: DownloadProviderFailed, Hash: hash, Provider: addr, Err: err})
-		return downloadResult{addr: addr, err: err}
+	tag, err := d.fetch(ctx, hash, addr, progress)
+	if err != nil && errors.Is(context.Cause(ctx), ErrProviderStalled) {
+		err = fmt.Errorf("%w: %s", ErrProviderStalled, addr.ID)
 	}
-	tag, err := d.streamBlob(ctx, stream, hash)
 	if err != nil {
-		err = fmt.Errorf("blobs: get blob from provider %s: %w", addr.ID, err)
-		d.event(DownloadEvent{Kind: DownloadProviderFailed, Hash: hash, Provider: addr, Err: err})
-		return downloadResult{addr: addr, err: err}
-	}
-	if tag.Hash() != hash {
-		tag.Close()
-		err = fmt.Errorf("blobs: stored blob hash mismatch")
 		d.event(DownloadEvent{Kind: DownloadProviderFailed, Hash: hash, Provider: addr, Err: err})
 		return downloadResult{addr: addr, err: err}
 	}
 	d.event(DownloadEvent{Kind: DownloadComplete, Hash: hash, Provider: addr})
 	return downloadResult{addr: addr, tag: tag}
+}
+
+// fetch downloads hash from addr, calling progress after each write of
+// verified content.
+func (d *Downloader) fetch(ctx context.Context, hash Hash, addr netaddr.EndpointAddr, progress func()) (*TempTag, error) {
+	conn, err := d.connection(ctx, addr)
+	if err != nil {
+		return nil, fmt.Errorf("blobs: connect provider %s: %w", addr.ID, err)
+	}
+	stream, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		d.drop(addr)
+		return nil, fmt.Errorf("blobs: open provider stream %s: %w", addr.ID, err)
+	}
+	tag, err := d.streamBlob(ctx, stream, hash, progress)
+	if err != nil {
+		return nil, fmt.Errorf("blobs: get blob from provider %s: %w", addr.ID, err)
+	}
+	if tag.Hash() != hash {
+		tag.Close()
+		return nil, fmt.Errorf("blobs: stored blob hash mismatch")
+	}
+	return tag, nil
 }
 
 func (d *Downloader) connection(ctx context.Context, addr netaddr.EndpointAddr) (BlobConn, error) {
@@ -300,17 +336,32 @@ func (d *Downloader) event(ev DownloadEvent) {
 }
 
 // streamBlob downloads hash from stream straight into a [BlobWriter], so the
-// blob is never held in memory, and returns the tag protecting it.
-func (d *Downloader) streamBlob(ctx context.Context, stream BidiStream, hash Hash) (*TempTag, error) {
+// blob is never held in memory, and returns the tag protecting it. It calls
+// progress after each write of verified content.
+func (d *Downloader) streamBlob(ctx context.Context, stream BidiStream, hash Hash, progress func()) (*TempTag, error) {
 	w, err := d.store.NewBlob(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer w.Close()
-	if err := DownloadBlob(ctx, stream, hash, w); err != nil {
+	if err := DownloadBlob(ctx, stream, hash, progressWriter{w, progress}); err != nil {
 		return nil, err
 	}
 	return w.Commit()
+}
+
+// progressWriter calls progress after each write to w.
+type progressWriter struct {
+	w        io.Writer
+	progress func()
+}
+
+func (w progressWriter) Write(p []byte) (int, error) {
+	n, err := w.w.Write(p)
+	if n > 0 {
+		w.progress()
+	}
+	return n, err
 }
 
 // commitEmpty stores the zero-length blob.
