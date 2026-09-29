@@ -12,11 +12,15 @@ import (
 	"github.com/tmc/go-iroh/iroh-compat-harness/runner"
 )
 
+// Iroh-compat runs the parity matrix against one pinned upstream release and
+// records the cells in a run file. With -merge, it combines run files for
+// several releases into results.json, badge.json, and COMPATIBILITY.md, and
+// exits non-zero if any cell disagrees with its expected verdict.
 func main() {
-	releaseKey := flag.String("release-key", "1.3", "released-train scenario key")
-	releaseTrain := flag.String("release-train", "1.3", "released upstream minor train")
-	releaseVersion := flag.String("release-version", "", "pinned upstream release")
+	merge := flag.Bool("merge", false, "merge the run files named as arguments into the report")
+	releaseVersion := flag.String("release-version", "", "pinned upstream release, such as 1.3.0")
 	releaseCommit := flag.String("release-commit", "", "pinned upstream release commit")
+	out := flag.String("o", "", "run file to write (default results/runs/iroh-VERSION.json)")
 	doctor := flag.String("rust-doctor", "", "path to the pinned iroh-doctor binary")
 	goRelay := flag.String("go-relay", "", "path to the go-iroh relay binary")
 	rustRelay := flag.String("rust-relay", "", "path to the pinned upstream iroh-relay binary")
@@ -30,6 +34,17 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	harness := filepath.Join(root, "iroh-compat-harness")
+	if *merge {
+		if err := mergeRuns(root, harness, flag.Args()); err != nil {
+			fatal(err)
+		}
+		return
+	}
+	train, err := runner.Train(*releaseVersion)
+	if err != nil {
+		fatal(err)
+	}
 	commit, err := gitCommit(root)
 	if err != nil {
 		fatal(err)
@@ -37,33 +52,56 @@ func main() {
 	report := runner.Report{
 		Schema: runner.Schema, Generated: time.Now().UTC(), GoIroh: runner.GoIroh{Version: "main", Commit: commit},
 		Pins: []runner.Pin{
-			{Key: *releaseKey, Train: *releaseTrain, Version: *releaseVersion, Commit: *releaseCommit, Kind: "release"},
+			{Key: train, Train: train, Version: *releaseVersion, Commit: *releaseCommit, Kind: "release"},
 		},
 	}
-	report.Cells = runner.RunVectorCorpus(*vector, filepath.Join(root, "iroh-compat-harness", "vectors", "corpus.json"), *releaseKey)
-	report.Cells = append(report.Cells, runEcho(*doctor, *releaseKey)...)
-	report.Cells = append(report.Cells, runRelay(*goRelay, *rustRelay, *vector, *releaseKey)...)
-	report.Cells = append(report.Cells, runDiscovery(*goDNS, *rustDNS, *rustRelay, *vector, *releaseKey)...)
-	report.Cells = append(report.Cells, runQAD(*doctor, *releaseKey))
-	report.Cells = append(report.Cells, runTransport(*vector, *releaseKey)...)
-	report.Cells = append(report.Cells, runGossip(*vector, *releaseKey))
-	report.Cells = append(report.Cells, runBlobs(*vector, *releaseKey)...)
-	report.Cells = append(report.Cells, runPQ(*pq, *releaseKey)...)
-	scenarioDir := filepath.Join(root, "iroh-compat-harness", "scenarios")
+	corpus := filepath.Join(harness, "vectors", "corpus", *releaseVersion+".json")
+	report.Cells = runner.RunVectorCorpus(*vector, corpus, train)
+	report.Cells = append(report.Cells, runEcho(*doctor, train)...)
+	report.Cells = append(report.Cells, runRelay(*goRelay, *rustRelay, *vector, train)...)
+	report.Cells = append(report.Cells, runDiscovery(*goDNS, *rustDNS, *rustRelay, *vector, train)...)
+	report.Cells = append(report.Cells, runQAD(*doctor, train))
+	report.Cells = append(report.Cells, runTransport(*vector, train)...)
+	report.Cells = append(report.Cells, runGossip(*vector, train))
+	report.Cells = append(report.Cells, runBlobs(*vector, train)...)
+	report.Cells = append(report.Cells, runPQ(*pq, train)...)
+	if err := runner.ApplyExpected(filepath.Join(harness, "scenarios"), train, report.Cells); err != nil {
+		fatal(err)
+	}
+	if *out == "" {
+		*out = filepath.Join(harness, "results", "runs", "iroh-"+*releaseVersion+".json")
+	}
+	if err := report.WriteRun(*out); err != nil {
+		fatal(err)
+	}
+}
+
+func mergeRuns(root, harness string, paths []string) error {
+	if len(paths) == 0 {
+		return errors.New("-merge needs at least one run file")
+	}
+	var runs []runner.Report
+	for _, path := range paths {
+		run, err := runner.ReadRun(path)
+		if err != nil {
+			return err
+		}
+		runs = append(runs, run)
+	}
+	report, err := runner.Merge(runs)
+	if err != nil {
+		return err
+	}
+	scenarioDir := filepath.Join(harness, "scenarios")
 	report.Envelopes, err = runner.LoadEnvelopes(scenarioDir)
 	if err != nil {
-		fatal(err)
+		return err
 	}
 	report.PeerNotes, err = runner.LoadPeerNotes(scenarioDir)
 	if err != nil {
-		fatal(err)
+		return err
 	}
-	if err := runner.ApplyExpected(scenarioDir, *releaseKey, report.Cells); err != nil {
-		fatal(err)
-	}
-	if err := report.Write(filepath.Join(root, "iroh-compat-harness", "results"), root); err != nil {
-		fatal(err)
-	}
+	return report.Write(filepath.Join(harness, "results"), root)
 }
 
 func runPQ(bin, version string) []runner.Cell {

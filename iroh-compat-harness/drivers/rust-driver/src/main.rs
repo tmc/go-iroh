@@ -734,7 +734,7 @@ fn write_corpus() -> Result<(), Box<dyn std::error::Error>> {
 
     let corpus = Corpus {
         schema: "go-iroh-l0/4",
-        iroh: "1.3.0",
+        iroh: env!("CARGO_PKG_VERSION"),
         keys,
         postcard_uint,
         postcard_u8,

@@ -1,2 +1,3 @@
-/drivers/rust-driver/target/
+/drivers/rust-driver/*/target/
+/results/runs/
 /results/artifacts/

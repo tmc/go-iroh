@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        iroh: [1.3.0]
+        iroh: [1.2.0, 1.3.0]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -47,16 +47,37 @@ jobs:
           RUST_DOCTOR_BIN: ${{ runner.temp }}/iroh-doctor
           RUST_RELAY_BIN: ${{ runner.temp }}/iroh-relay
           RUST_DNS_BIN: ${{ runner.temp }}/iroh-dns-server
-          RUST_VECTOR_BIN: ${{ github.workspace }}/iroh-compat-harness/drivers/rust-driver/target/release/go-iroh-compat-rust-driver
+          RUST_VECTOR_BIN: ${{ github.workspace }}/iroh-compat-harness/drivers/rust-driver/iroh-${{ matrix.iroh }}/target/release/go-iroh-compat-rust-driver
         run: |
-          cargo build --quiet --release --locked --manifest-path drivers/rust-driver/Cargo.toml
-          make parity-native IROH_VERSION=${{ matrix.iroh }}
-          mkdir -p "$RUNNER_TEMP/release"
-          cp results/results.json "$RUNNER_TEMP/release/results-iroh-${{ matrix.iroh }}.json"
-          cp ../COMPATIBILITY.md "$RUNNER_TEMP/release/COMPATIBILITY-iroh-${{ matrix.iroh }}.md"
+          cargo build --quiet --release --locked --manifest-path drivers/rust-driver/iroh-${{ matrix.iroh }}/Cargo.toml
+          make parity-release IROH_VERSION=${{ matrix.iroh }}
       - uses: actions/upload-artifact@v7
         with:
-          name: release-proof-${{ matrix.iroh }}
+          name: parity-run-${{ matrix.iroh }}
+          path: iroh-compat-harness/results/runs/iroh-${{ matrix.iroh }}.json
+
+  report:
+    needs: parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: parity-run-*
+          path: iroh-compat-harness/results/runs
+          merge-multiple: true
+      - name: Merge the release runs
+        working-directory: iroh-compat-harness
+        run: |
+          make parity-report RELEASES="1.2.0 1.3.0"
+          mkdir -p "$RUNNER_TEMP/release"
+          cp results/results.json ../COMPATIBILITY.md "$RUNNER_TEMP/release/"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-proof
           path: ${{ runner.temp }}/release/
 
   release:
@@ -65,19 +86,18 @@ jobs:
     permissions:
       contents: write
     if: startsWith(github.ref, 'refs/tags/')
-    needs: parity
+    needs: report
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v5
         with:
-          pattern: release-proof-*
+          name: release-proof
           path: proof
-          merge-multiple: true
       # Draft on purpose: the release body makes a public wire-compat
       # claim, so a human reviews the parity artifacts and presses
       # publish. The tag must never publish unattended.
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
-          body: "Wire: iroh v1 (observed against iroh 1.3.0 — full matrix attached)."
+          body: "Wire: iroh v1 (observed against iroh 1.2.0 and 1.3.0 — full matrix attached)."
           files: proof/*
