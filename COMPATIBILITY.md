@@ -134,226 +134,61 @@ file.
 
 ### v0.2.2
 
-Two methods added, two deprecated, and a set of fixes that bound what a
-remote peer can make an endpoint do or learn. Nothing was removed and no
-exported signature changed.
+No removals or signature changes.
 
-`docs.MemoryStore` gained `InitialMessageInNamespace` and
-`ProcessMessageInNamespace`. `InitialMessage` and `ProcessMessage` are
-deprecated; they still compile and still reconcile across every namespace in
-the store, which is what the accepting side of a sync used to do after
-authorizing a single namespace. `docs.Handler` and live sync now scope each
-round to the negotiated namespace, and live sync no longer broadcasts inserts
-from namespaces its neighbors did not ask for. A nil `docs.Handler.Allow`
-still authorizes every peer for every namespace; that default is documented
-now, and changing it is planned for v0.3.0.
-
-Three docs changes are visible on the wire. A sync frame is capped at 16 MiB
-instead of 1 GiB, and the reader grows its buffer as bytes arrive rather than
-allocating the claimed length up front. The write side shares the constant,
-so a go-iroh peer never sends a frame it would reject. Remote entries dated
-more than `MaxTimestampFutureShift` ahead are now rejected on insert.
-
-relayserver sends a departure notice only to the peers the departing session
-sent to, not to every connected client. A client could otherwise learn the
-identity of every endpoint that disconnected by staying connected. Each
-session keeps a bounded set of destinations, cleared when full, so a client
-that talks to many peers may miss some notices; the per-departure cost drops
-from O(N) to O(k).
-
-The remaining fixes change no API. pkarr relay responses are read up to
-`MaxSignedPacketSize`, so an oversized body fails the length check instead
-of being buffered. After verifying a blob, the download paths check for
-trailing data by reading one byte rather than draining the stream. The
-socket's received-address cache is capped and emptied when full, since a
-sender varying its source address could otherwise grow it for the life of the
-socket; a miss costs one allocation, never a wrong address. irpc and gossip
-reject a frame length that does not fit in an `int`, which on 32-bit
-platforms became negative and passed the size check.
-
-`StreamListener` no longer stops when one peer's handshake is rejected by an
-`AfterHandshake` hook ([#25](https://github.com/tmc/go-iroh/issues/25),
-regression test from [#26](https://github.com/tmc/go-iroh/pull/26)). Errors
-scoped to one peer drop that peer and retry after a short pause; only a
-cancelled listener, a closed endpoint, or an endpoint without ALPNs ends it.
-
-Three gossip fixes, each a case where a subscriber heard a topic but never
-became anyone's neighbor in it. A Join, or a ForwardJoin carrying one, from a
-peer we had already answered went unanswered if that peer had dropped our
-answer, so its new subscription never saw `NeighborUp`. go-iroh now answers
-it, as upstream iroh-gossip does for a Join. Closing a topic's last subscription left
-its old neighbors in `Neighbors` and `IsJoined` after a resubscribe.
+- `docs.MemoryStore`: added `InitialMessageInNamespace` and
+  `ProcessMessageInNamespace`; `InitialMessage` and `ProcessMessage` are
+  deprecated. Sync and live sync are now scoped to the negotiated namespace.
+- `docs.Handler.Allow`: nil still allows every peer and namespace. This will
+  change in v0.3.0.
+- Wire: docs sync frames are capped at 16 MiB (was 1 GiB). Entries more than
+  `MaxTimestampFutureShift` in the future are rejected.
+- relayserver sends departure notices only to the peers a session sent to.
+- pkarr, blob, socket address cache, irpc and gossip frame lengths are now
+  bounded.
+- `StreamListener` keeps running when a hook rejects one peer
+  ([#25](https://github.com/tmc/go-iroh/issues/25)).
+- gossip answers a repeated Join or ForwardJoin, as upstream does. Closing a
+  topic now forgets its neighbors.
 
 ### v0.2.1
 
-Two struct fields added, several loss-recovery and path-selection behaviour
-changes, and a dependency bump. Nothing was removed and no exported signature
-changed.
+No removals or signature changes.
 
-`iroh.ConnStats` gained `PTOs` and `SpuriousLosses`, reporting how many
-probe-timeout alarms have fired on a connection and how many packets it
-declared lost that were later acknowledged. As with `gossip.Event.Dropped` in
-v0.1.1, adding a field to an exported struct breaks unkeyed composite literals,
-so `iroh.ConnStats{...}` written positionally no longer compiles; keyed
-literals are unaffected. The same addition carries an embedding hazard: a
-type that embeds `ConnStats` alongside another type providing `PTOs` or
-`SpuriousLosses` now has an ambiguous selector at the point of use.
-`gorelease` reports both additions as compatible; `apibump` classifies them as
-literal-breaking and embed-breaking, and would require a minor bump on the
-generic rule. This release treats them as a patch on the v0.1.1 precedent,
-since no call, no implementation, and no value use is affected.
-
-A wildcard-bound endpoint now replies to each peer from the local address that
-peer's datagrams arrived at, rather than from whichever address the route
-picks. On a multi-homed host, or one whose peer is reached over a bridge or a
-container network, the two differ, and a QUIC peer receiving packets from an
-address it never dialed fails path validation. The endpoint records the arrival
-address per remote and answers from it, as quinn does for the Rust iroh. This
-is what the platform allows rather than a guarantee: where the kernel does not
-report a datagram's destination, or refuses the recorded source on send, the
-reply leaves from the address the kernel picks, as before.
-
-`Connect` now starts a handshake per dial target 250 ms apart and takes the
-first that completes. It had walked the targets in turn, so a peer advertising
-several unreachable direct addresses cost a full handshake timeout each before
-the relay path was tried. A target already proven by the path selector still
-short-circuits. An endpoint that dials such a peer therefore opens more
-concurrent handshakes than it did before, and reaches the peer sooner.
-
-Path selection re-runs promptly once a hole punch succeeds, instead of waiting
-for the next periodic pass. An upgrade from the relay path to a direct path
-that had taken about five seconds now takes tens of milliseconds.
-
-Loss recovery changed in three ways in the vendored fork: probe-timeout packets
-are ack-eliciting, the loss timer stays armed on every path rather than only the
-active one, and a connection blocked by flow control still arms its loss alarms.
-Each corrects a case where a connection could stall waiting for a timer that was
-never set. That package is internal, so no exported API changed.
-
-On Linux the receive path uses `UDP_GRO`, so one `recvmsg` returns a run of
-coalesced datagrams from a peer instead of one datagram per call. Other
-platforms keep the per-packet loop, and nothing changes on the wire. Measured
-on an 8-core x86 host against the same tree with the socket option off, and on
-the wildcard-bound socket an endpoint binds by default, stream message rate is
-5 to 11% faster and the datagram cells are unchanged or slightly faster.
-
-`golang.org/x/crypto` moved from v0.54.0 to v0.56.0, which carries
-`golang.org/x/net` from v0.56.0 to v0.57.0. This clears three advisories that
-`govulncheck` reports against the module graph. None was reachable: go-iroh
-imports `chacha20`, `chacha20poly1305` and `cryptobyte`, and the advisories are
-against `ssh`. The remaining `openpgp` advisory has no fix and names a package
-this module does not import.
+- `iroh.ConnStats`: added `PTOs` and `SpuriousLosses`. This breaks unkeyed
+  literals; released as a patch, as in v0.1.1.
+- A wildcard-bound endpoint replies from the address each peer reached.
+- `Connect` starts dial targets 250 ms apart and uses the first to succeed.
+- The relay-to-direct upgrade takes tens of milliseconds, down from about 5 s.
+- Loss-recovery stall fixes in `internal/qng`.
+- Linux receives with `UDP_GRO`.
+- `golang.org/x/crypto` is now v0.56.0. The govulncheck advisories it fixes
+  were not reachable.
 
 ### v0.2.0
 
-One option added, one deprecated, four behaviour changes, one concurrency
-contract tightened, and a vendored upstream bump. Nothing was removed and no
-exported signature changed.
+No removals or signature changes.
 
-net_report now runs by default whenever relays are configured. It measures
-relay latency and reports the QAD-derived global addresses advertised as local
-QNT candidates for active remotes. Previously an endpoint had to ask for it.
-This is a behaviour change for an endpoint that configures relays and does not
-opt out: it sends net_report probes it did not send before, and its home relay
-can move away from the bootstrap pick after `Bind`.
-
-`iroh.WithoutNetReport` was added to turn it off. Without it the home relay
-stays whichever relay `Bind` picked to bootstrap with — the first in the relay
-map rather than the nearest — and `Endpoint.NetReport` never reports a
-measurement. `iroh.WithNetReport` is deprecated: it still compiles and still
-clears the disable flag, so passing it is harmless, but it no longer enables
-anything that was off.
-
-mdns responders now answer SRV and TXT questions. A responder answered only PTR
-and ANY, so a peer asking directly for an instance's SRV or TXT record got
-nothing and had to re-query by PTR. Announcements already carried all three
-records together, so this adds no record type that was not already on the wire;
-it answers questions that were being dropped. An SRV or TXT question must name
-the instance rather than the service, since both records describe one instance
-and the service name does not say which.
-
-mdns discovery now also listens and announces on the IPv6 multicast group
-`ff02::fb`. Two peers that share an IPv6 link and no IPv4 link previously never
-found each other. IPv6 is best effort: a host without it behaves exactly as
-before. Which addresses a record carries is still independent of the link the
-packet rides on, so AAAA records continue to travel over IPv4 where that is the
-only link.
-
-Path MTU discovery now runs. Setting the don't-fragment bit on UDP sockets had
-been gated behind an `IROH_ENABLE_DF` environment variable, so `capabilities().DF`
-was false and the MTU discoverer was never started on either side of a
-connection. A dialing endpoint still appeared to widen its path, but only as a
-side effect of multipath path setup arming the prober; an accepting endpoint
-stayed at the initial 1243-byte payload for the life of the connection.
-Endpoints now discover the real path MTU in both directions. The behaviour
-change to be aware of is that datagrams too large for the path now fail with
-EMSGSIZE rather than being fragmented, which is what QUIC requires and what
-upstream quic-go does.
-
-`relay.Map` is now safe for concurrent use and must not be copied after first
-use. It held an unsynchronized map while one instance was shared between the
-relay actor and net_report's background prober, so removing a relay raced with
-probing it. A `sync.RWMutex` was added. Both of its fields were already
-unexported, so no composite literal is affected; the one thing to know is that
-copying a `Map` by value now trips `go vet`'s copylocks check. Nothing in this
-module copied one, and the type has always been passed as `*relay.Map`.
-
-The vendored quic-go fork in `internal/qng` was updated to upstream v0.62.0, by
-way of v0.61.0. That package is internal, so no exported API changed; the fork's
-own divergence from upstream is recorded in the package's own documentation.
-
-Single-stream message rate ends up a few percent below v0.1.1. Measured on a
-quiet Linux host, medians of 15 interleaved runs are 2.5% lower at 8 KiB
-messages, 3.4% at 32 bytes and 5.3% at 1 KiB. Read that as the residual across
-the whole of v0.2 rather than the price of an upstream release: both revendors
-cost something, and most of the first one was the fork's own buffered send path
-being dropped in the merge, which is a fork-maintenance loss and not upstream
-getting slower. v0.2 re-applies that path and recovers most of it. Packets and
-bytes per operation are unchanged, so what remains is per-packet CPU on the send
-path rather than extra traffic. Bulk throughput is unaffected, and the
-multi-stream and multi-connection scaling benchmarks improve, from the path MTU
-discovery change described above.
+- net_report runs by default when relays are configured. Added
+  `iroh.WithoutNetReport`; `iroh.WithNetReport` is deprecated and does
+  nothing.
+- mdns answers SRV and TXT questions and also uses IPv6 (`ff02::fb`).
+- Path MTU discovery is on, so oversized datagrams fail with EMSGSIZE
+  instead of being fragmented.
+- `relay.Map` is safe for concurrent use and must not be copied.
+- `internal/qng` is updated to quic-go v0.62.0. Single-stream message rate
+  is 2.5–5% below v0.1.1; multi-stream scaling improved.
 
 ### v0.1.1
 
-Two encoding changes and one struct field. Nothing was removed, and no exported
-signature changed.
+No removals or signature changes.
 
-`u8` and `i8` now encode as one raw byte. Rust postcard writes `u8` verbatim and
-`i8` as its two's complement; go-iroh varint-encoded the first and zigzagged the
-second, so `uint8(200)` was `c801` where Rust gives `c8`, and `int8(-2)` was `03`
-where Rust gives `fe`. Any cross-language protocol carrying an 8-bit field
-diverged silently. The postcard-encoded types in this module carry their enums
-as `u64`, which is why nothing caught it. A `u8` below 128 encodes identically
-under both rules, so unsigned data written before this change is still readable;
-`i8` is not, since zigzag and two's complement agree only on zero. Proven
-against Rust output by `vectors/postcard-8bit`.
-
-Padded varints are rejected. `ac8200` and `ac02` both decoded to 300, and `8100`
-was a valid length prefix for a one-byte slice; a record identified by a digest
-of its encoding therefore had more than one valid id, which defeats
-deduplication and equivocation detection. Decoding now returns an overlong-varint
-error for any encoding past its shortest form. **This is stricter than the
-reference implementation, not matched to it:** postcard 1.1.3 accepts every one
-of these encodings. See the compatibility envelope above for what that costs;
-the short version is that both serializers emit only canonical forms, so no
-conforming peer's traffic is affected. Measured by
-`vectors/postcard-varint-strictness`, which is expected to fail because the two
-implementations genuinely disagree.
-
-`gossip.Event` gained a `Dropped` field, reporting how many events a lagging
-subscriber missed. Adding a field to an exported struct breaks unkeyed composite
-literals, so `gossip.Event{kind, peer, ...}` no longer compiles. Keyed literals
-are unaffected. API-diff tools report this addition as compatible.
-
-Both additions also carry an embedding hazard. A type that embeds
-`gossip.Event` alongside another type providing `Dropped`, or that embeds
-`iroh.Stream` alongside another providing `CloseWrite`, now has an ambiguous
-selector at the point of use. `gorelease` reports neither; `apibump`
-classifies both as embed-breaking.
-
-Also added, with nothing removed: `iroh.Stream.CloseWrite`,
-`iroh.ErrTLSHandshakeFailure`, `iroh.QLOGConnection`, `iroh.QLOGDir`,
-`iroh.WithQLOG`, `mdns.WithLogger`, `key.UncheckedEndpointID`,
-`relayserver.NewWithOptions`, `relayserver.Option`, and
-`relayserver.WithClientRate`.
+- Wire: `u8` and `i8` encode as one raw byte, matching Rust postcard.
+  Previously stored `i8` values cannot be read.
+- Wire: padded varints are rejected. This is stricter than postcard 1.1.3;
+  see the compatibility envelope.
+- `gossip.Event`: added `Dropped`. This breaks unkeyed literals.
+- Added `iroh.Stream.CloseWrite`, `iroh.ErrTLSHandshakeFailure`,
+  `iroh.QLOGConnection`, `iroh.QLOGDir`, `iroh.WithQLOG`, `mdns.WithLogger`,
+  `key.UncheckedEndpointID`, `relayserver.NewWithOptions`,
+  `relayserver.Option`, and `relayserver.WithClientRate`.
