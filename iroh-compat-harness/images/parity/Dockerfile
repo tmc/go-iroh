@@ -4,6 +4,7 @@ FROM ${RUST_IMAGE} AS rust-peer
 # The vector driver builds in its own stage so that editing its sources leaves
 # the peer image untouched.
 FROM rust:1.96-bookworm AS driver-build
+ARG IROH_VERSION
 WORKDIR /src
 COPY drivers/rust-driver/ ./
 # The PQ peer enables upstream iroh's documented tls-aws-lc-rs feature. The
@@ -11,7 +12,7 @@ COPY drivers/rust-driver/ ./
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/src/target,id=rust-driver,sharing=locked \
-    cargo build --release --locked && \
+    CARGO_TARGET_DIR=/src/target cargo build --release --locked --manifest-path iroh-${IROH_VERSION}/Cargo.toml && \
     mkdir -p /out && cp target/release/go-iroh-compat-rust-driver /out/
 
 FROM golang:1.26-bookworm

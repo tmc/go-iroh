@@ -244,16 +244,17 @@ func handWrittenAppendix(path string) ([]byte, error) {
 }
 
 func (r *Report) Badge() []byte {
-	matched, total, version, key := 0, 0, "", ""
+	matched, total := 0, 0
+	release := make(map[string]bool)
+	var versions []string
 	for _, pin := range r.Pins {
 		if pin.Kind == "release" {
-			key = pin.Key
-			version = pin.Version
-			break
+			release[pin.Key] = true
+			versions = append(versions, pin.Version)
 		}
 	}
 	for _, c := range r.Cells {
-		if c.Iroh == key {
+		if release[c.Iroh] {
 			total++
 			if c.Result == c.Expected {
 				matched++
@@ -263,7 +264,7 @@ func (r *Report) Badge() []byte {
 	b, _ := json.Marshal(map[string]any{
 		"schemaVersion": 1,
 		"label":         "parity",
-		"message":       fmt.Sprintf("%d/%d expected vs iroh %s", matched, total, version),
+		"message":       fmt.Sprintf("%d/%d expected vs iroh %s", matched, total, strings.Join(versions, ", ")),
 		"color":         map[bool]string{true: "brightgreen", false: "yellow"}[matched == total && total != 0],
 	})
 	return append(b, '\n')
@@ -402,7 +403,8 @@ func (r *Report) Markdown() []byte {
 // say this on its own: an unmeasured cell renders as "—", which reads the same
 // whether the scenario was skipped for that pin or never ran anywhere.
 func (r *Report) coverageNote(scenarios []string, byScenario map[string]map[string]Cell) string {
-	var b strings.Builder
+	var notes []string
+	complete := 0
 	for _, pin := range r.Pins {
 		measured := 0
 		for _, scenario := range scenarios {
@@ -411,12 +413,16 @@ func (r *Report) coverageNote(scenarios []string, byScenario map[string]map[stri
 			}
 		}
 		if measured == len(scenarios) {
-			fmt.Fprintf(&b, "Every scenario is measured against the released %s pin. ", pin.label())
+			complete++
+			notes = append(notes, fmt.Sprintf("Every scenario is measured against the released %s pin.", pin.label()))
 		} else {
-			fmt.Fprintf(&b, "The released %s column is partial: %d of %d scenarios are measured and the rest remain untested for %s. ", pin.label(), measured, len(scenarios), pin.Train)
+			notes = append(notes, fmt.Sprintf("The released %s column is partial: %d of %d scenarios are measured and the rest remain untested for %s.", pin.label(), measured, len(scenarios), pin.Train))
 		}
 	}
-	return strings.TrimSpace(b.String()) + "\n"
+	if len(r.Pins) > 1 && complete == len(r.Pins) {
+		return "Every scenario is measured against every released pin.\n"
+	}
+	return strings.Join(notes, " ") + "\n"
 }
 
 func (p Pin) label() string {

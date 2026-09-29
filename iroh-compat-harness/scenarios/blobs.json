@@ -5,14 +5,14 @@
       "description": "The Rust driver's iroh-blobs 0.103.0 client asks a Go provider for a hash sequence of empty, 1-chunk, 16-chunk, 17-chunk, and 100000-byte blobs with sendme receive's first request, the whole sequence and the last chunk of every child, and a pass proves that go-iroh answers it with every blob iroh-blobs expects and that each verifies.",
       "tier": "stable",
       "counterpart": "Rust test driver",
-      "expected": {"1.3": "fail"}
+      "expected": {"1.2": "fail", "1.3": "fail"}
     },
     {
       "name": "blobs/rust-get-per-child",
       "description": "The Rust driver's iroh-blobs 0.103.0 client asks a Go provider for the second and fourth children of the same hash sequence in full, and nothing else, as a resumed download does, and a pass proves that go-iroh answers a per-child request with exactly those blobs.",
       "tier": "stable",
       "counterpart": "Rust test driver",
-      "expected": {"1.3": "fail"}
+      "expected": {"1.2": "fail", "1.3": "fail"}
     }
   ]
 }
