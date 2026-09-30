@@ -244,13 +244,12 @@ func handWrittenAppendix(path string) ([]byte, error) {
 }
 
 // Badge returns a shields.io endpoint badge for the release pins. The
-// message counts passing scenarios per release, so a known divergence shows
-// as a miss rather than being folded into the total. The color is green when
-// every cell matches its expectation, red when an expected pass does not
-// pass, and yellow when a cell passes that was expected not to, which means
-// the recorded expectations are stale.
+// message counts passing scenarios and names expected differences. The color
+// is green when every cell matches its expectation, red when an expected pass
+// does not pass, and yellow when a cell passes that was expected not to, which
+// means the recorded expectations are stale.
 func (r *Report) Badge() []byte {
-	type tally struct{ pass, total int }
+	type tally struct{ pass, total, expectedFail int }
 	counts := make(map[string]*tally)
 	var versions []string
 	for _, pin := range r.Pins {
@@ -268,6 +267,8 @@ func (r *Report) Badge() []byte {
 		t.total++
 		if c.Result == Pass {
 			t.pass++
+		} else if c.Result == c.Expected {
+			t.expectedFail++
 		}
 		switch {
 		case c.Expected == Pass && c.Result != Pass:
@@ -280,12 +281,22 @@ func (r *Report) Badge() []byte {
 	var parts []string
 	var first *tally
 	same := true
+	expectedFail := 0
 	for _, pin := range r.Pins {
 		t := counts[pin.Key]
 		if t == nil {
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("%d/%d on %s", t.pass, t.total, pin.Version))
+		message := fmt.Sprintf("%d/%d pass", t.pass, t.total)
+		if t.expectedFail > 0 {
+			difference := "expected difference"
+			if t.expectedFail != 1 {
+				difference += "s"
+			}
+			message += fmt.Sprintf("; %d %s", t.expectedFail, difference)
+		}
+		parts = append(parts, fmt.Sprintf("%s on %s", message, pin.Version))
+		expectedFail += t.expectedFail
 		if first == nil {
 			first = t
 		} else if *t != *first {
@@ -297,7 +308,15 @@ func (r *Report) Badge() []byte {
 	case first == nil:
 		message, color = "no results", "lightgrey"
 	case same:
-		message = fmt.Sprintf("%d/%d scenarios pass on %s", first.pass, first.total, strings.Join(versions, " and "))
+		message = fmt.Sprintf("%d/%d scenarios pass", first.pass, first.total)
+		if expectedFail > 0 {
+			difference := "expected difference"
+			if expectedFail/len(versions) != 1 {
+				difference += "s"
+			}
+			message += fmt.Sprintf("; %d %s", expectedFail/len(versions), difference)
+		}
+		message += " on " + strings.Join(versions, " and ")
 	default:
 		message = strings.Join(parts, ", ")
 	}
