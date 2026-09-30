@@ -74,6 +74,9 @@ const DefaultStallTimeout = 30 * time.Second
 // for [DownloaderOptions.StallTimeout].
 var ErrProviderStalled = errors.New("blobs: provider stalled")
 
+// ErrDownloaderClosed reports a download attempted after [Downloader.Close].
+var ErrDownloaderClosed = errors.New("blobs: downloader closed")
+
 // DownloaderOptions configures a Downloader.
 type DownloaderOptions struct {
 	// Concurrency is the maximum number of providers tried at once.
@@ -81,6 +84,7 @@ type DownloaderOptions struct {
 	Concurrency int
 	// OnEvent, if non-nil, receives progress events. It is called serially,
 	// so it need not be safe for concurrent use even when Concurrency > 1.
+	// It may call [Downloader.Close], but must not call [Downloader.Wait].
 	OnEvent func(DownloadEvent)
 	// StallTimeout is how long a provider may go without delivering
 	// verified content, counting from when it is first tried, before
@@ -95,8 +99,11 @@ type Downloader struct {
 	conn  BlobConnector
 	opts  DownloaderOptions
 
-	mu    sync.Mutex
-	conns map[string]BlobConn
+	mu     sync.Mutex
+	conns  map[string]BlobConn
+	closed bool
+	calls  map[*downloadCall]struct{}
+	idle   chan struct{}
 
 	// eventMu serializes OnEvent so a worker fan-out (Concurrency > 1) does
 	// not deliver events concurrently; callers need not make OnEvent
@@ -118,15 +125,25 @@ func NewDownloader(store Sink, conn BlobConnector, opts DownloaderOptions) *Down
 	return &Downloader{store: store, conn: conn, opts: opts, conns: make(map[string]BlobConn)}
 }
 
-// Close closes cached provider connections.
+// Close stops admission, cancels active downloads, and closes cached connections.
+// It does not wait for downloads or their event callbacks to finish. Close may
+// be called from OnEvent. Call [Downloader.Wait] after Close to join active work.
 func (d *Downloader) Close() error {
 	if d == nil {
 		return nil
 	}
 	d.mu.Lock()
+	d.closed = true
 	conns := d.conns
-	d.conns = make(map[string]BlobConn)
+	d.conns = nil
+	cancels := make([]context.CancelFunc, 0, len(d.calls))
+	for call := range d.calls {
+		cancels = append(cancels, call.cancel)
+	}
 	d.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
 	var err error
 	for _, conn := range conns {
 		if e := conn.CloseWithError(0, ""); e != nil {
@@ -134,6 +151,67 @@ func (d *Downloader) Close() error {
 		}
 	}
 	return err
+}
+
+// Wait waits for the current active downloads and their callbacks to finish.
+// Call Close first to prevent new downloads. Wait must not be called from
+// OnEvent, because it waits for that callback to return. A nil context means
+// context.Background.
+func (d *Downloader) Wait(ctx context.Context) error {
+	if d == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	d.mu.Lock()
+	idle := d.idle
+	d.mu.Unlock()
+	if idle == nil {
+		return nil
+	}
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+type downloadCall struct {
+	cancel context.CancelFunc
+}
+
+func (d *Downloader) begin(ctx context.Context) (context.Context, func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	call := &downloadCall{cancel: cancel}
+	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		cancel()
+		return nil, nil, ErrDownloaderClosed
+	}
+	if len(d.calls) == 0 {
+		d.idle = make(chan struct{})
+	}
+	if d.calls == nil {
+		d.calls = make(map[*downloadCall]struct{})
+	}
+	d.calls[call] = struct{}{}
+	d.mu.Unlock()
+	return ctx, func() {
+		cancel()
+		d.mu.Lock()
+		delete(d.calls, call)
+		if len(d.calls) == 0 {
+			close(d.idle)
+			d.idle = nil
+		}
+		d.mu.Unlock()
+	}, nil
 }
 
 // Download downloads hash from one of providers and stores it locally.
@@ -147,6 +225,11 @@ func (d *Downloader) Download(ctx context.Context, hash Hash, providers []netadd
 	if d == nil {
 		return nil, errors.New("blobs: nil downloader")
 	}
+	ctx, done, beginErr := d.begin(ctx)
+	if beginErr != nil {
+		return nil, beginErr
+	}
+	defer done()
 	if d.store == nil {
 		return nil, errors.New("blobs: nil downloader store")
 	}
@@ -166,9 +249,6 @@ func (d *Downloader) Download(ctx context.Context, hash Hash, providers []netadd
 	}
 	if len(providers) == 0 {
 		return nil, errors.New("blobs: no providers")
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -298,6 +378,10 @@ func (d *Downloader) fetch(ctx context.Context, hash Hash, addr netaddr.Endpoint
 func (d *Downloader) connection(ctx context.Context, addr netaddr.EndpointAddr) (BlobConn, error) {
 	key := addr.String()
 	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		return nil, ErrDownloaderClosed
+	}
 	conn := d.conns[key]
 	d.mu.Unlock()
 	if conn != nil {
@@ -308,6 +392,11 @@ func (d *Downloader) connection(ctx context.Context, addr netaddr.EndpointAddr) 
 		return nil, err
 	}
 	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		_ = conn.CloseWithError(0, "")
+		return nil, ErrDownloaderClosed
+	}
 	if old := d.conns[key]; old != nil {
 		d.mu.Unlock()
 		_ = conn.CloseWithError(0, "")
