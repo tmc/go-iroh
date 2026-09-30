@@ -173,7 +173,7 @@ func (h *Handler) run(ctx context.Context, rw io.ReadWriter, namespace Namespace
 	if h.Store == nil {
 		return SyncOutcome{}, fmt.Errorf("docs: nil store")
 	}
-	contentStatus := h.contentStatus()
+	contentStatus := h.contentStatus(ctx)
 	validate := h.Validate
 	if validate == nil {
 		validate = func(entry SignedEntry, _ ContentStatus) bool { return entry.Verify() == nil }
@@ -218,15 +218,12 @@ func (h *Handler) run(ctx context.Context, rw io.ReadWriter, namespace Namespace
 	}
 }
 
-func (h *Handler) contentStatus() func(SignedEntry) ContentStatus {
+func (h *Handler) contentStatus(ctx context.Context) func(SignedEntry) ContentStatus {
 	if h.ContentStatus != nil {
 		return h.ContentStatus
 	}
 	return func(entry SignedEntry) ContentStatus {
-		// ContentStatus carries no context of its own, so this is the boundary
-		// where one has to be supplied. Threading a caller's context through
-		// the callback is a docs API change worth making on its own.
-		status, err := blobs.Status(context.Background(), h.BlobStore, entry.Entry.ContentHash())
+		status, err := blobs.Status(ctx, h.BlobStore, entry.Entry.ContentHash())
 		if err != nil {
 			return ContentMissing
 		}
