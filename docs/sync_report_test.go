@@ -134,7 +134,7 @@ func TestSyncCompat(t *testing.T) {
 			var splits atomic.Int64
 			config := DefaultSyncConfig()
 			config.splitHook = func(Range) { splits.Add(1) }
-			server := newSyncNode(t, ctx, &Handler{Store: serverStore, Config: config})
+			server := newSyncNode(t, ctx, &Handler{Store: serverStore, Config: config, Allow: allowAllSync})
 			client := newSyncClient(t, ctx)
 			outcome, err := tt.dial(ctx, client, syncAddr(server), namespace.ID(), clientStore)
 			if err != nil {

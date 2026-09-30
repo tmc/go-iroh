@@ -355,7 +355,7 @@ func newLiveSyncNode(t *testing.T, ctx context.Context, store *MemoryStore, blob
 	router, err := iroh.NewRouter(ep, map[string]iroh.ProtocolHandler{
 		gossip.ALPN: g.Handler(),
 		blobs.ALPN:  liveBlobHandler{store: blobStore},
-		ALPN:        &Handler{Store: store, BlobStore: blobStore},
+		ALPN:        &Handler{Store: store, BlobStore: blobStore, Allow: allowAllSync},
 	}, nil)
 	if err != nil {
 		t.Fatalf("new router: %v", err)

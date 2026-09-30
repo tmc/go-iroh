@@ -24,6 +24,7 @@ import (
 	"github.com/tmc/go-iroh/blobs"
 	"github.com/tmc/go-iroh/docs"
 	"github.com/tmc/go-iroh/iroh"
+	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 	"github.com/tmc/go-iroh/relay"
 	"github.com/tmc/go-iroh/relayserver"
@@ -184,7 +185,7 @@ func TestBrowserDocsRelayOnlySync(t *testing.T) {
 		t.Fatal(err)
 	}
 	router, err := iroh.NewRouter(server, map[string]iroh.ProtocolHandler{
-		docs.ALPN: &docs.Handler{Store: serverStore},
+		docs.ALPN: &docs.Handler{Store: serverStore, Allow: func(ns docs.NamespaceID, _ key.EndpointID) bool { return ns == namespace.ID() }},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)

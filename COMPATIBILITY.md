@@ -150,6 +150,12 @@ See the [harness README](https://github.com/tmc/go-iroh/blob/compat-harness/iroh
 This hand-written appendix records API and wire changes the matrix cannot
 show. Report generation preserves it.
 
+### v0.3.0 (unreleased)
+
+- A nil `docs.Handler.Allow` now rejects incoming sync with `AbortNotFound`,
+  for both Init and legacy report handshakes. Applications must supply an
+  authorization callback before accepting sync.
+
 ### v0.2.3
 
 - `endpointticket` now encodes IPv6 as IP and port, matching Rust. IPv6 tickets
@@ -167,8 +173,8 @@ show. Report generation preserves it.
 
 - `docs.MemoryStore` added namespace-scoped message methods and deprecated the
   unscoped methods. Sync now uses the negotiated namespace.
-- A nil `docs.Handler.Allow` still permits every peer and namespace; the
-  documented plan is to change this in v0.3.0.
+- A nil `docs.Handler.Allow` permits every peer and namespace in v0.2.x.
+  v0.3.0 changes the default to reject incoming sync.
 - Sync frames are capped at 16 MiB, and entries beyond
   `MaxTimestampFutureShift` are rejected.
 - Gossip handles repeated joins and forgets neighbors when a topic closes.

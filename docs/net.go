@@ -45,8 +45,8 @@ type Handler struct {
 	Store     *MemoryStore
 	BlobStore blobs.Store
 	Config    SyncConfig
-	// Allow reports whether peer may sync namespace. A nil Allow authorizes
-	// every peer for every namespace.
+	// Allow reports whether peer may sync namespace. A nil Allow rejects
+	// every incoming sync request. Set Allow explicitly to authorize peers.
 	Allow         func(NamespaceID, key.EndpointID) bool
 	Validate      func(SignedEntry, ContentStatus) bool
 	OnInsert      func(SignedEntry, ContentStatus)
@@ -77,7 +77,7 @@ func (h *Handler) Accept(ctx context.Context, conn *iroh.Conn) error {
 	// A go-iroh v0.2.3 or earlier dialer opens with a heads report and skips
 	// reconciliation when the heads match.
 	if msg.Kind == syncMessageReport {
-		if h.Allow != nil && !h.Allow(msg.Namespace, conn.RemoteID()) {
+		if h.Allow == nil || !h.Allow(msg.Namespace, conn.RemoteID()) {
 			if err := writeSyncFrame(s, syncWireMessage{Kind: syncMessageAbort, Reason: AbortNotFound}); err != nil {
 				return fmt.Errorf("docs: write abort: %w", err)
 			}
@@ -103,7 +103,7 @@ func (h *Handler) Accept(ctx context.Context, conn *iroh.Conn) error {
 	if msg.Kind != syncMessageInit {
 		return fmt.Errorf("docs: expected init message")
 	}
-	if h.Allow != nil && !h.Allow(msg.Namespace, conn.RemoteID()) {
+	if h.Allow == nil || !h.Allow(msg.Namespace, conn.RemoteID()) {
 		if err := writeSyncFrame(s, syncWireMessage{Kind: syncMessageAbort, Reason: AbortNotFound}); err != nil {
 			return fmt.Errorf("docs: write abort: %w", err)
 		}

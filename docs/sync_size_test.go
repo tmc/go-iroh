@@ -69,7 +69,7 @@ func TestSyncLargeNamespaceToEmptyStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer server.Shutdown(ctx)
-	router, err := iroh.NewRouter(server, map[string]iroh.ProtocolHandler{ALPN: &Handler{Store: source}}, nil)
+	router, err := iroh.NewRouter(server, map[string]iroh.ProtocolHandler{ALPN: &Handler{Store: source, Allow: allowAllSync}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

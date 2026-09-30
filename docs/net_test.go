@@ -32,7 +32,7 @@ func TestSyncLoopback(t *testing.T) {
 		t.Fatalf("bind server: %v", err)
 	}
 	router, err := iroh.NewRouter(server, map[string]iroh.ProtocolHandler{
-		docs.ALPN: &docs.Handler{Store: serverStore},
+		docs.ALPN: &docs.Handler{Store: serverStore, Allow: func(ns docs.NamespaceID, _ key.EndpointID) bool { return ns == namespace.ID() }},
 	}, nil)
 	if err != nil {
 		t.Fatalf("new router: %v", err)
