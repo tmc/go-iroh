@@ -110,7 +110,7 @@ func (h *Handler) Accept(ctx context.Context, conn *iroh.Conn) error {
 		ok = true
 		return nil
 	}
-	_, err = h.run(ctx, s, msg.Namespace, msg.Message, true)
+	_, err = h.run(ctx, s, conn.RemoteID(), msg.Namespace, msg.Message, true)
 	if err == nil {
 		ok = true
 	}
@@ -145,14 +145,15 @@ func Sync(ctx context.Context, ep *iroh.Endpoint, addr netaddr.EndpointAddr, nam
 	if err := writeSyncFrame(s, syncWireMessage{Kind: syncMessageInit, Namespace: namespace, Message: init}); err != nil {
 		return SyncOutcome{}, fmt.Errorf("docs: write init: %w", err)
 	}
-	out, err := h.run(ctx, s, namespace, Message{}, false)
+	out, err := h.run(ctx, s, conn.RemoteID(), namespace, Message{}, false)
 	if err == nil {
 		ok = true
 	}
 	return out, err
 }
 
-func (h *Handler) run(ctx context.Context, rw io.ReadWriter, namespace NamespaceID, initial Message, acceptSide bool) (SyncOutcome, error) {
+// run reconciles namespace with peer over rw.
+func (h *Handler) run(ctx context.Context, rw io.ReadWriter, peer key.EndpointID, namespace NamespaceID, initial Message, acceptSide bool) (SyncOutcome, error) {
 	if h.Store == nil {
 		return SyncOutcome{}, fmt.Errorf("docs: nil store")
 	}
@@ -166,7 +167,7 @@ func (h *Handler) run(ctx context.Context, rw io.ReadWriter, namespace Namespace
 	haveNext := acceptSide
 	for {
 		if haveNext {
-			reply, ok := h.Store.ProcessMessageInNamespace(namespace, h.Config, next, validate, h.OnInsert, contentStatus)
+			reply, ok := h.Store.processMessage(inNamespace(namespace), h.Config, next, validate, h.OnInsert, contentStatus, peer)
 			out.NumRecv += next.ValueCount()
 			if !ok {
 				return out, nil

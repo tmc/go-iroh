@@ -1,6 +1,7 @@
 package docs
 
 import (
+	"bytes"
 	"context"
 	"net/netip"
 	"testing"
@@ -600,6 +601,138 @@ func TestLiveSyncReceivedPutRejectsFutureTimestamp(t *testing.T) {
 
 			if got := store.Len(); got != tt.want {
 				t.Fatalf("Len = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestLiveSyncDownloadsReconciledContent pins that live sync downloads the
+// content of an entry that arrives by range reconciliation rather than by a
+// gossip Put: b joins after a wrote the entry, so no gossip carries it.
+func TestLiveSyncDownloadsReconciledContent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	namespace := NewNamespaceSecret(repeat32(0xb2))
+	author := NewAuthor(repeat32(0xa1))
+	content := []byte("content fetched after reconciliation")
+	contentHash := blobs.NewHash(content)
+	entry := testSignedEntry(namespace, author, "k", NewRecord(contentHash, uint64(len(content)), 1))
+
+	aStore := NewMemoryStore()
+	aBlobs, err := blobs.NewMemStore(content)
+	if err != nil {
+		t.Fatalf("NewMemStore: %v", err)
+	}
+	a, aGossip, aRouter := newLiveSyncNode(t, ctx, aStore, aBlobs)
+	defer aRouter.Shutdown(ctx)
+	aLive, err := StartLiveSync(ctx, a, aGossip, namespace.ID(), aStore, LiveSyncOptions{
+		BlobStore: aBlobs,
+	})
+	if err != nil {
+		t.Fatalf("start a live sync: %v", err)
+	}
+	defer aLive.Close()
+	aStore.Put(entry)
+
+	bStore := NewMemoryStore()
+	bBlobs, err := blobs.NewMemStore()
+	if err != nil {
+		t.Fatalf("NewMemStore: %v", err)
+	}
+	b, bGossip, bRouter := newLiveSyncNode(t, ctx, bStore, bBlobs)
+	defer bRouter.Shutdown(ctx)
+	bEvents, cancelEvents := bStore.Subscribe()
+	defer cancelEvents()
+
+	aAddr := netaddr.NewEndpointAddr(a.ID()).WithIP(a.LocalAddr())
+	bLive, err := StartLiveSync(ctx, b, bGossip, namespace.ID(), bStore, LiveSyncOptions{
+		Bootstrap: []netaddr.EndpointAddr{aAddr},
+		Resolver:  iroh.StaticLookupFromAddrs(aAddr),
+		BlobStore: bBlobs,
+	})
+	if err != nil {
+		t.Fatalf("start b live sync: %v", err)
+	}
+	defer bLive.Close()
+
+	for {
+		select {
+		case ev, ok := <-bEvents:
+			if !ok {
+				t.Fatal("b store events closed")
+			}
+			if ev.Kind != StoreEventContentReady || ev.Hash != contentHash {
+				continue
+			}
+			got, err := blobs.ReadBlob(ctx, bBlobs, contentHash)
+			if err != nil {
+				t.Fatalf("downloaded blob missing from b store: %v", err)
+			}
+			if !bytes.Equal(got, content) {
+				t.Fatalf("downloaded blob = %q, want %q", got, content)
+			}
+			return
+		case <-ctx.Done():
+			_, ok := bStore.GetExact(namespace.ID(), author.ID(), []byte("k"), false)
+			t.Fatalf("content never downloaded (entry synced: %v): %v", ok, ctx.Err())
+		}
+	}
+}
+
+func TestLiveSyncStoreEventQueuesDownload(t *testing.T) {
+	namespace := NewNamespaceSecret(repeat32(0xb2))
+	other := NewNamespaceSecret(repeat32(0xb3))
+	author := NewAuthor(repeat32(0xa1))
+	hash := blobs.NewHash([]byte("content"))
+	peer := netaddr.NewEndpointAddr(key.NewSecretKey(repeat32(0x01)).Public().EndpointID())
+	tests := []struct {
+		name   string
+		ns     NamespaceSecret
+		key    string
+		kind   StoreEventKind
+		from   key.EndpointID
+		status ContentStatus
+		want   bool
+	}{
+		{"remote complete", namespace, "k", StoreEventInsertRemote, peer.ID, ContentComplete, true},
+		{"remote missing", namespace, "k", StoreEventInsertRemote, peer.ID, ContentMissing, false},
+		{"remote incomplete", namespace, "k", StoreEventInsertRemote, peer.ID, ContentIncomplete, false},
+		{"no peer", namespace, "k", StoreEventInsertRemote, key.EndpointID{}, ContentComplete, false},
+		{"other namespace", other, "k", StoreEventInsertRemote, peer.ID, ContentComplete, false},
+		{"policy excluded", namespace, "private/k", StoreEventInsertRemote, peer.ID, ContentComplete, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blobStore, err := blobs.NewMemStore()
+			if err != nil {
+				t.Fatalf("NewMemStore: %v", err)
+			}
+			l := LiveSync{downloads: make(chan liveDownload, 1)}
+			opts := liveSyncOptions{LiveSyncOptions: LiveSyncOptions{
+				BlobStore:      blobStore,
+				Resolver:       iroh.StaticLookupFromAddrs(peer),
+				DownloadPolicy: DownloadPolicy{ExcludePrefixes: []string{"private/"}},
+			}}
+			entry := testSignedEntry(tt.ns, author, tt.key, NewRecord(hash, 7, 1))
+			l.handleStoreEvent(context.Background(), namespace.ID(), opts, StoreEvent{
+				Kind:          tt.kind,
+				Entry:         entry,
+				From:          tt.from,
+				ContentStatus: tt.status,
+			})
+			select {
+			case req := <-l.downloads:
+				if !tt.want {
+					t.Fatalf("queued download %+v, want none", req)
+				}
+				if providers := req.pending.snapshot(); len(providers) != 1 || !providers[0].ID.Equal(peer.ID) {
+					t.Fatalf("providers = %v, want [%s]", providers, peer.ID)
+				}
+			default:
+				if tt.want {
+					t.Fatal("download was not queued")
+				}
 			}
 		})
 	}

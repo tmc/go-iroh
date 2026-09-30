@@ -198,7 +198,7 @@ func dialReportSync(ctx context.Context, ep *iroh.Endpoint, addr netaddr.Endpoin
 		return SyncOutcome{}, err
 	}
 	h := Handler{Store: store, Config: DefaultSyncConfig()}
-	return h.run(ctx, s, namespace, Message{}, false)
+	return h.run(ctx, s, conn.RemoteID(), namespace, Message{}, false)
 }
 
 func readRawFrame(r io.Reader) ([]byte, error) {

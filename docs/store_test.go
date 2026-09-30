@@ -244,3 +244,30 @@ func TestMemoryStorePrefixShadowing(t *testing.T) {
 		t.Fatal("insert under a newer ancestor was accepted")
 	}
 }
+
+// TestProcessMessageReportsPeer pins that an entry inserted by reconciliation
+// is reported to subscribers with the peer it came from and the content
+// status that peer sent, which live sync needs to download the content.
+func TestProcessMessageReportsPeer(t *testing.T) {
+	namespace := NewNamespaceSecret(repeat32(0xb2))
+	author := NewAuthor(repeat32(0xa1))
+	entry := testSignedEntry(namespace, author, "k", testRecord("k", 1, 1))
+	from := key.NewSecretKey(repeat32(0x01)).Public().EndpointID()
+	store := NewMemoryStore()
+	events, cancel := store.Subscribe()
+	defer cancel()
+
+	store.processMessage(inNamespace(namespace.ID()), DefaultSyncConfig(), Message{Parts: []MessagePart{{
+		Kind: MessagePartRangeItem,
+		RangeItem: RangeItem{
+			Range:     NewRange(entry.Entry.ID, entry.Entry.ID),
+			Values:    []RangeValue{{Entry: entry, Status: ContentComplete}},
+			HaveLocal: true,
+		},
+	}}}, nil, nil, nil, from)
+
+	ev := readStoreEvent(t, events)
+	if ev.Kind != StoreEventInsertRemote || !ev.From.Equal(from) || ev.ContentStatus != ContentComplete {
+		t.Fatalf("event = kind %d from %s status %d, want remote insert from %s, complete", ev.Kind, ev.From, ev.ContentStatus, from)
+	}
+}

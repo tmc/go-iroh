@@ -100,7 +100,8 @@ type LiveSync struct {
 //
 // Local store inserts are broadcast over gossip. Received inserts are added as
 // remote entries. New neighbors and bootstrap peers are synchronized with the
-// iroh-docs range-reconciliation protocol.
+// iroh-docs range-reconciliation protocol. The content of remote entries,
+// received either way, is downloaded as opts.DownloadPolicy allows.
 func StartLiveSync(ctx context.Context, ep *iroh.Endpoint, g *gossip.Gossip, namespace NamespaceID, store *MemoryStore, opts LiveSyncOptions) (*LiveSync, error) {
 	if ep == nil {
 		return nil, errors.New("docs: nil endpoint")
@@ -194,7 +195,23 @@ func (l *LiveSync) run(ctx context.Context, namespace NamespaceID, store *Memory
 func (l *LiveSync) handleStoreEvent(ctx context.Context, namespace NamespaceID, opts liveSyncOptions, ev StoreEvent) {
 	// A store can hold several namespaces, but this topic carries one: an
 	// entry from another namespace must not reach these neighbors.
-	if ev.Kind != StoreEventInsertLocal || ev.Entry.Entry.Namespace() != namespace {
+	if ev.Entry.Entry.Namespace() != namespace {
+		return
+	}
+	switch ev.Kind {
+	case StoreEventInsertRemote:
+		// An entry synced by range reconciliation carries the sending
+		// peer's content status. Fetch the content from that peer if it
+		// has all of it; otherwise wait for its ContentReady, as iroh-docs
+		// does (engine/live.rs:719-736). A gossip Put queues its own
+		// download in handleReceived and records the local status, which
+		// is complete only when there is nothing to fetch.
+		if ev.ContentStatus == ContentComplete && !ev.From.IsZero() {
+			l.queueDownload(ctx, opts, ev.Entry.Entry.ContentHash(), ev.Entry.Entry.Key(), true, ev.From)
+		}
+		return
+	case StoreEventInsertLocal:
+	default:
 		return
 	}
 	msg, err := postcard.Marshal(liveOp{Kind: liveOpPut, Entry: ev.Entry})

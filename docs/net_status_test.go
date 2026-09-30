@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/blobs"
+	"github.com/tmc/go-iroh/key"
 )
 
 // blockingStore is a blob store whose lookups wait until their context ends.
@@ -37,7 +38,7 @@ func TestSyncContentStatusHonorsContext(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.run(ctx, new(bytes.Buffer), namespace.ID(), initial, true)
+		h.run(ctx, new(bytes.Buffer), key.EndpointID{}, namespace.ID(), initial, true)
 	}()
 	select {
 	case <-done:

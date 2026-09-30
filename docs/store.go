@@ -188,7 +188,7 @@ func (s *MemoryStore) initialMessage(sc namespaceScope) Message {
 //
 // Deprecated: use ProcessMessageInNamespace.
 func (s *MemoryStore) ProcessMessage(config SyncConfig, message Message, validate func(SignedEntry, ContentStatus) bool, onInsert func(SignedEntry, ContentStatus), contentStatus func(SignedEntry) ContentStatus) (Message, bool) {
-	return s.processMessage(allNamespaces, config, message, validate, onInsert, contentStatus)
+	return s.processMessage(allNamespaces, config, message, validate, onInsert, contentStatus, key.EndpointID{})
 }
 
 // ProcessMessageInNamespace processes message for namespace and returns a
@@ -196,10 +196,12 @@ func (s *MemoryStore) ProcessMessage(config SyncConfig, message Message, validat
 // are neither sent nor accepted. The validate callback must verify incoming
 // entries that should be trusted.
 func (s *MemoryStore) ProcessMessageInNamespace(namespace NamespaceID, config SyncConfig, message Message, validate func(SignedEntry, ContentStatus) bool, onInsert func(SignedEntry, ContentStatus), contentStatus func(SignedEntry) ContentStatus) (Message, bool) {
-	return s.processMessage(inNamespace(namespace), config, message, validate, onInsert, contentStatus)
+	return s.processMessage(inNamespace(namespace), config, message, validate, onInsert, contentStatus, key.EndpointID{})
 }
 
-func (s *MemoryStore) processMessage(sc namespaceScope, config SyncConfig, message Message, validate func(SignedEntry, ContentStatus) bool, onInsert func(SignedEntry, ContentStatus), contentStatus func(SignedEntry) ContentStatus) (Message, bool) {
+// processMessage is ProcessMessageInNamespace for scope sc. Entries it
+// inserts are reported to subscribers as coming from peer from.
+func (s *MemoryStore) processMessage(sc namespaceScope, config SyncConfig, message Message, validate func(SignedEntry, ContentStatus) bool, onInsert func(SignedEntry, ContentStatus), contentStatus func(SignedEntry) ContentStatus, from key.EndpointID) (Message, bool) {
 	config = config.withDefaults()
 	if validate == nil {
 		validate = func(SignedEntry, ContentStatus) bool { return true }
@@ -233,7 +235,7 @@ func (s *MemoryStore) processMessage(sc namespaceScope, config SyncConfig, messa
 			if !sc.contains(value.Entry) || !acceptTimestamp(value.Entry.Entry) || !validate(value.Entry, value.Status) {
 				continue
 			}
-			origin := InsertOrigin{Kind: InsertOriginRemote, ContentStatus: value.Status}
+			origin := InsertOrigin{Kind: InsertOriginRemote, From: from, ContentStatus: value.Status}
 			if outcome := s.PutWithOrigin(value.Entry, origin); outcome.Inserted() && onInsert != nil {
 				onInsert(value.Entry, value.Status)
 			}

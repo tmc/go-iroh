@@ -44,7 +44,8 @@ type StoreEvent struct {
 	Removed int
 	// From is the peer an inserted entry came from. It is zero for local inserts.
 	From key.EndpointID
-	// ContentStatus reports whether remote entry content is locally available.
+	// ContentStatus is the content status given with a remote insert. For an
+	// entry synced by range reconciliation, it is the sending peer's status.
 	ContentStatus ContentStatus
 	// Missed is the number of dropped events for StoreEventLagged.
 	Missed uint64
