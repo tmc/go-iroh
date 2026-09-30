@@ -137,3 +137,66 @@ func TestPlumtreeMissingBounded(t *testing.T) {
 		t.Fatalf("missing messages from many peers = %d, want at most %d", n, maxMissing)
 	}
 }
+
+// TestHyparviewPendingBounded pins that peers joining and being evicted do
+// not leave Neighbor replies pending.
+func TestHyparviewPendingBounded(t *testing.T) {
+	config := DefaultHyparviewConfig()
+	state := NewHyparviewStateWithRand(PeerID(seq32(1)), nil, config, testRand(t))
+	for i := range 1000 {
+		var from PeerID
+		binary.BigEndian.PutUint32(from[:], uint32(i+100))
+		state.Handle(HyparviewInEvent{
+			Kind:    HyparviewRecvMessage,
+			From:    from,
+			Message: HyparviewMessage{Kind: HyparviewJoin, Join: &PeerData{1}},
+		})
+	}
+	if n := len(state.pendingNeighbor); n > config.ActiveViewCapacity {
+		t.Fatalf("pending Neighbor replies = %d, want at most %d", n, config.ActiveViewCapacity)
+	}
+}
+
+// TestPlumtreeTargetsBounded pins that many peers announcing the same
+// messages, or announcing and leaving, cannot grow the targets or the graft
+// timers past maxMissing.
+func TestPlumtreeTargetsBounded(t *testing.T) {
+	now := time.Unix(1, 0)
+	state := NewPlumtreeState(PeerID(seq32(1)), DefaultPlumtreeConfig())
+	peer := func(i int) PeerID {
+		var id PeerID
+		binary.BigEndian.PutUint32(id[:], uint32(i+100))
+		return id
+	}
+	id := func(i int) MessageID {
+		var b [8]byte
+		binary.BigEndian.PutUint64(b[:], uint64(i))
+		return MessageIDFromContent(b[:])
+	}
+	ihave := func(from PeerID, ihaves []IHave) {
+		state.Handle(PlumtreeInEvent{
+			Kind:    PlumtreeRecvMessage,
+			From:    from,
+			Now:     now,
+			Message: PlumtreeMessage{Kind: PlumtreeIHave, IHave: ihaves},
+		})
+	}
+
+	for p := range 2 * maxMissing {
+		ihave(peer(p), []IHave{{ID: id(0)}})
+	}
+	if n := len(state.missing[id(0)]); n > maxMissing {
+		t.Fatalf("targets for one message = %d, want at most %d", n, maxMissing)
+	}
+
+	for p := range 4 * maxMissing / maxMissingPerPeer {
+		from := peer(p)
+		for i := range maxMissingPerPeer {
+			ihave(from, []IHave{{ID: id(p*maxMissingPerPeer + i + 1)}})
+		}
+		state.Handle(PlumtreeInEvent{Kind: PlumtreeNeighborDown, Neighbor: from, Now: now})
+	}
+	if n := len(state.graftTimerScheduled); n > maxMissing {
+		t.Fatalf("graft timers = %d, want at most %d", n, maxMissing)
+	}
+}

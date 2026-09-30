@@ -150,6 +150,7 @@ type PlumtreeState struct {
 	lazyQueue map[PeerID][]IHave
 	missing   map[MessageID][]graftTarget
 	nmissing  map[PeerID]int // targets per peer in missing
+	ntargets  int            // targets in missing
 	received  map[MessageID]time.Time
 	cache     map[MessageID]cachedGossip
 
@@ -166,8 +167,8 @@ type PlumtreeState struct {
 // them; its IHaves are the backup path, and eager pushes still arrive.
 const maxMissingPerPeer = 1024
 
-// maxMissing bounds the messages announced by IHave and not yet delivered,
-// across all peers.
+// maxMissing bounds the targets of messages announced by IHave and not yet
+// delivered, and the graft timers for them, across all peers.
 const maxMissing = 16 * maxMissingPerPeer
 
 type graftTarget struct {
@@ -356,12 +357,13 @@ func (s *PlumtreeState) onIHave(sender PeerID, ihaves []IHave, out *[]PlumtreeOu
 		if _, ok := s.received[ihave.ID]; ok {
 			continue
 		}
-		targets, ok := s.missing[ihave.ID]
-		if s.nmissing[sender] >= maxMissingPerPeer || !ok && len(s.missing) >= maxMissing || hasGraftTarget(targets, sender) {
+		if s.nmissing[sender] >= maxMissingPerPeer || s.ntargets >= maxMissing ||
+			len(s.graftTimerScheduled) >= maxMissing || hasGraftTarget(s.missing[ihave.ID], sender) {
 			continue
 		}
 		s.missing[ihave.ID] = append(s.missing[ihave.ID], graftTarget{peer: sender, round: ihave.Round})
 		s.nmissing[sender]++
+		s.ntargets++
 		if _, ok := s.graftTimerScheduled[ihave.ID]; !ok {
 			s.graftTimerScheduled[ihave.ID] = struct{}{}
 			*out = append(*out, PlumtreeOutEvent{
@@ -449,6 +451,7 @@ func (s *PlumtreeState) onNeighborDown(peer PeerID) {
 			s.missing[id] = targets
 		}
 	}
+	s.ntargets -= s.nmissing[peer]
 	delete(s.nmissing, peer)
 	delete(s.eager, peer)
 	delete(s.lazy, peer)
@@ -456,6 +459,7 @@ func (s *PlumtreeState) onNeighborDown(peer PeerID) {
 
 // forgetMissing records that one of peer's targets left missing.
 func (s *PlumtreeState) forgetMissing(peer PeerID) {
+	s.ntargets--
 	if s.nmissing[peer] <= 1 {
 		delete(s.nmissing, peer)
 	} else {

@@ -478,6 +478,8 @@ func (s *HyparviewState) removeActive(peer PeerID, reason removalReason, alive b
 	if !s.active.remove(peer) {
 		return
 	}
+	// A Neighbor reply from a peer that has left the view means nothing.
+	delete(s.pendingNeighbor, peer)
 	*out = append(*out, HyparviewOutEvent{
 		Kind:  HyparviewEmitEvent,
 		Event: HyparviewEvent{Kind: HyparviewNeighborDown, Peer: peer},
