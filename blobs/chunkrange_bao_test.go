@@ -68,6 +68,45 @@ func TestRangeChunksManyNormalizesRanges(t *testing.T) {
 	}
 }
 
+func TestChunkSelectionNarrowsFragmentedRanges(t *testing.T) {
+	const intervals = 100_000
+	sel := make(chunkSelection, intervals)
+	for i := range sel {
+		start := uint64(i * 2)
+		sel[i] = [2]uint64{start, start + 1}
+	}
+	got := sel.intersecting(100_000, 100_010)
+	if len(got) != 5 {
+		t.Fatalf("intersecting intervals = %d, want 5", len(got))
+	}
+	if n := got.count(100_000, 100_010); n != 5 {
+		t.Fatalf("selected chunks = %d, want 5", n)
+	}
+}
+
+func TestBlobChunkRangesTransferFragmentedSelection(t *testing.T) {
+	data := vectorData(256 * ChunkSize)
+	hash := NewHash(data)
+	var ranges []ChunkRange
+	for i := uint64(0); i < 256; i += 2 {
+		ranges = append(ranges, ChunkRange{Start: i, End: i + 1})
+	}
+	selection := RangeChunksMany(ranges...)
+	outboard, _ := bao.EncodeBuf(data, 4, true)
+	var encoded bytes.Buffer
+	if err := EncodeBlobChunks(&encoded, hash, uint64(len(data)), bytes.NewReader(data), bytes.NewReader(outboard), selection); err != nil {
+		t.Fatalf("EncodeBlobChunks: %v", err)
+	}
+	got, size, err := DecodeBlobChunks(hash, encoded.Bytes(), selection)
+	if err != nil {
+		t.Fatalf("DecodeBlobChunks: %v", err)
+	}
+	want := selectedBytes(data, selection)
+	if size != uint64(len(data)) || !bytes.Equal(got, want) {
+		t.Fatalf("decoded fragmented selection mismatch: size=%d bytes=%d, want size=%d bytes=%d", size, len(got), len(data), len(want))
+	}
+}
+
 func TestEncodeBlobChunksVerifiesOutboardAndDecode(t *testing.T) {
 	data := vectorData(100_000)
 	hash := NewHash(data)
@@ -161,6 +200,15 @@ func TestBlobChunkRangeWritersRejectShortWrites(t *testing.T) {
 	}
 	if _, err := DecodeBlobChunksToWriter(hash, bytes.NewReader(encoded.Bytes()), RangeAll(), shortChunkWriter{}); !errors.Is(err, io.ErrShortWrite) {
 		t.Fatalf("DecodeBlobChunksToWriter short write error = %v, want %v", err, io.ErrShortWrite)
+	}
+}
+
+func TestEncodePartialBlockRejectsShortWriteForPair(t *testing.T) {
+	data := vectorData(4 * ChunkSize)
+	sel := selectChunks(RangeChunksMany(ChunkRange{Start: 0, End: 1}, ChunkRange{Start: 2, End: 3}), 4)
+	_, err := encodePartialBlock(shortChunkWriter{}, sel, 0, 4, data, false)
+	if !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("encodePartialBlock error = %v, want %v", err, io.ErrShortWrite)
 	}
 }
 

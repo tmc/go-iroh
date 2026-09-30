@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"math/bits"
+	"sort"
 
 	"lukechampine.com/blake3/guts"
 )
@@ -51,12 +52,23 @@ func selectChunks(ranges ChunkRanges, chunks uint64) chunkSelection {
 
 func (s chunkSelection) count(lo, hi uint64) uint64 {
 	var n uint64
-	for _, r := range s {
+	for _, r := range s.intersecting(lo, hi) {
 		if a, b := max(r[0], lo), min(r[1], hi); a < b {
 			n += b - a
 		}
 	}
 	return n
+}
+
+// intersecting returns the contiguous part of s that can overlap [lo, hi).
+// Selections are normalized and sorted, so the bounds can be found by search.
+func (s chunkSelection) intersecting(lo, hi uint64) chunkSelection {
+	if lo >= hi || len(s) == 0 {
+		return nil
+	}
+	first := sort.Search(len(s), func(i int) bool { return s[i][1] > lo })
+	last := first + sort.Search(len(s)-first, func(i int) bool { return s[first+i][0] >= hi })
+	return s[first:last]
 }
 
 func leftChunks(n uint64) uint64 {
@@ -135,8 +147,8 @@ type chunkRangeEncoder struct {
 	sel      chunkSelection
 }
 
-func (e *chunkRangeEncoder) subtree(start, n uint64, root bool, off int64, want [8]uint32) error {
-	selected := e.sel.count(start, start+n)
+func (e *chunkRangeEncoder) subtree(sel chunkSelection, start, n uint64, root bool, off int64, want [8]uint32) error {
+	selected := sel.count(start, start+n)
 	if selected == 0 {
 		return nil
 	}
@@ -154,7 +166,7 @@ func (e *chunkRangeEncoder) subtree(start, n uint64, root bool, off int64, want 
 			return writeChunkBytes(e.w, buf)
 		}
 		var proof bytes.Buffer
-		got, err := encodePartialBlock(&proof, e.sel, start, n, buf, root)
+		got, err := encodePartialBlock(&proof, sel, start, n, buf, root)
 		if err != nil {
 			return err
 		}
@@ -177,10 +189,10 @@ func (e *chunkRangeEncoder) subtree(start, n uint64, root bool, off int64, want 
 	}
 	left := leftChunks(n)
 	leftParents := int64((left+blockChunks-1)/blockChunks - 1)
-	if err := e.subtree(start, left, false, off+64, leftCV); err != nil {
+	if err := e.subtree(sel.intersecting(start, start+left), start, left, false, off+64, leftCV); err != nil {
 		return err
 	}
-	return e.subtree(start+left, n-left, false, off+64+64*leftParents, rightCV)
+	return e.subtree(sel.intersecting(start+left, start+n), start+left, n-left, false, off+64+64*leftParents, rightCV)
 }
 
 func encodePartialBlock(w io.Writer, sel chunkSelection, start, n uint64, data []byte, root bool) ([8]uint32, error) {
@@ -207,17 +219,17 @@ func encodePartialBlock(w io.Writer, sel chunkSelection, start, n uint64, data [
 	if _, err := pair.Write(make([]byte, 64)); err != nil {
 		return [8]uint32{}, err
 	}
-	leftCV, err := encodePartialBlock(&pair, sel, start, left, data[:leftLen], false)
+	leftCV, err := encodePartialBlock(&pair, sel.intersecting(start, start+left), start, left, data[:leftLen], false)
 	if err != nil {
 		return [8]uint32{}, err
 	}
-	rightCV, err := encodePartialBlock(&pair, sel, start+left, n-left, data[leftLen:], false)
+	rightCV, err := encodePartialBlock(&pair, sel.intersecting(start+left, start+n), start+left, n-left, data[leftLen:], false)
 	if err != nil {
 		return [8]uint32{}, err
 	}
 	copy(pair.Bytes()[:32], cvBytes(leftCV))
 	copy(pair.Bytes()[32:64], cvBytes(rightCV))
-	if _, err := w.Write(pair.Bytes()); err != nil {
+	if err := writeChunkBytes(w, pair.Bytes()); err != nil {
 		return [8]uint32{}, err
 	}
 	return parentCV(leftCV, rightCV, root), nil
@@ -258,7 +270,7 @@ func EncodeBlobChunks(w io.Writer, hash Hash, size uint64, data, outboard io.Rea
 		return ErrUnsupportedRequest
 	}
 	e := chunkRangeEncoder{w: w, data: data, outboard: outboard, size: size, sel: sel}
-	return e.subtree(0, chunks, true, 8, hashToCV(hash))
+	return e.subtree(sel, 0, chunks, true, 8, hashToCV(hash))
 }
 
 func hashToCV(h Hash) [8]uint32 { return bytesToCV(h[:]) }
@@ -277,13 +289,13 @@ type chunkRangeDecoder struct {
 	size uint64
 }
 
-func (d *chunkRangeDecoder) subtree(start, n uint64, root bool, want [8]uint32) (bool, error) {
-	selected := d.sel.count(start, start+n)
+func (d *chunkRangeDecoder) subtree(sel chunkSelection, start, n uint64, root bool, want [8]uint32) (bool, error) {
+	selected := sel.count(start, start+n)
 	if selected == 0 {
 		return true, nil
 	}
 	if n <= blockChunks {
-		return d.block(start, n, root, want)
+		return d.block(sel, start, n, root, want)
 	}
 	leftCV, err := readChunkCV(d.r)
 	if err != nil {
@@ -297,15 +309,15 @@ func (d *chunkRangeDecoder) subtree(start, n uint64, root bool, want [8]uint32) 
 		return false, fmt.Errorf("hash mismatch at chunk subtree [%d,%d)", start, start+n)
 	}
 	left := leftChunks(n)
-	ok, err := d.subtree(start, left, false, leftCV)
+	ok, err := d.subtree(sel.intersecting(start, start+left), start, left, false, leftCV)
 	if err != nil || !ok {
 		return ok, err
 	}
-	return d.subtree(start+left, n-left, false, rightCV)
+	return d.subtree(sel.intersecting(start+left, start+n), start+left, n-left, false, rightCV)
 }
 
-func (d *chunkRangeDecoder) block(start, n uint64, root bool, want [8]uint32) (bool, error) {
-	selected := d.sel.count(start, start+n)
+func (d *chunkRangeDecoder) block(sel chunkSelection, start, n uint64, root bool, want [8]uint32) (bool, error) {
+	selected := sel.count(start, start+n)
 	if selected == 0 {
 		return true, nil
 	}
@@ -352,11 +364,11 @@ func (d *chunkRangeDecoder) block(start, n uint64, root bool, want [8]uint32) (b
 		return false, fmt.Errorf("hash mismatch in block subtree [%d,%d)", start, start+n)
 	}
 	left := leftChunks(n)
-	ok, err := d.block(start, left, false, leftCV)
+	ok, err := d.block(sel.intersecting(start, start+left), start, left, false, leftCV)
 	if err != nil || !ok {
 		return ok, err
 	}
-	return d.block(start+left, n-left, false, rightCV)
+	return d.block(sel.intersecting(start+left, start+n), start+left, n-left, false, rightCV)
 }
 
 func (d *chunkRangeDecoder) sizeForChunk(chunk uint64) uint64 {
@@ -402,7 +414,7 @@ func decodeBlobChunksToWriter(expected Hash, r io.Reader, ranges ChunkRanges, w 
 		return 0, fmt.Errorf("%w: empty selection does not prove blob size", ErrInvalidBlob)
 	}
 	d := chunkRangeDecoder{r: r, w: w, sel: sel, size: size}
-	ok, err := d.subtree(0, chunks, true, hashToCV(expected))
+	ok, err := d.subtree(sel, 0, chunks, true, hashToCV(expected))
 	if err != nil {
 		return 0, fmt.Errorf("%w: %w", ErrInvalidBlob, err)
 	}

@@ -50,6 +50,8 @@ func RangeChunksMany(ranges ...ChunkRange) ChunkRanges {
 }
 
 // RangeChunksFrom returns the open-ended chunk range [start, infinity).
+// When start is math.MaxUint64, it selects the verified-size proof, matching
+// RangeLastChunk.
 func RangeChunksFrom(start uint64) ChunkRanges {
 	return ChunkRanges{open: &start}
 }

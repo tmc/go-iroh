@@ -220,8 +220,16 @@ func writeGet(ctx context.Context, s io.Writer, store Store, req GetRequest, sin
 			return err
 		}
 	}
+	entries := req.Ranges.entries
+	entryIndex := 0
+	childRanges := RangeEmpty()
 	for i, hash := range seq.hashes {
-		ranges := req.Ranges.At(uint64(i) + 1)
+		childOffset := uint64(i) + 1
+		for entryIndex < len(entries) && entries[entryIndex].offset <= childOffset {
+			childRanges = entries[entryIndex].ranges
+			entryIndex++
+		}
+		ranges := childRanges
 		if ranges.IsEmpty() {
 			continue
 		}
