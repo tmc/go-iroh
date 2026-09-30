@@ -43,6 +43,19 @@ func RangeChunks(start, end uint64) ChunkRanges {
 	return ChunkRanges{ranges: []ChunkRange{{Start: start, End: end}}}
 }
 
+// RangeChunksMany returns a chunk range set containing ranges. Overlapping or
+// adjacent ranges are merged, and empty ranges are discarded.
+func RangeChunksMany(ranges ...ChunkRange) ChunkRanges {
+	return ChunkRanges{ranges: slices.Clone(ranges)}.normalize()
+}
+
+// RangeChunksFrom returns the open-ended chunk range [start, infinity).
+// When start is math.MaxUint64, it selects the verified-size proof, matching
+// RangeLastChunk.
+func RangeChunksFrom(start uint64) ChunkRanges {
+	return ChunkRanges{open: &start}
+}
+
 // IsEmpty reports whether r selects no chunks.
 func (r ChunkRanges) IsEmpty() bool {
 	return len(r.ranges) == 0 && r.open == nil
