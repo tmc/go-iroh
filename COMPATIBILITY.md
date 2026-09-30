@@ -132,6 +132,33 @@ wire changes whose evidence is a single matrix row rather than the whole table.
 Regenerating the report preserves everything from this heading to the end of the
 file.
 
+### v0.2.3
+
+No removals or signature changes.
+
+- Wire: `endpointticket` writes an IPv6 address as IP and port, as Rust
+  does, and no longer adds flowinfo and a scope ID. Tickets carrying IPv6
+  addresses are not readable across v0.2.2 and v0.2.3; IPv4-only tickets are
+  unaffected ([#28](https://github.com/tmc/go-iroh/issues/28)).
+- `iroh`: added `WithProxy`, `ProxyURL` and `ProxyFromEnvironment`.
+  Relay dials and netreport probes can go through an HTTP CONNECT proxy
+  ([#27](https://github.com/tmc/go-iroh/issues/27)).
+- blobs: added `DownloaderOptions.StallTimeout`, `DefaultStallTimeout` and
+  `ErrProviderStalled`; a download abandons a provider that stalls. Added
+  `MaxRequestSize` and `ErrRequestTooLarge`; servers read at most 1 MiB of
+  request.
+- `Endpoint.Accept` finishes handshakes concurrently, so a slow or silent
+  peer no longer holds up others.
+- gossip queues sends per peer and drops a peer that stops reading. A
+  subscriber re-sends its Join until it has a neighbor
+  ([#35](https://github.com/tmc/go-iroh/issues/35)).
+- gossip peer data, missing-message tracking, and the TLS session cache are
+  bounded ([#29](https://github.com/tmc/go-iroh/issues/29)).
+- docs content status checks use the sync's context
+  ([#31](https://github.com/tmc/go-iroh/issues/31)).
+- mdns, dnsserver, gossip discovery and the relay mapped-address table have
+  bounded caches. irpc recovers handler panics per request.
+
 ### v0.2.2
 
 No removals or signature changes.
