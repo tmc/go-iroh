@@ -149,6 +149,7 @@ type PlumtreeState struct {
 
 	lazyQueue map[PeerID][]IHave
 	missing   map[MessageID][]graftTarget
+	nmissing  map[PeerID]int // targets per peer in missing
 	received  map[MessageID]time.Time
 	cache     map[MessageID]cachedGossip
 
@@ -159,6 +160,11 @@ type PlumtreeState struct {
 	stats          PlumtreeStats
 	maxPayloadSize int
 }
+
+// maxMissingPerPeer bounds how many messages one peer may have announced
+// by IHave and not yet delivered. A peer that announces more is not asked for
+// them; its IHaves are the backup path, and eager pushes still arrive.
+const maxMissingPerPeer = 1024
 
 type graftTarget struct {
 	peer  PeerID
@@ -185,6 +191,7 @@ func NewPlumtreeState(me PeerID, config PlumtreeConfig) *PlumtreeState {
 		lazy:                   map[PeerID]struct{}{},
 		lazyQueue:              map[PeerID][]IHave{},
 		missing:                map[MessageID][]graftTarget{},
+		nmissing:               map[PeerID]int{},
 		received:               map[MessageID]time.Time{},
 		cache:                  map[MessageID]cachedGossip{},
 		graftTimerScheduled:    map[MessageID]struct{}{},
@@ -288,6 +295,9 @@ func (s *PlumtreeState) onGossip(sender PeerID, message Gossip, now time.Time, o
 		delete(s.graftTimerScheduled, message.ID)
 		previous := s.missing[message.ID]
 		delete(s.missing, message.ID)
+		for _, target := range previous {
+			s.forgetMissing(target.peer)
+		}
 		s.optimizeTree(sender, forward, previous, out)
 		if message.Scope.Round > Round(s.stats.MaxLastDeliveryHop) {
 			s.stats.MaxLastDeliveryHop = uint16(message.Scope.Round)
@@ -342,7 +352,11 @@ func (s *PlumtreeState) onIHave(sender PeerID, ihaves []IHave, out *[]PlumtreeOu
 		if _, ok := s.received[ihave.ID]; ok {
 			continue
 		}
+		if s.nmissing[sender] >= maxMissingPerPeer || hasGraftTarget(s.missing[ihave.ID], sender) {
+			continue
+		}
 		s.missing[ihave.ID] = append(s.missing[ihave.ID], graftTarget{peer: sender, round: ihave.Round})
+		s.nmissing[sender]++
 		if _, ok := s.graftTimerScheduled[ihave.ID]; !ok {
 			s.graftTimerScheduled[ihave.ID] = struct{}{}
 			*out = append(*out, PlumtreeOutEvent{
@@ -368,6 +382,7 @@ func (s *PlumtreeState) onSendGraftTimer(id MessageID, out *[]PlumtreeOutEvent) 
 	if len(s.missing[id]) == 0 {
 		delete(s.missing, id)
 	}
+	s.forgetMissing(target.peer)
 	s.addEager(target.peer)
 	*out = append(*out,
 		PlumtreeOutEvent{
@@ -429,8 +444,27 @@ func (s *PlumtreeState) onNeighborDown(peer PeerID) {
 			s.missing[id] = targets
 		}
 	}
+	delete(s.nmissing, peer)
 	delete(s.eager, peer)
 	delete(s.lazy, peer)
+}
+
+// forgetMissing records that one of peer's targets left missing.
+func (s *PlumtreeState) forgetMissing(peer PeerID) {
+	if s.nmissing[peer] <= 1 {
+		delete(s.nmissing, peer)
+	} else {
+		s.nmissing[peer]--
+	}
+}
+
+func hasGraftTarget(targets []graftTarget, peer PeerID) bool {
+	for _, target := range targets {
+		if target.peer == peer {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *PlumtreeState) onEvictCacheTimer(now time.Time, out *[]PlumtreeOutEvent) {

@@ -449,6 +449,7 @@ func (s *HyparviewState) addPassive(peer PeerID, data *PeerData, out *[]Hyparvie
 	if s.passive.len() >= s.config.PassiveViewCapacity {
 		if old, ok := s.passive.random(s.rand); ok {
 			s.passive.remove(old)
+			delete(s.peerData, old)
 		}
 	}
 	s.passive.insert(peer)
