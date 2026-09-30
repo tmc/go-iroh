@@ -47,7 +47,9 @@ type Handler struct {
 	Config    SyncConfig
 	// Allow reports whether peer may sync namespace. A nil Allow rejects
 	// every incoming sync request. Set Allow explicitly to authorize peers.
-	Allow         func(NamespaceID, key.EndpointID) bool
+	Allow func(NamespaceID, key.EndpointID) bool
+	// Validate optionally applies application policy after incoming entry
+	// signatures and the empty-record invariant have been verified.
 	Validate      func(SignedEntry, ContentStatus) bool
 	OnInsert      func(SignedEntry, ContentStatus)
 	ContentStatus func(SignedEntry) ContentStatus
@@ -158,9 +160,11 @@ func (h *Handler) run(ctx context.Context, rw io.ReadWriter, peer key.EndpointID
 		return SyncOutcome{}, fmt.Errorf("docs: nil store")
 	}
 	contentStatus := h.contentStatus(ctx)
-	validate := h.Validate
-	if validate == nil {
-		validate = func(entry SignedEntry, _ ContentStatus) bool { return entry.Verify() == nil }
+	validate := func(entry SignedEntry, status ContentStatus) bool {
+		if entry.Verify() != nil || entry.Entry.ValidateEmpty() != nil {
+			return false
+		}
+		return h.Validate == nil || h.Validate(entry, status)
 	}
 	var out SyncOutcome
 	next := initial

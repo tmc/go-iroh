@@ -20,8 +20,9 @@ func TestHandlerAuthorization(t *testing.T) {
 				namespace := secret.ID()
 				store := NewMemoryStore()
 				store.Put(testSignedEntry(secret, NewAuthor(repeat32(0xa1)), "k", testRecord("data", 4, 1)))
+				client := newSyncClient(t, ctx)
+				clientID := client.ID()
 				handler := &Handler{Store: store}
-				var clientID key.EndpointID
 				if policy != "nil" {
 					handler.Allow = func(ns NamespaceID, peer key.EndpointID) bool {
 						if ns != namespace || peer != clientID {
@@ -31,8 +32,6 @@ func TestHandlerAuthorization(t *testing.T) {
 					}
 				}
 				server := newSyncNode(t, ctx, handler)
-				client := newSyncClient(t, ctx)
-				clientID = client.ID()
 				conn, err := client.Connect(ctx, syncAddr(server), ALPN)
 				if err != nil {
 					t.Fatal(err)
