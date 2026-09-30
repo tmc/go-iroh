@@ -152,6 +152,29 @@ show. Report generation preserves it.
 
 ### v0.3.0 (unreleased)
 
+- Added arbitrary blob chunk-range encoding, decoding, and downloads through
+  `EncodeBlobChunks`, `DecodeBlobChunks`, `DecodeBlobChunksToWriter`,
+  `DownloadBlobChunks`, `GetBlobChunksBytes`, `RangeChunksFrom`, and
+  `RangeChunksMany`. `ServeBlob` answers selected hash-sequence children and
+  emits proofs within 16 KiB verification blocks, matching bao-tree.
+- Docs sync opens with Init, matching iroh-docs. Acceptors still handle the
+  report-first handshake used by go-iroh v0.2.3 and earlier.
+- mDNS announcements put addresses in the additional section and omit empty
+  TXT records. Discovery resolves every SRV record for an instance.
+- NAT traversal rounds start only on client connections, matching upstream.
+- Live docs sync downloads reconciled content when the sending peer reports
+  it complete, subject to the configured download policy.
+- Remote sync and gossip entries always undergo signature and empty-record
+  validation. `Handler.Validate` now adds application policy to those checks.
+- Sync context cancellation interrupts stream reads and writes. `LiveSync.Close`
+  waits for background work, including `OnSync`; that callback must not call
+  `Close` synchronously.
+- Added `InsertOutcome.Err` for automatic save failures. Failed saves leave
+  entries in memory, but sync fails until persistence succeeds. File saves are
+  serialized, and a successful repair signals subscriber recovery.
+- Live sync retains download work across bursts, recovers lost store events,
+  and coalesces outgoing sync per peer. Provider attribution follows direct
+  gossip delivery; content-ready announcements go to neighbors.
 - A nil `docs.Handler.Allow` now rejects incoming sync with `AbortNotFound`,
   for both Init and legacy report handshakes. Applications must supply an
   authorization callback before accepting sync.
