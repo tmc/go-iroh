@@ -56,7 +56,12 @@ type Handler struct {
 }
 
 // Accept handles one incoming iroh-docs connection.
-func (h *Handler) Accept(ctx context.Context, conn *iroh.Conn) error {
+func (h *Handler) Accept(ctx context.Context, conn *iroh.Conn) (err error) {
+	defer func() {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+	}()
 	if h.Store == nil {
 		return fmt.Errorf("docs: nil store")
 	}
@@ -65,6 +70,11 @@ func (h *Handler) Accept(ctx context.Context, conn *iroh.Conn) error {
 		return fmt.Errorf("docs: accept stream: %w", err)
 	}
 	defer s.Close()
+	stop := context.AfterFunc(ctx, func() {
+		s.CancelRead(0)
+		s.CancelWrite(0)
+	})
+	defer stop()
 	ok := false
 	defer func() {
 		if !ok {
@@ -120,7 +130,12 @@ func (h *Handler) Accept(ctx context.Context, conn *iroh.Conn) error {
 }
 
 // Sync connects to addr and syncs store with the remote peer.
-func Sync(ctx context.Context, ep *iroh.Endpoint, addr netaddr.EndpointAddr, namespace NamespaceID, store *MemoryStore, blobStore blobs.Store, config SyncConfig) (SyncOutcome, error) {
+func Sync(ctx context.Context, ep *iroh.Endpoint, addr netaddr.EndpointAddr, namespace NamespaceID, store *MemoryStore, blobStore blobs.Store, config SyncConfig) (out SyncOutcome, err error) {
+	defer func() {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+	}()
 	if store == nil {
 		return SyncOutcome{}, fmt.Errorf("docs: nil store")
 	}
@@ -133,6 +148,11 @@ func Sync(ctx context.Context, ep *iroh.Endpoint, addr netaddr.EndpointAddr, nam
 		return SyncOutcome{}, fmt.Errorf("docs: open stream: %w", err)
 	}
 	defer s.Close()
+	stop := context.AfterFunc(ctx, func() {
+		s.CancelRead(0)
+		s.CancelWrite(0)
+	})
+	defer stop()
 	ok := false
 	defer func() {
 		if !ok {
@@ -147,7 +167,7 @@ func Sync(ctx context.Context, ep *iroh.Endpoint, addr netaddr.EndpointAddr, nam
 	if err := writeSyncFrame(s, syncWireMessage{Kind: syncMessageInit, Namespace: namespace, Message: init}); err != nil {
 		return SyncOutcome{}, fmt.Errorf("docs: write init: %w", err)
 	}
-	out, err := h.run(ctx, s, conn.RemoteID(), namespace, Message{}, false)
+	out, err = h.run(ctx, s, conn.RemoteID(), namespace, Message{}, false)
 	if err == nil {
 		ok = true
 	}
