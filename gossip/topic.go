@@ -331,7 +331,25 @@ func (g *Gossip) SubscribeWithOpts(ctx context.Context, topic TopicID, opts Join
 		g.generations[topic] = g.nextGeneration
 	}
 	g.topics[topic][t] = struct{}{}
-	out := g.handleLocked(gossipproto.InEvent{
+	generation := g.generations[topic]
+	out := g.joinLocked(topic, peers)
+	g.mu.Unlock()
+	_ = g.dispatch(ctx, out)
+	if len(peers) > 0 {
+		g.scheduleRejoin(topic, generation, peers, rejoinDelay)
+	}
+	return t, nil
+}
+
+// Bounds on how often a topic without neighbors re-sends its Join.
+const (
+	rejoinDelay    = time.Second
+	rejoinMaxDelay = 30 * time.Second
+)
+
+// joinLocked sends a Join for topic to peers. g.mu must be held.
+func (g *Gossip) joinLocked(topic TopicID, peers []PeerID) []gossipproto.OutEvent {
+	return g.handleLocked(gossipproto.InEvent{
 		Kind:  gossipproto.CommandEvent,
 		Topic: topic,
 		Command: gossipproto.TopicCommand{
@@ -340,9 +358,25 @@ func (g *Gossip) SubscribeWithOpts(ctx context.Context, topic TopicID, opts Join
 		},
 		Now: time.Now(),
 	})
-	g.mu.Unlock()
-	_ = g.dispatch(ctx, out)
-	return t, nil
+}
+
+// scheduleRejoin re-sends the Join for topic to peers after delay, and again
+// with the delay doubled up to rejoinMaxDelay, until the topic has a neighbor
+// or generation ends. A peer drops a Join for a topic it has not subscribed
+// to yet, and nothing else sends it again. Upstream iroh-gossip 0.101.0 does
+// not retry (src/proto/state.rs:247-275).
+func (g *Gossip) scheduleRejoin(topic TopicID, generation uint64, peers []PeerID, delay time.Duration) {
+	time.AfterFunc(delay, func() {
+		g.mu.Lock()
+		if g.closed || g.generations[topic] != generation || len(g.neighbors[topic]) > 0 {
+			g.mu.Unlock()
+			return
+		}
+		out := g.joinLocked(topic, peers)
+		g.mu.Unlock()
+		_ = g.dispatch(context.Background(), out)
+		g.scheduleRejoin(topic, generation, peers, min(2*delay, rejoinMaxDelay))
+	})
 }
 
 // SubscribeAndJoin subscribes to topic and waits until it has a direct neighbor.
