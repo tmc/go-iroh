@@ -35,6 +35,51 @@ func TestHyparviewPeerDataBounded(t *testing.T) {
 	}
 }
 
+// TestHyparviewPeerDataOnlyForKnownPeers pins that, under any churn, peer
+// data is kept only for peers in a view or awaiting a Neighbor reply.
+func TestHyparviewPeerDataOnlyForKnownPeers(t *testing.T) {
+	r := testRand(t)
+	me := PeerID(seq32(1))
+	state := NewHyparviewStateWithRand(me, nil, DefaultHyparviewConfig(), r)
+	peer := func() PeerID {
+		var id PeerID
+		binary.BigEndian.PutUint32(id[:], uint32(r.Intn(200)+100))
+		return id
+	}
+	info := func() PeerInfo { return PeerInfo{ID: peer(), Data: &PeerData{1}} }
+	recv := func(m HyparviewMessage) HyparviewInEvent {
+		return HyparviewInEvent{Kind: HyparviewRecvMessage, From: peer(), Message: m}
+	}
+	for i := range 20000 {
+		var ev HyparviewInEvent
+		switch r.Intn(8) {
+		case 0:
+			ev = recv(HyparviewMessage{Kind: HyparviewJoin, Join: &PeerData{1}})
+		case 1:
+			ev = recv(HyparviewMessage{Kind: HyparviewForwardJoin, ForwardJoin: ForwardJoin{Peer: info(), Ttl: Ttl(r.Intn(7))}})
+		case 2:
+			ev = recv(HyparviewMessage{Kind: HyparviewShuffle, Shuffle: Shuffle{Origin: peer(), Nodes: []PeerInfo{info(), info()}}})
+		case 3:
+			ev = recv(HyparviewMessage{Kind: HyparviewNeighbor, Neighbor: Neighbor{Priority: Priority(r.Intn(2)), Data: &PeerData{1}}})
+		case 4:
+			ev = recv(HyparviewMessage{Kind: HyparviewDisconnect, Disconnect: Disconnect{Alive: r.Intn(2) == 0}})
+		case 5:
+			ev = HyparviewInEvent{Kind: HyparviewPeerDisconnected, Peer: peer()}
+		case 6:
+			ev = HyparviewInEvent{Kind: HyparviewTimerExpired, Timer: HyparviewTimer{Kind: HyparviewTimerPendingNeighborRequest, Peer: peer()}}
+		case 7:
+			ev = HyparviewInEvent{Kind: HyparviewTimerExpired, Timer: HyparviewTimer{Kind: HyparviewTimerDoShuffle}}
+		}
+		state.Handle(ev)
+		for id := range state.peerData {
+			_, pending := state.pendingNeighbor[id]
+			if !state.active.contains(id) && !state.passive.contains(id) && !pending {
+				t.Fatalf("event %d (%+v): peer data kept for %x, which is in no view", i, ev, id[:4])
+			}
+		}
+	}
+}
+
 // TestPlumtreeMissingBounded pins that one peer's IHaves, repeated or for
 // made-up messages, cannot grow the missing set without limit or crowd out
 // another peer's.
@@ -77,5 +122,18 @@ func TestPlumtreeMissingBounded(t *testing.T) {
 	ihave(good, []IHave{{ID: id}})
 	if n := len(state.missing[id]); n != 1 {
 		t.Fatalf("targets for another peer's IHave = %d, want 1", n)
+	}
+
+	for p := range 2 * maxMissing / maxMissingPerPeer {
+		from := PeerID(seq32(byte(10 + p)))
+		for i := range maxMissingPerPeer {
+			var b [16]byte
+			binary.BigEndian.PutUint64(b[:], uint64(p))
+			binary.BigEndian.PutUint64(b[8:], uint64(i))
+			ihave(from, []IHave{{ID: MessageIDFromContent(b[:])}})
+		}
+	}
+	if n := len(state.missing); n > maxMissing {
+		t.Fatalf("missing messages from many peers = %d, want at most %d", n, maxMissing)
 	}
 }

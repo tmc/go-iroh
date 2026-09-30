@@ -198,7 +198,19 @@ func (s *HyparviewState) Handle(ev HyparviewInEvent) []HyparviewOutEvent {
 		})
 		s.shuffleScheduled = true
 	}
+	s.forgetStrangers()
 	return out
+}
+
+// forgetStrangers drops the data of peers that are in neither view and not
+// awaiting a Neighbor reply. Peers name others freely, in joins, shuffles, and
+// refused neighbor requests, so this is what bounds peerData by the views.
+func (s *HyparviewState) forgetStrangers() {
+	for peer := range s.peerData {
+		if _, pending := s.pendingNeighbor[peer]; !pending && !s.active.contains(peer) && !s.passive.contains(peer) {
+			delete(s.peerData, peer)
+		}
+	}
 }
 
 func (s *HyparviewState) handleMessage(from PeerID, message HyparviewMessage, out *[]HyparviewOutEvent) {
@@ -449,7 +461,6 @@ func (s *HyparviewState) addPassive(peer PeerID, data *PeerData, out *[]Hyparvie
 	if s.passive.len() >= s.config.PassiveViewCapacity {
 		if old, ok := s.passive.random(s.rand); ok {
 			s.passive.remove(old)
-			delete(s.peerData, old)
 		}
 	}
 	s.passive.insert(peer)

@@ -166,6 +166,10 @@ type PlumtreeState struct {
 // them; its IHaves are the backup path, and eager pushes still arrive.
 const maxMissingPerPeer = 1024
 
+// maxMissing bounds the messages announced by IHave and not yet delivered,
+// across all peers.
+const maxMissing = 16 * maxMissingPerPeer
+
 type graftTarget struct {
 	peer  PeerID
 	round Round
@@ -352,7 +356,8 @@ func (s *PlumtreeState) onIHave(sender PeerID, ihaves []IHave, out *[]PlumtreeOu
 		if _, ok := s.received[ihave.ID]; ok {
 			continue
 		}
-		if s.nmissing[sender] >= maxMissingPerPeer || hasGraftTarget(s.missing[ihave.ID], sender) {
+		targets, ok := s.missing[ihave.ID]
+		if s.nmissing[sender] >= maxMissingPerPeer || !ok && len(s.missing) >= maxMissing || hasGraftTarget(targets, sender) {
 			continue
 		}
 		s.missing[ihave.ID] = append(s.missing[ihave.ID], graftTarget{peer: sender, round: ihave.Round})
