@@ -14,6 +14,7 @@ import (
 type InsertOutcome struct {
 	inserted bool
 	removed  int
+	err      error
 }
 
 // Inserted reports whether the entry was inserted.
@@ -22,9 +23,14 @@ func (o InsertOutcome) Inserted() bool { return o.inserted }
 // Removed reports how many older descendant entries were removed.
 func (o InsertOutcome) Removed() int { return o.removed }
 
+// Err returns an automatic persistence error. An insertion remains in memory
+// when persistence fails; Inserted and Removed still describe that insertion.
+func (o InsertOutcome) Err() error { return o.err }
+
 // MemoryStore is an in-memory document entry store.
 type MemoryStore struct {
 	mu          sync.RWMutex
+	persistMu   sync.Mutex
 	entries     map[string]SignedEntry
 	events      *storeWatcher
 	seq         uint64
@@ -184,24 +190,31 @@ func (s *MemoryStore) initialMessage(sc namespaceScope) Message {
 
 // ProcessMessage processes message and returns a response, if reconciliation
 // should continue. The validate callback must verify incoming entries that
-// should be trusted.
+// should be trusted. Reconciliation stops on a persistence error; use
+// [MemoryStore.PersistError] to check for that error.
 //
 // Deprecated: use ProcessMessageInNamespace.
 func (s *MemoryStore) ProcessMessage(config SyncConfig, message Message, validate func(SignedEntry, ContentStatus) bool, onInsert func(SignedEntry, ContentStatus), contentStatus func(SignedEntry) ContentStatus) (Message, bool) {
-	return s.processMessage(allNamespaces, config, message, validate, onInsert, contentStatus, key.EndpointID{})
+	reply, more, _ := s.processMessage(allNamespaces, config, message, validate, onInsert, contentStatus, key.EndpointID{})
+	return reply, more
 }
 
 // ProcessMessageInNamespace processes message for namespace and returns a
 // response, if reconciliation should continue. Entries of another namespace
 // are neither sent nor accepted. The validate callback must verify incoming
-// entries that should be trusted.
+// entries that should be trusted. Reconciliation stops on a persistence error;
+// use [MemoryStore.PersistError] to check for that error.
 func (s *MemoryStore) ProcessMessageInNamespace(namespace NamespaceID, config SyncConfig, message Message, validate func(SignedEntry, ContentStatus) bool, onInsert func(SignedEntry, ContentStatus), contentStatus func(SignedEntry) ContentStatus) (Message, bool) {
-	return s.processMessage(inNamespace(namespace), config, message, validate, onInsert, contentStatus, key.EndpointID{})
+	reply, more, _ := s.processMessage(inNamespace(namespace), config, message, validate, onInsert, contentStatus, key.EndpointID{})
+	return reply, more
 }
 
 // processMessage is ProcessMessageInNamespace for scope sc. Entries it
 // inserts are reported to subscribers as coming from peer from.
-func (s *MemoryStore) processMessage(sc namespaceScope, config SyncConfig, message Message, validate func(SignedEntry, ContentStatus) bool, onInsert func(SignedEntry, ContentStatus), contentStatus func(SignedEntry) ContentStatus, from key.EndpointID) (Message, bool) {
+func (s *MemoryStore) processMessage(sc namespaceScope, config SyncConfig, message Message, validate func(SignedEntry, ContentStatus) bool, onInsert func(SignedEntry, ContentStatus), contentStatus func(SignedEntry) ContentStatus, from key.EndpointID) (Message, bool, error) {
+	if err := s.PersistError(); err != nil {
+		return Message{}, false, err
+	}
 	config = config.withDefaults()
 	if validate == nil {
 		validate = func(SignedEntry, ContentStatus) bool { return true }
@@ -236,7 +249,11 @@ func (s *MemoryStore) processMessage(sc namespaceScope, config SyncConfig, messa
 				continue
 			}
 			origin := InsertOrigin{Kind: InsertOriginRemote, From: from, ContentStatus: value.Status}
-			if outcome := s.PutWithOrigin(value.Entry, origin); outcome.Inserted() && onInsert != nil {
+			outcome := s.PutWithOrigin(value.Entry, origin)
+			if outcome.Err() != nil {
+				return Message{}, false, outcome.Err()
+			}
+			if outcome.Inserted() && onInsert != nil {
 				onInsert(value.Entry, value.Status)
 			}
 		}
@@ -295,9 +312,9 @@ func (s *MemoryStore) processMessage(sc namespaceScope, config SyncConfig, messa
 		}
 	}
 	if len(out) == 0 {
-		return Message{}, false
+		return Message{}, false, nil
 	}
-	return s.boundedMessage(sc, out), true
+	return s.boundedMessage(sc, out), true, nil
 }
 
 // boundedMessage keeps a reconciliation reply within one sync frame. Range
@@ -394,19 +411,28 @@ func (s *MemoryStore) put(entry SignedEntry) InsertOutcome {
 }
 
 // PutWithOrigin inserts entry with origin metadata for subscribers. It shadows
-// descendant keys exactly as [MemoryStore.Put] does.
+// descendant keys exactly as [MemoryStore.Put] does. If a previous save failed,
+// even an unchanged insertion retries saving the current store.
 func (s *MemoryStore) PutWithOrigin(entry SignedEntry, origin InsertOrigin) InsertOutcome {
 	outcome, event, events := s.putEntry(entry, origin, true)
-	if outcome.Inserted() && s.persistPath != "" {
-		s.setPersistError(s.SaveFile(s.persistPath))
+	if s.persistPath != "" {
+		s.persistMu.Lock()
+		if outcome.Inserted() || s.PersistError() != nil {
+			outcome.err = s.saveFile(s.persistPath)
+			s.setPersistError(outcome.err)
+		}
+		s.persistMu.Unlock()
 	}
-	if outcome.Inserted() && events != nil {
+	if outcome.Inserted() && outcome.err == nil && events != nil {
 		events.Send(event)
 	}
 	return outcome
 }
 
-// PersistError returns the last error from an automatic file-store save.
+// PersistError returns the last error from saving the configured file-store
+// path. A successful save clears it. While it is non-nil, inserts remain in
+// memory but are not reported to subscribers; recovery emits StoreEventLagged
+// so subscribers can recover current entries and their insertion origins.
 func (s *MemoryStore) PersistError() error {
 	if s == nil {
 		return nil
@@ -418,8 +444,18 @@ func (s *MemoryStore) PersistError() error {
 
 func (s *MemoryStore) setPersistError(err error) {
 	s.mu.Lock()
+	recovered := s.persistErr != nil && err == nil
 	s.persistErr = err
+	var event StoreEvent
+	if recovered {
+		s.seq++
+		event = StoreEvent{Kind: StoreEventLagged, Sequence: s.seq}
+	}
+	events := s.events
 	s.mu.Unlock()
+	if recovered && events != nil {
+		events.Send(event)
+	}
 }
 
 func (s *MemoryStore) contentReady(hash blobs.Hash) {

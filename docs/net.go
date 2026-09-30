@@ -175,10 +175,28 @@ func Sync(ctx context.Context, ep *iroh.Endpoint, addr netaddr.EndpointAddr, nam
 }
 
 // run reconciles namespace with peer over rw.
-func (h *Handler) run(ctx context.Context, rw io.ReadWriter, peer key.EndpointID, namespace NamespaceID, initial Message, acceptSide bool) (SyncOutcome, error) {
+func (h *Handler) run(ctx context.Context, rw io.ReadWriter, peer key.EndpointID, namespace NamespaceID, initial Message, acceptSide bool) (out SyncOutcome, err error) {
 	if h.Store == nil {
 		return SyncOutcome{}, fmt.Errorf("docs: nil store")
 	}
+	persistFailure := func(err error) error {
+		if acceptSide {
+			// EOF alone denotes a successful end of reconciliation. Tell
+			// the dialer that its entries could not be persisted.
+			_ = writeSyncFrame(rw, syncWireMessage{Kind: syncMessageAbort, Reason: AbortInternalServerError})
+		}
+		return fmt.Errorf("docs: process sync: %w", err)
+	}
+	if err := h.Store.PersistError(); err != nil {
+		return out, persistFailure(err)
+	}
+	defer func() {
+		if err == nil {
+			if persistErr := h.Store.PersistError(); persistErr != nil {
+				err = persistFailure(persistErr)
+			}
+		}
+	}()
 	contentStatus := h.contentStatus(ctx)
 	validate := func(entry SignedEntry, status ContentStatus) bool {
 		if entry.Verify() != nil || entry.Entry.ValidateEmpty() != nil {
@@ -186,12 +204,14 @@ func (h *Handler) run(ctx context.Context, rw io.ReadWriter, peer key.EndpointID
 		}
 		return h.Validate == nil || h.Validate(entry, status)
 	}
-	var out SyncOutcome
 	next := initial
 	haveNext := acceptSide
 	for {
 		if haveNext {
-			reply, ok := h.Store.processMessage(inNamespace(namespace), h.Config, next, validate, h.OnInsert, contentStatus, peer)
+			reply, ok, err := h.Store.processMessage(inNamespace(namespace), h.Config, next, validate, h.OnInsert, contentStatus, peer)
+			if err != nil {
+				return out, persistFailure(err)
+			}
 			out.NumRecv += next.ValueCount()
 			if !ok {
 				return out, nil

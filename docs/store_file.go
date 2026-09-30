@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 )
 
-// NewFileStore opens a store that persists successful inserts to path.
+// NewFileStore opens a store that persists inserts to path. Check
+// [InsertOutcome.Err] for save failures; failed saves leave inserts in memory.
+// Concurrent saves on this store are serialized through snapshot and rename.
 func NewFileStore(path string) (*MemoryStore, error) {
 	if path == "" {
 		return nil, errors.New("docs: empty store file path")
@@ -34,8 +36,19 @@ func NewFileStore(path string) (*MemoryStore, error) {
 	return store, nil
 }
 
-// SaveFile writes s to path atomically.
+// SaveFile writes s to path atomically. Saving the configured file-store path
+// updates PersistError and signals subscriber recovery after a failed save.
 func (s *MemoryStore) SaveFile(path string) error {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	err := s.saveFile(path)
+	if path == s.persistPath {
+		s.setPersistError(err)
+	}
+	return err
+}
+
+func (s *MemoryStore) saveFile(path string) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
 	if err != nil {
