@@ -4,6 +4,13 @@
 // capabilities out of band, an in-memory entry store, the iroh-docs sync
 // protocol over an iroh Router, and live synchronization over iroh-gossip.
 //
+// Capabilities and tickets are value types. Applications retain namespace
+// capabilities and author secrets, configure Handler.Allow, and coordinate
+// incoming admission with StartLiveSync and LiveSync.Close. Closing live sync
+// does not change a separately registered Handler. Unlike the upstream docs
+// engine, MemoryStore does not manage namespace capability or lifecycle state.
+// File-store snapshots contain signed entries, not capabilities or peer lists.
+//
 // Keys form a prefix hierarchy per author: an entry shadows every entry of the
 // same author whose key it is a prefix of and whose record is not newer, so
 // writing "menu" removes "menu/tea". See [MemoryStore.Put].
