@@ -178,7 +178,10 @@ func NewRouter(ep *Endpoint, handlers map[string]ProtocolHandler, cfg *RouterCon
 // Dispatch is by exact ALPN string. One goroutine runs the accept loop; each
 // accepted connection is handled in a child goroutine with a context derived
 // from the router's. A panic in a handler goroutine is recovered and logged,
-// and closes only that connection; the accept loop continues.
+// and closes only that connection; the accept loop continues. As with
+// [Endpoint.Accept], when too many connections are still handshaking or in
+// [EndpointHooks.AfterHandshake] or [AcceptingHandler.OnAccepting], the oldest
+// is abandoned to make room for a new one.
 type Router struct {
 	ep                      *Endpoint
 	handlers                map[string]ProtocolHandler
@@ -261,10 +264,12 @@ func (r *Router) acceptLoop(ctx context.Context) {
 				}
 			}()
 
+			actx, admitted := r.ep.admissions.admit(ctx, accepting.qc)
+			defer admitted()
 			var err error
-			alpn, err = accepting.ALPN(ctx)
+			alpn, err = accepting.ALPN(actx)
 			if err != nil {
-				if !handlerShutdownErr(ctx, err) {
+				if admitted() == nil && !handlerShutdownErr(ctx, err) {
 					r.logger.Warn("router: accepting ALPN failed", "err", err)
 				}
 				return
@@ -277,9 +282,12 @@ func (r *Router) acceptLoop(ctx context.Context) {
 			}
 			var conn *Conn
 			if h, ok := handler.(AcceptingHandler); ok {
-				conn, err = h.OnAccepting(ctx, accepting)
+				conn, err = h.OnAccepting(actx, accepting)
 			} else {
-				conn, err = accepting.Connection(ctx)
+				conn, err = accepting.Connection(actx)
+			}
+			if admitted() != nil {
+				return
 			}
 			if err != nil {
 				r.logger.Warn("router: on accepting failed", "alpn", alpn, "err", err)
