@@ -50,12 +50,12 @@ func TestJoinBeforeBootstrapSubscribes(t *testing.T) {
 				// Wait for the server to receive the first Join and, with
 				// no topic to give it to, drop it.
 				for gs.Metrics().MsgsCtrlRecv == 0 {
+					if time.Since(start) >= gossip.RejoinDelay {
+						t.Fatalf("first Join not received within %v", gossip.RejoinDelay)
+					}
 					time.Sleep(time.Millisecond)
 				}
 				synctest.Wait()
-				if d := time.Since(start); d >= gossip.RejoinDelay {
-					t.Fatalf("first Join took %v, want < %v", d, gossip.RejoinDelay)
-				}
 
 				ts, err := gs.Subscribe(ctx, topic, nil)
 				if err != nil {
@@ -66,4 +66,43 @@ func TestJoinBeforeBootstrapSubscribes(t *testing.T) {
 			})
 		})
 	}
+}
+
+// TestRepeatedJoinPeersRetriesOnce checks that joining the same peer again
+// adds nothing to the topic's Join retries.
+func TestRepeatedJoinPeersRetriesOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.Background()
+		var topic gossip.TopicID
+		copy(topic[:], "rejoin")
+
+		n := irohtest.NewNet(t)
+		srv, gs := netGossipPeer(t, n)
+		_, gc := netGossipPeer(t, n)
+		bootstrap := []netaddr.EndpointAddr{srv.Addr()}
+
+		tc, err := gc.Subscribe(ctx, topic, bootstrap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tc.Close()
+		const joins = 10
+		for range joins - 1 {
+			if err := tc.JoinPeers(ctx, bootstrap); err != nil {
+				t.Fatal(err)
+			}
+		}
+		time.Sleep(gossip.RejoinDelay / 2)
+		synctest.Wait()
+		if got := gs.Metrics().MsgsCtrlRecv; got != joins {
+			t.Fatalf("server received %d Joins, want %d", got, joins)
+		}
+
+		// Retries go out after 1s, 3s and 7s.
+		time.Sleep(7 * gossip.RejoinDelay)
+		synctest.Wait()
+		if got := gs.Metrics().MsgsCtrlRecv - joins; got != 3 {
+			t.Errorf("server received %d retried Joins, want 3", got)
+		}
+	})
 }
