@@ -50,19 +50,20 @@ func buildAnnouncement(service string, data announcementData) ([]byte, error) {
 		txt = append(txt, "user-data="+data.userData)
 	}
 
-	answers := 3
+	// The address records go in the additional section, where
+	// swarm-discovery puts them (sender.rs:191, :198) and the only place it
+	// reads them from (receiver.rs:133).
+	additional := 0
 	for _, ap := range data.ips {
-		ip := ap.Addr()
-		if ip.Is4() || ip.Is4In6() {
-			answers++
-		} else if ip.Is6() {
-			answers++
+		if ap.Addr().IsValid() {
+			additional++
 		}
 	}
 
 	b := dnsBuilder{buf: make([]byte, 12)}
 	binary.BigEndian.PutUint16(b.buf[2:4], 0x8400)
-	binary.BigEndian.PutUint16(b.buf[6:8], uint16(answers))
+	binary.BigEndian.PutUint16(b.buf[6:8], 3)
+	binary.BigEndian.PutUint16(b.buf[10:12], uint16(additional))
 	if err := b.ptr(serviceName(service), inst); err != nil {
 		return nil, err
 	}
