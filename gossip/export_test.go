@@ -23,3 +23,6 @@ func (g *Gossip) HasSender(peer PeerID) bool {
 	defer g.mu.Unlock()
 	return g.peerSenders[peer] != nil
 }
+
+// RejoinDelay is rejoinDelay, for tests.
+const RejoinDelay = rejoinDelay

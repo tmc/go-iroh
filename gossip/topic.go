@@ -372,9 +372,21 @@ func (g *Gossip) scheduleRejoin(topic TopicID, generation uint64, peers []PeerID
 			g.mu.Unlock()
 			return
 		}
-		out := g.joinLocked(topic, peers)
+		// Queue the Joins before releasing g.mu, so that none can follow
+		// the Quit of a topic closed meanwhile. A full queue is skipped
+		// rather than waited on; the next retry sends again.
+		var rest []gossipproto.OutEvent
+		for _, ev := range g.joinLocked(topic, peers) {
+			if ev.Kind != gossipproto.SendMessage {
+				rest = append(rest, ev)
+				continue
+			}
+			if _, ok := g.queueLocked(ev.To, sendItem{msg: ev.Message}, true); ok {
+				g.metrics.recordSend(ev.Message.Message)
+			}
+		}
 		g.mu.Unlock()
-		_ = g.dispatch(context.Background(), out)
+		_ = g.dispatch(context.Background(), rest)
 		g.scheduleRejoin(topic, generation, peers, min(2*delay, rejoinMaxDelay))
 	})
 }
@@ -547,21 +559,11 @@ func (g *Gossip) enqueue(ctx context.Context, peer PeerID, item sendItem, start 
 			g.mu.Unlock()
 			return false, nil
 		}
-		q = g.sendQueues[peer]
-		if q == nil {
-			if !start {
-				g.mu.Unlock()
-				return false, nil
-			}
-			q = &sendQueue{done: make(chan struct{})}
-			q.ctx, q.cancel = context.WithCancel(context.Background())
-			g.sendQueues[peer] = q
-			go g.writeQueue(peer, q)
-		}
-		if len(q.items) < sendQueueCap {
-			q.items = append(q.items, item)
+		var queued bool
+		q, queued = g.queueLocked(peer, item, start)
+		if q == nil || queued {
 			g.mu.Unlock()
-			return true, nil
+			return queued, nil
 		}
 		if q.room == nil {
 			q.room = make(chan struct{})
@@ -575,6 +577,28 @@ func (g *Gossip) enqueue(ctx context.Context, peer PeerID, item sendItem, start 
 			return false, ctx.Err()
 		}
 	}
+}
+
+// queueLocked queues item for peer without waiting, starting a writer if
+// none is running and start is true. It returns the peer's queue, nil if
+// there is none, and whether item was queued, which it is not if the queue
+// is full. g.mu must be held.
+func (g *Gossip) queueLocked(peer PeerID, item sendItem, start bool) (*sendQueue, bool) {
+	q := g.sendQueues[peer]
+	if q == nil {
+		if !start {
+			return nil, false
+		}
+		q = &sendQueue{done: make(chan struct{})}
+		q.ctx, q.cancel = context.WithCancel(context.Background())
+		g.sendQueues[peer] = q
+		go g.writeQueue(peer, q)
+	}
+	if len(q.items) >= sendQueueCap {
+		return q, false
+	}
+	q.items = append(q.items, item)
+	return q, true
 }
 
 // wakeLocked wakes the enqueue calls waiting for room in q. g.mu must be held.
@@ -926,11 +950,16 @@ func (t *Topic) JoinPeers(ctx context.Context, peers []netaddr.EndpointAddr) err
 		ids = append(ids, peer)
 		t.g.peerAddrs[peer] = addr
 	}
+	generation := t.g.generations[t.id]
 	t.g.mu.Unlock()
-	return t.g.command(ctx, t.id, gossipproto.TopicCommand{
+	err := t.g.command(ctx, t.id, gossipproto.TopicCommand{
 		Kind:  gossipproto.TopicCommandJoin,
 		Peers: ids,
 	})
+	if len(ids) > 0 {
+		t.g.scheduleRejoin(t.id, generation, ids, rejoinDelay)
+	}
+	return err
 }
 
 // JoinPeers dials and joins additional peers for the sender's topic.
