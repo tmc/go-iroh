@@ -278,7 +278,10 @@ func (d *Downloader) fetch(ctx context.Context, hash Hash, addr netaddr.Endpoint
 	}
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
-		d.drop(addr)
+		// Cancellation belongs to this stream opening, not the shared connection.
+		if ctx.Err() == nil {
+			d.drop(addr)
+		}
 		return nil, fmt.Errorf("blobs: open provider stream %s: %w", addr.ID, err)
 	}
 	tag, err := d.streamBlob(ctx, stream, hash, progress)
