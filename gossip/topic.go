@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"slices"
 	"sync"
 	"time"
 
@@ -114,6 +115,7 @@ type Gossip struct {
 	topics         map[TopicID]map[*Topic]struct{}
 	neighbors      map[TopicID]map[PeerID]struct{}
 	generations    map[TopicID]uint64
+	rejoins        map[TopicID]*rejoin
 	nextGeneration uint64
 	peerAddrs      map[PeerID]netaddr.EndpointAddr
 	peerSenders    map[PeerID]*Sender
@@ -137,6 +139,7 @@ func NewGossip(ep *iroh.Endpoint, opts ...GossipOption) *Gossip {
 		topics:         make(map[TopicID]map[*Topic]struct{}),
 		neighbors:      make(map[TopicID]map[PeerID]struct{}),
 		generations:    make(map[TopicID]uint64),
+		rejoins:        make(map[TopicID]*rejoin),
 		peerAddrs:      make(map[PeerID]netaddr.EndpointAddr),
 		peerSenders:    make(map[PeerID]*Sender),
 		sendQueues:     make(map[PeerID]*sendQueue),
@@ -201,6 +204,7 @@ func (g *Gossip) Shutdown(ctx context.Context) {
 	g.topics = make(map[TopicID]map[*Topic]struct{})
 	g.neighbors = make(map[TopicID]map[PeerID]struct{})
 	g.generations = make(map[TopicID]uint64)
+	g.rejoins = make(map[TopicID]*rejoin)
 	g.wakeJoinWaiters()
 	g.mu.Unlock()
 	_ = g.dispatch(ctx, out)
@@ -331,7 +335,22 @@ func (g *Gossip) SubscribeWithOpts(ctx context.Context, topic TopicID, opts Join
 		g.generations[topic] = g.nextGeneration
 	}
 	g.topics[topic][t] = struct{}{}
-	out := g.handleLocked(gossipproto.InEvent{
+	out := g.joinLocked(topic, peers)
+	g.rejoinLocked(topic, peers)
+	g.mu.Unlock()
+	_ = g.dispatch(ctx, out)
+	return t, nil
+}
+
+// Bounds on how often a topic without neighbors re-sends its Join.
+const (
+	rejoinDelay    = time.Second
+	rejoinMaxDelay = 30 * time.Second
+)
+
+// joinLocked sends a Join for topic to peers. g.mu must be held.
+func (g *Gossip) joinLocked(topic TopicID, peers []PeerID) []gossipproto.OutEvent {
+	return g.handleLocked(gossipproto.InEvent{
 		Kind:  gossipproto.CommandEvent,
 		Topic: topic,
 		Command: gossipproto.TopicCommand{
@@ -340,9 +359,70 @@ func (g *Gossip) SubscribeWithOpts(ctx context.Context, topic TopicID, opts Join
 		},
 		Now: time.Now(),
 	})
-	g.mu.Unlock()
-	_ = g.dispatch(ctx, out)
-	return t, nil
+}
+
+// A rejoin is the Join retry schedule of one topic generation: the peers
+// its Join goes to, and when it is next re-sent.
+type rejoin struct {
+	generation uint64
+	peers      []PeerID
+}
+
+// rejoinLocked adds peers to topic's Join retry schedule, starting one if
+// the topic has none. The schedule re-sends the Join to its peers after
+// rejoinDelay, and again with the delay doubled up to rejoinMaxDelay, until
+// the topic has a neighbor or closes. A peer drops a Join for a topic it has
+// not subscribed to yet, and nothing else sends it again. Upstream
+// iroh-gossip 0.101.0 does not retry (src/proto/state.rs:247-275).
+// g.mu must be held.
+func (g *Gossip) rejoinLocked(topic TopicID, peers []PeerID) {
+	if len(peers) == 0 {
+		return
+	}
+	r := g.rejoins[topic]
+	if r == nil {
+		r = &rejoin{generation: g.generations[topic]}
+		g.rejoins[topic] = r
+		g.scheduleRejoin(topic, r, rejoinDelay)
+	}
+	for _, p := range peers {
+		if !slices.Contains(r.peers, p) {
+			r.peers = append(r.peers, p)
+		}
+	}
+}
+
+func (g *Gossip) scheduleRejoin(topic TopicID, r *rejoin, delay time.Duration) {
+	time.AfterFunc(delay, func() {
+		g.mu.Lock()
+		if g.closed || g.rejoins[topic] != r {
+			g.mu.Unlock()
+			return
+		}
+		if len(g.neighbors[topic]) > 0 {
+			delete(g.rejoins, topic)
+			g.mu.Unlock()
+			return
+		}
+		// Queue the Joins before releasing g.mu, so that none can follow
+		// the Quit of a topic closed meanwhile; the writer drops any still
+		// queued when it closes. A full queue is skipped rather than waited
+		// on; the next retry sends again.
+		var rest []gossipproto.OutEvent
+		for _, ev := range g.joinLocked(topic, r.peers) {
+			if ev.Kind != gossipproto.SendMessage {
+				rest = append(rest, ev)
+				continue
+			}
+			item := sendItem{msg: ev.Message, generation: r.generation}
+			if _, ok := g.queueLocked(ev.To, item, true); ok {
+				g.metrics.recordSend(ev.Message.Message)
+			}
+		}
+		g.mu.Unlock()
+		_ = g.dispatch(context.Background(), rest)
+		g.scheduleRejoin(topic, r, min(2*delay, rejoinMaxDelay))
+	})
 }
 
 // SubscribeAndJoin subscribes to topic and waits until it has a direct neighbor.
@@ -408,6 +488,7 @@ func (g *Gossip) closeTopic(t *Topic) error {
 		delete(g.topics, t.id)
 		delete(g.neighbors, t.id)
 		delete(g.generations, t.id)
+		delete(g.rejoins, t.id)
 	}
 	var out []gossipproto.OutEvent
 	if empty && !g.closed {
@@ -496,6 +577,9 @@ type sendQueue struct {
 type sendItem struct {
 	msg        gossipproto.Message
 	disconnect bool
+	// generation, if non-zero, is the generation of msg.Topic the message
+	// belongs to. It is not sent once that generation has ended.
+	generation uint64
 }
 
 // enqueue queues item for peer, starting a writer if none is running, or, if
@@ -513,21 +597,11 @@ func (g *Gossip) enqueue(ctx context.Context, peer PeerID, item sendItem, start 
 			g.mu.Unlock()
 			return false, nil
 		}
-		q = g.sendQueues[peer]
-		if q == nil {
-			if !start {
-				g.mu.Unlock()
-				return false, nil
-			}
-			q = &sendQueue{done: make(chan struct{})}
-			q.ctx, q.cancel = context.WithCancel(context.Background())
-			g.sendQueues[peer] = q
-			go g.writeQueue(peer, q)
-		}
-		if len(q.items) < sendQueueCap {
-			q.items = append(q.items, item)
+		var queued bool
+		q, queued = g.queueLocked(peer, item, start)
+		if q == nil || queued {
 			g.mu.Unlock()
-			return true, nil
+			return queued, nil
 		}
 		if q.room == nil {
 			q.room = make(chan struct{})
@@ -541,6 +615,28 @@ func (g *Gossip) enqueue(ctx context.Context, peer PeerID, item sendItem, start 
 			return false, ctx.Err()
 		}
 	}
+}
+
+// queueLocked queues item for peer without waiting, starting a writer if
+// none is running and start is true. It returns the peer's queue, nil if
+// there is none, and whether item was queued, which it is not if the queue
+// is full. g.mu must be held.
+func (g *Gossip) queueLocked(peer PeerID, item sendItem, start bool) (*sendQueue, bool) {
+	q := g.sendQueues[peer]
+	if q == nil {
+		if !start {
+			return nil, false
+		}
+		q = &sendQueue{done: make(chan struct{})}
+		q.ctx, q.cancel = context.WithCancel(context.Background())
+		g.sendQueues[peer] = q
+		go g.writeQueue(peer, q)
+	}
+	if len(q.items) >= sendQueueCap {
+		return q, false
+	}
+	q.items = append(q.items, item)
+	return q, true
 }
 
 // wakeLocked wakes the enqueue calls waiting for room in q. g.mu must be held.
@@ -578,7 +674,7 @@ func (g *Gossip) writeQueue(peer PeerID, q *sendQueue) {
 		// Closing the connection is the only way to end a stalled
 		// write: it does not watch q.ctx once it is underway.
 		limit := time.AfterFunc(sendWriteTimeout, func() { g.dropPeer(peer, q) })
-		err := g.send(q, peer, item.msg)
+		err := g.send(q, peer, item)
 		limit.Stop()
 		if err != nil {
 			g.dropPeer(peer, q)
@@ -647,7 +743,7 @@ func closeConn(s *Sender) {
 }
 
 // send writes msg to peer, dialing it first if there is no connection.
-func (g *Gossip) send(q *sendQueue, peer PeerID, msg gossipproto.Message) error {
+func (g *Gossip) send(q *sendQueue, peer PeerID, item sendItem) error {
 	g.mu.Lock()
 	sender := g.peerSenders[peer]
 	addr, hasAddr := g.peerAddrs[peer]
@@ -670,8 +766,12 @@ func (g *Gossip) send(q *sendQueue, peer PeerID, msg gossipproto.Message) error 
 		return errors.New("gossip: send queue dropped")
 	}
 	q.sender = sender
+	stale := item.generation != 0 && g.generations[item.msg.Topic] != item.generation
 	g.mu.Unlock()
-	return sender.Send(q.ctx, Message(msg))
+	if stale {
+		return nil
+	}
+	return sender.Send(q.ctx, Message(item.msg))
 }
 
 // connect dials peer for q's writer and publishes the connection as q's
@@ -891,6 +991,9 @@ func (t *Topic) JoinPeers(ctx context.Context, peers []netaddr.EndpointAddr) err
 		peer := peerIDFromEndpoint(addr.ID)
 		ids = append(ids, peer)
 		t.g.peerAddrs[peer] = addr
+	}
+	if !t.isClosed() {
+		t.g.rejoinLocked(t.id, ids)
 	}
 	t.g.mu.Unlock()
 	return t.g.command(ctx, t.id, gossipproto.TopicCommand{
