@@ -243,29 +243,69 @@ func handWrittenAppendix(path string) ([]byte, error) {
 	return existing[i+1:], nil
 }
 
+// Badge returns a shields.io endpoint badge for the release pins. The
+// message counts passing scenarios per release, so a known divergence shows
+// as a miss rather than being folded into the total. The color is green when
+// every cell matches its expectation, red when an expected pass does not
+// pass, and yellow when a cell passes that was expected not to, which means
+// the recorded expectations are stale.
 func (r *Report) Badge() []byte {
-	matched, total := 0, 0
-	release := make(map[string]bool)
+	type tally struct{ pass, total int }
+	counts := make(map[string]*tally)
 	var versions []string
 	for _, pin := range r.Pins {
 		if pin.Kind == "release" {
-			release[pin.Key] = true
+			counts[pin.Key] = new(tally)
 			versions = append(versions, pin.Version)
 		}
 	}
+	color := "brightgreen"
 	for _, c := range r.Cells {
-		if release[c.Iroh] {
-			total++
-			if c.Result == c.Expected {
-				matched++
-			}
+		t := counts[c.Iroh]
+		if t == nil {
+			continue
 		}
+		t.total++
+		if c.Result == Pass {
+			t.pass++
+		}
+		switch {
+		case c.Expected == Pass && c.Result != Pass:
+			color = "red"
+		case c.Result != c.Expected && color != "red":
+			color = "yellow"
+		}
+	}
+
+	var parts []string
+	var first *tally
+	same := true
+	for _, pin := range r.Pins {
+		t := counts[pin.Key]
+		if t == nil {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%d/%d on %s", t.pass, t.total, pin.Version))
+		if first == nil {
+			first = t
+		} else if *t != *first {
+			same = false
+		}
+	}
+	var message string
+	switch {
+	case first == nil:
+		message, color = "no results", "lightgrey"
+	case same:
+		message = fmt.Sprintf("%d/%d scenarios pass on %s", first.pass, first.total, strings.Join(versions, " and "))
+	default:
+		message = strings.Join(parts, ", ")
 	}
 	b, _ := json.Marshal(map[string]any{
 		"schemaVersion": 1,
-		"label":         "parity",
-		"message":       fmt.Sprintf("%d/%d expected vs iroh %s", matched, total, strings.Join(versions, ", ")),
-		"color":         map[bool]string{true: "brightgreen", false: "yellow"}[matched == total && total != 0],
+		"label":         "Rust iroh interop",
+		"message":       message,
+		"color":         color,
 	})
 	return append(b, '\n')
 }

@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -99,15 +100,36 @@ func TestRunRoundTrip(t *testing.T) {
 	}
 }
 
-func TestBadgeCountsEveryRelease(t *testing.T) {
+func TestBadge(t *testing.T) {
 	now := time.Now()
-	merged, err := Merge([]Report{run("1.2.0", "abc", now), run("1.3.0", "abc", now)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	merged.Cells[1].Result = Pass
-	got := string(merged.Badge())
-	if want := `"message":"1/2 expected vs iroh 1.2.0, 1.3.0"`; !strings.Contains(got, want) {
-		t.Errorf("Badge() = %s, want %s", got, want)
+	for _, tt := range []struct {
+		name    string
+		results []Verdict // result of the vectors/keys cell at 1.2.0, then 1.3.0
+		expect  Verdict
+		message string
+		color   string
+	}{
+		{"known divergence", []Verdict{Fail, Fail}, Fail, "0/1 scenarios pass on 1.2.0 and 1.3.0", "brightgreen"},
+		{"all pass", []Verdict{Pass, Pass}, Pass, "1/1 scenarios pass on 1.2.0 and 1.3.0", "brightgreen"},
+		{"regression", []Verdict{Pass, Fail}, Pass, "1/1 on 1.2.0, 0/1 on 1.3.0", "red"},
+		{"stale expectation", []Verdict{Fail, Pass}, Fail, "0/1 on 1.2.0, 1/1 on 1.3.0", "yellow"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			merged, err := Merge([]Report{run("1.2.0", "abc", now), run("1.3.0", "abc", now)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range merged.Cells {
+				merged.Cells[i].Result = tt.results[i]
+				merged.Cells[i].Expected = tt.expect
+			}
+			var got struct{ Label, Message, Color string }
+			if err := json.Unmarshal(merged.Badge(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Label != "Rust iroh interop" || got.Message != tt.message || got.Color != tt.color {
+				t.Errorf("Badge() = %+v, want message %q color %q", got, tt.message, tt.color)
+			}
+		})
 	}
 }
