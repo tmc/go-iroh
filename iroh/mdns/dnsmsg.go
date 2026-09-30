@@ -62,7 +62,15 @@ func buildAnnouncement(service string, data announcementData) ([]byte, error) {
 
 	b := dnsBuilder{buf: make([]byte, 12)}
 	binary.BigEndian.PutUint16(b.buf[2:4], 0x8400)
-	binary.BigEndian.PutUint16(b.buf[6:8], 3)
+	// With nothing to say, send no TXT record, as swarm-discovery does
+	// (sender.rs:207). An empty one would have RDLENGTH 0, which
+	// hickory-proto reads as an update record and rejects the whole packet
+	// for (op/message.rs:431-435).
+	answers := 2
+	if len(txt) > 0 {
+		answers++
+	}
+	binary.BigEndian.PutUint16(b.buf[6:8], uint16(answers))
 	binary.BigEndian.PutUint16(b.buf[10:12], uint16(additional))
 	if err := b.ptr(serviceName(service), inst); err != nil {
 		return nil, err
@@ -70,8 +78,10 @@ func buildAnnouncement(service string, data announcementData) ([]byte, error) {
 	if err := b.srv(inst, data.port, host); err != nil {
 		return nil, err
 	}
-	if err := b.txt(inst, txt); err != nil {
-		return nil, err
+	if len(txt) > 0 {
+		if err := b.txt(inst, txt); err != nil {
+			return nil, err
+		}
 	}
 	for _, ap := range data.ips {
 		ip := ap.Addr()

@@ -113,6 +113,25 @@ func TestAnnouncementLayout(t *testing.T) {
 				{additional, dnsTypeAAAA, 16},
 			},
 		},
+		{
+			name: "no TXT without relay or user data",
+			data: announcementData{id: id, port: 7777, ips: []netip.AddrPort{v4}},
+			want: []rrLayout{
+				{answer, dnsTypePTR, 0},
+				{answer, dnsTypeSRV, 0},
+				{additional, dnsTypeA, 4},
+			},
+		},
+		{
+			name: "user data only",
+			data: announcementData{id: id, port: 7777, ips: []netip.AddrPort{v6}, userData: "lan"},
+			want: []rrLayout{
+				{answer, dnsTypePTR, 0},
+				{answer, dnsTypeSRV, 0},
+				{answer, dnsTypeTXT, 0},
+				{additional, dnsTypeAAAA, 16},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
