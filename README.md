@@ -1,7 +1,7 @@
 # go-iroh
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/tmc/go-iroh.svg)](https://pkg.go.dev/github.com/tmc/go-iroh)
-[![parity](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Ftmc%2Fgo-iroh%2Fcompat-harness%2Firoh-compat-harness%2Fresults%2Fbadge.json)](COMPATIBILITY.md)
+[![Rust iroh interop](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Ftmc%2Fgo-iroh%2Fcompat-harness%2Firoh-compat-harness%2Fresults%2Fbadge.json)](COMPATIBILITY.md)
 
 Wire compatibility: iroh wire v1, observed against pinned Rust iroh releases by the [compatibility matrix](COMPATIBILITY.md).
 

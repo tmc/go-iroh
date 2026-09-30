@@ -1,1 +1,1 @@
-{"color":"brightgreen","label":"parity","message":"70/70 expected vs iroh 1.2.0, 1.3.0","schemaVersion":1}
+{"color":"brightgreen","label":"Rust iroh interop","message":"34/35 scenarios pass on 1.2.0 and 1.3.0","schemaVersion":1}
