@@ -32,6 +32,7 @@ type MemoryStore struct {
 	mu          sync.RWMutex
 	persistMu   sync.Mutex
 	entries     map[string]SignedEntry
+	origins     map[string]InsertOrigin
 	events      *storeWatcher
 	seq         uint64
 	persistPath string
@@ -79,6 +80,25 @@ func (s *MemoryStore) Entries() []SignedEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.entriesLocked()
+}
+
+// snapshotEvents recovers current entries and their insertion origins after
+// subscriber lag. Snapshot-loaded entries have no known provider or local event.
+func (s *MemoryStore) snapshotEvents(namespace NamespaceID) []StoreEvent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var events []StoreEvent
+	for _, entry := range s.entriesLocked() {
+		if entry.Entry.Namespace() != namespace {
+			continue
+		}
+		origin, ok := s.origins[string(entry.Entry.ID.bytes())]
+		if !ok {
+			origin = InsertOrigin{Kind: InsertOriginRemote}
+		}
+		events = append(events, StoreEvent{Kind: storeEventKind(origin.Kind), Entry: entry, From: origin.From, ContentStatus: origin.ContentStatus})
+	}
+	return events
 }
 
 // GetRange returns entries whose identifiers are in r.
@@ -491,10 +511,19 @@ func (s *MemoryStore) putEntry(entry SignedEntry, origin InsertOrigin, notify bo
 	for k, existing := range s.entries {
 		if hasEntryPrefix(existing.Entry.ID, id) && entry.Entry.Record.Compare(existing.Entry.Record) >= 0 {
 			delete(s.entries, k)
+			delete(s.origins, k)
 			removed++
 		}
 	}
 	s.entries[string(key)] = entry
+	if s.origins == nil {
+		s.origins = make(map[string]InsertOrigin)
+	}
+	if notify {
+		s.origins[string(key)] = origin
+	} else {
+		delete(s.origins, string(key))
+	}
 	outcome := InsertOutcome{inserted: true, removed: removed}
 	var event StoreEvent
 	var events *storeWatcher

@@ -92,8 +92,13 @@ type LiveSync struct {
 	cancelStore func()
 	downloads   chan liveDownload
 
-	mu      sync.Mutex
-	pending map[blobs.Hash]*pendingDownload // queued or in-flight downloads
+	mu       sync.Mutex
+	pending  map[blobs.Hash]*pendingDownload // queued or in-flight downloads
+	backlog  []liveDownload
+	peers    map[key.EndpointID]netaddr.EndpointAddr
+	syncing  map[key.EndpointID]*livePeerSync
+	workers  sync.WaitGroup
+	stopping bool
 }
 
 // StartLiveSync starts live synchronization for namespace.
@@ -102,6 +107,8 @@ type LiveSync struct {
 // remote entries. New neighbors and bootstrap peers are synchronized with the
 // iroh-docs range-reconciliation protocol. The content of remote entries,
 // received either way, is downloaded as opts.DownloadPolicy allows.
+// StartLiveSync and Close do not modify Handler.Allow; the application controls
+// admission of incoming sync requests independently.
 func StartLiveSync(ctx context.Context, ep *iroh.Endpoint, g *gossip.Gossip, namespace NamespaceID, store *MemoryStore, opts LiveSyncOptions) (*LiveSync, error) {
 	if ep == nil {
 		return nil, errors.New("docs: nil endpoint")
@@ -112,8 +119,10 @@ func StartLiveSync(ctx context.Context, ep *iroh.Endpoint, g *gossip.Gossip, nam
 	if store == nil {
 		return nil, errors.New("docs: nil store")
 	}
+	ctx, cancel := context.WithCancel(ctx)
 	topic, err := g.Subscribe(ctx, gossip.TopicID(namespace.Bytes()), opts.Bootstrap)
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("docs: subscribe gossip: %w", err)
 	}
 	cfg := liveSyncOptions{LiveSyncOptions: opts}
@@ -124,7 +133,6 @@ func StartLiveSync(ctx context.Context, ep *iroh.Endpoint, g *gossip.Gossip, nam
 	cfg.downloadBlob = func(ctx context.Context, providers []netaddr.EndpointAddr, hash blobs.Hash) error {
 		return downloadBlob(ctx, ep, providers, opts.BlobStore, hash)
 	}
-	ctx, cancel := context.WithCancel(ctx)
 	events, cancelStore := store.Subscribe()
 	l := &LiveSync{
 		cancel:      cancel,
@@ -138,7 +146,8 @@ func StartLiveSync(ctx context.Context, ep *iroh.Endpoint, g *gossip.Gossip, nam
 	return l, nil
 }
 
-// Close stops the live synchronization background task.
+// Close stops live synchronization and waits for its workers to finish.
+// It does not modify Handler.Allow. OnSync must not call Close.
 func (l *LiveSync) Close() error {
 	if l == nil {
 		return nil
@@ -154,8 +163,19 @@ func (l *LiveSync) Close() error {
 
 func (l *LiveSync) run(ctx context.Context, namespace NamespaceID, store *MemoryStore, opts liveSyncOptions, storeEvents <-chan StoreEvent) {
 	defer close(l.done)
+	defer func() {
+		l.mu.Lock()
+		l.stopping = true
+		l.mu.Unlock()
+		l.cancel()
+		if l.cancelStore != nil {
+			l.cancelStore()
+		}
+		_ = l.topic.Close()
+		l.workers.Wait()
+	}()
 	topicEvents := make(chan gossip.Event)
-	go func() {
+	l.startWorker(func() {
 		defer close(topicEvents)
 		for ev, err := range l.topic.Events() {
 			if err != nil {
@@ -167,12 +187,12 @@ func (l *LiveSync) run(ctx context.Context, namespace NamespaceID, store *Memory
 				return
 			}
 		}
-	}()
+	})
 
 	if len(opts.Bootstrap) != 0 {
-		go l.syncPeers(ctx, namespace, store, opts, opts.Bootstrap)
+		l.startWorker(func() { l.syncPeers(ctx, namespace, store, opts, opts.Bootstrap) })
 	}
-	go l.runDownloader(ctx, store, opts)
+	l.startWorker(func() { l.runDownloader(ctx, store, opts) })
 
 	for {
 		select {
@@ -182,7 +202,11 @@ func (l *LiveSync) run(ctx context.Context, namespace NamespaceID, store *Memory
 			if !ok {
 				return
 			}
-			l.handleStoreEvent(ctx, namespace, opts, ev)
+			if ev.Kind == StoreEventLagged {
+				l.recoverStore(ctx, namespace, store, opts)
+			} else {
+				l.handleStoreEvent(ctx, namespace, opts, ev)
+			}
 		case ev, ok := <-topicEvents:
 			if !ok {
 				return
@@ -234,10 +258,10 @@ func (l *LiveSync) handleTopicEvent(ctx context.Context, namespace NamespaceID, 
 		if !ok {
 			addr = netaddr.EndpointAddr{ID: ev.Peer}
 		}
-		go l.syncPeers(ctx, namespace, store, opts, []netaddr.EndpointAddr{addr})
+		l.startWorker(func() { l.syncPeers(ctx, namespace, store, opts, []netaddr.EndpointAddr{addr}) })
 	case gossip.Lagged:
 		// A missed gossip event means we may have missed a Put. Sync known peers.
-		go l.syncPeers(ctx, namespace, store, opts, opts.Bootstrap)
+		l.startWorker(func() { l.syncPeers(ctx, namespace, store, opts, opts.Bootstrap) })
 	}
 }
 
@@ -248,7 +272,7 @@ func (l *LiveSync) handleReceived(ctx context.Context, namespace NamespaceID, st
 	}
 	switch op.Kind {
 	case liveOpPut:
-		if op.Entry.Entry.Namespace() != namespace || !acceptTimestamp(op.Entry.Entry) || op.Entry.Verify() != nil {
+		if op.Entry.Entry.Namespace() != namespace || !acceptTimestamp(op.Entry.Entry) || op.Entry.Verify() != nil || op.Entry.Entry.ValidateEmpty() != nil {
 			return
 		}
 		hash := op.Entry.Entry.ContentHash()
@@ -261,7 +285,7 @@ func (l *LiveSync) handleReceived(ctx context.Context, namespace NamespaceID, st
 			From:          ev.DeliveredFrom,
 			ContentStatus: status,
 		})
-		if outcome.Inserted() && status != ContentComplete {
+		if outcome.Err() == nil && outcome.Inserted() && status != ContentComplete && (ev.Scope == gossip.DeliveryNeighbors || ev.Round == 0) {
 			l.queueDownload(ctx, opts, hash, op.Entry.Entry.Key(), true, ev.DeliveredFrom)
 		}
 	case liveOpContentReady:
@@ -280,7 +304,7 @@ func (l *LiveSync) handleReceived(ctx context.Context, namespace NamespaceID, st
 		if !ok {
 			addr = netaddr.EndpointAddr{ID: ev.DeliveredFrom}
 		}
-		go l.syncPeers(ctx, namespace, store, opts, []netaddr.EndpointAddr{addr})
+		l.startWorker(func() { l.syncPeers(ctx, namespace, store, opts, []netaddr.EndpointAddr{addr}) })
 	}
 }
 
@@ -289,7 +313,7 @@ func (l *LiveSync) broadcastContentReady(ctx context.Context, hash blobs.Hash) {
 	if err != nil {
 		return
 	}
-	_ = l.topic.Broadcast(ctx, msg)
+	_ = l.topic.BroadcastNeighbors(ctx, msg)
 }
 
 func (l *LiveSync) queueDownload(ctx context.Context, opts liveSyncOptions, hash blobs.Hash, entryKey []byte, applyPolicy bool, peer key.EndpointID) {
@@ -322,7 +346,7 @@ func (l *LiveSync) queueDownload(ctx context.Context, opts liveSyncOptions, hash
 	select {
 	case l.downloads <- liveDownload{Hash: hash, pending: pending}:
 	default:
-		delete(l.pending, hash)
+		l.backlog = append(l.backlog, liveDownload{Hash: hash, pending: pending})
 	}
 }
 
@@ -356,7 +380,10 @@ func (l *LiveSync) downloadAddr(ctx context.Context, opts liveSyncOptions, id ke
 			return addr, true
 		}
 	}
-	return netaddr.EndpointAddr{}, false
+	if addr, ok := l.knownPeer(id); ok {
+		return addr, true
+	}
+	return netaddr.EndpointAddr{ID: id}, !id.IsZero()
 }
 
 func (s *MemoryStore) downloadAllowed(namespace NamespaceID, hash blobs.Hash, policy DownloadPolicy) bool {
@@ -376,6 +403,7 @@ func (l *LiveSync) runDownloader(ctx context.Context, store *MemoryStore, opts l
 		case <-ctx.Done():
 			return
 		case req := <-l.downloads:
+			l.scheduleDownloads()
 			l.download(ctx, store, opts, req)
 		}
 	}
@@ -498,18 +526,48 @@ func (c blobConn) OpenStreamSync(ctx context.Context) (blobs.BidiStream, error) 
 
 func (l *LiveSync) syncPeers(ctx context.Context, namespace NamespaceID, store *MemoryStore, opts liveSyncOptions, peers []netaddr.EndpointAddr) {
 	for _, peer := range peers {
-		var outcome SyncOutcome
-		var err error
-		if opts.syncPeer != nil {
-			outcome, err = opts.syncPeer(ctx, peer)
-		} else {
-			err = errors.New("docs: sync peer not configured")
+		l.mu.Lock()
+		if l.peers == nil {
+			l.peers = make(map[key.EndpointID]netaddr.EndpointAddr)
 		}
-		if opts.OnSync != nil {
-			opts.OnSync(SyncResult{Addr: peer, Outcome: outcome, Err: err})
+		l.peers[peer.ID] = peer
+		if l.syncing == nil {
+			l.syncing = make(map[key.EndpointID]*livePeerSync)
 		}
-		if err == nil && outcome.NumRecv > 0 {
-			l.broadcastSyncReport(ctx, namespace, store, opts)
+		if running := l.syncing[peer.ID]; running != nil {
+			running.again = true
+			l.mu.Unlock()
+			continue
+		}
+		running := &livePeerSync{}
+		l.syncing[peer.ID] = running
+		l.mu.Unlock()
+		for {
+			var outcome SyncOutcome
+			var err error
+			if opts.syncPeer != nil {
+				outcome, err = opts.syncPeer(ctx, peer)
+			} else {
+				err = errors.New("docs: sync peer not configured")
+			}
+			if opts.OnSync != nil {
+				opts.OnSync(SyncResult{Addr: peer, Outcome: outcome, Err: err})
+			}
+			if err == nil && outcome.NumRecv > 0 {
+				l.broadcastSyncReport(ctx, namespace, store, opts)
+			}
+			l.mu.Lock()
+			again := running.again && ctx.Err() == nil
+			running.again = false
+			if !again {
+				delete(l.syncing, peer.ID)
+			} else {
+				peer = l.peers[peer.ID]
+			}
+			l.mu.Unlock()
+			if !again {
+				break
+			}
 		}
 	}
 }

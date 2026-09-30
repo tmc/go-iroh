@@ -307,6 +307,44 @@ func TestFileStoreProcessMessagePersistenceError(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreSnapshotEvents(t *testing.T) {
+	namespace := NewNamespaceSecret(repeat32(0xb2))
+	author := NewAuthor(repeat32(0xa1))
+	peer := NewAuthor(repeat32(0xa2)).ID().EndpointID()
+	store := NewMemoryStore()
+	old := testSignedEntry(namespace, author, "dir/child", testRecord("child", 5, 1))
+	store.PutWithOrigin(old, InsertOrigin{Kind: InsertOriginRemote, From: peer, ContentStatus: ContentComplete})
+	events := store.snapshotEvents(namespace.ID())
+	if len(events) != 1 || events[0].From != peer || events[0].Kind != StoreEventInsertRemote || events[0].ContentStatus != ContentComplete {
+		t.Fatalf("remote snapshot = %#v", events)
+	}
+	parent := testSignedEntry(namespace, author, "dir", testRecord("parent", 6, 2))
+	store.Put(parent)
+	events = store.snapshotEvents(namespace.ID())
+	if len(events) != 1 || events[0].Kind != StoreEventInsertLocal || !events[0].Entry.Equal(parent) {
+		t.Fatalf("shadowed snapshot = %#v", events)
+	}
+	if len(store.origins) != 1 {
+		t.Fatal("shadowed entry retained origin")
+	}
+	other := NewNamespaceSecret(repeat32(0xb3))
+	if len(store.snapshotEvents(other.ID())) != 0 {
+		t.Fatal("snapshot crossed namespace")
+	}
+	var snapshot bytes.Buffer
+	if _, err := store.WriteTo(&snapshot); err != nil {
+		t.Fatal(err)
+	}
+	loaded := NewMemoryStore()
+	if _, err := loaded.ReadFrom(&snapshot); err != nil {
+		t.Fatal(err)
+	}
+	events = loaded.snapshotEvents(namespace.ID())
+	if len(events) != 1 || events[0].Kind != StoreEventInsertRemote || !events[0].From.IsZero() {
+		t.Fatalf("loaded snapshot = %#v", events)
+	}
+}
+
 func TestFileStoreRetryAndRecovery(t *testing.T) {
 	namespace := NewNamespaceSecret(repeat32(0xb2))
 	author := NewAuthor(repeat32(0xa1))
@@ -329,6 +367,10 @@ func TestFileStoreRetryAndRecovery(t *testing.T) {
 	}
 	if outcome := store.PutWithOrigin(entry, origin); outcome.Inserted() || outcome.Err() == nil {
 		t.Fatalf("duplicate failed save: inserted=%v err=%v", outcome.Inserted(), outcome.Err())
+	}
+	snapshots := store.snapshotEvents(namespace.ID())
+	if len(snapshots) != 1 || snapshots[0].From != peer || snapshots[0].ContentStatus != ContentComplete {
+		t.Fatalf("failed save discarded provider: %#v", snapshots)
 	}
 	if _, more, err := store.processMessage(inNamespace(namespace.ID()), DefaultSyncConfig(), store.InitialMessageInNamespace(namespace.ID()), nil, nil, nil, peer); err == nil || more {
 		t.Fatalf("matching fingerprint after failed save: more=%v err=%v", more, err)
