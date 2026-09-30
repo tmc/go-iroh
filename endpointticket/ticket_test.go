@@ -1,6 +1,7 @@
 package endpointticket
 
 import (
+	"bytes"
 	"encoding/base32"
 	"encoding/hex"
 	"encoding/json"
@@ -67,18 +68,119 @@ func TestRoundTripCustomAddr(t *testing.T) {
 	assertEndpointAddrEqual(t, got, addr)
 }
 
-func TestRoundTripIPv6Zone(t *testing.T) {
+func TestIPv6WireFormat(t *testing.T) {
+	var seed [key.SeedSize]byte
+	for i := range seed {
+		seed[i] = 0x2a
+	}
+	id := key.NewSecretKey(seed).Public().EndpointID()
+	addr := netaddr.NewEndpointAddr(id, netaddr.IPAddr{Addr: netip.MustParseAddrPort("[2001:db8::1]:4433")})
+
+	// This is the Rust-generated one-ipv6 vector from the compat harness.
+	want, err := hex.DecodeString("00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6101010120010db8000000000000000000000001d122")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := New(addr).EncodeBytes(); !bytes.Equal(got, want) {
+		t.Fatalf("EncodeBytes = %x, want Rust bytes %x", got, want)
+	}
+	got, err := DecodeBytes(want)
+	if err != nil {
+		t.Fatalf("DecodeBytes(Rust vector): %v", err)
+	}
+	if gotAddr := got.Addr().IPAddrs(); len(gotAddr) != 1 || gotAddr[0].String() != "[2001:db8::1]:4433" {
+		t.Fatalf("decoded IPv6 addresses = %v, want [[2001:db8::1]:4433]", gotAddr)
+	}
+}
+
+func TestRustIPTicketVectors(t *testing.T) {
+	var seed [key.SeedSize]byte
+	for i := range seed {
+		seed[i] = 0x2a
+	}
+	id := key.NewSecretKey(seed).Public().EndpointID()
+
+	tests := []struct {
+		name  string
+		bytes string
+		addrs []string
+		relay string
+	}{
+		{
+			name:  "one-ipv6",
+			bytes: "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6101010120010db8000000000000000000000001d122",
+			addrs: []string{"[2001:db8::1]:4433"},
+		},
+		{
+			name:  "two-ipv6",
+			bytes: "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6102010120010db8000000000000000000000001d122010120010db8000000000000000000000002d222",
+			addrs: []string{"[2001:db8::1]:4433", "[2001:db8::2]:4434"},
+		},
+		{
+			name:  "ipv4-and-ipv6",
+			bytes: "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d610201007f000001d122010120010db8000000000000000000000001d122",
+			addrs: []string{"127.0.0.1:4433", "[2001:db8::1]:4433"},
+		},
+		{
+			name:  "ipv6-and-relay",
+			bytes: "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6102001668747470733a2f2f72656c61792e6578616d706c652f010120010db8000000000000000000000001d122",
+			addrs: []string{"[2001:db8::1]:4433"},
+			relay: "https://relay.example/",
+		},
+		{
+			name:  "ipv4-mapped-ipv6",
+			bytes: "00197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d6101010100000000000000000000ffffc0000201d122",
+			addrs: []string{"[::ffff:192.0.2.1]:4433"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wantBytes, err := hex.DecodeString(tt.bytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			wantAddrs := make([]netaddr.TransportAddr, 0, len(tt.addrs)+1)
+			for _, addr := range tt.addrs {
+				wantAddrs = append(wantAddrs, netaddr.IPAddr{Addr: netip.MustParseAddrPort(addr)})
+			}
+			if tt.relay != "" {
+				relay, err := netaddr.ParseRelayURL(tt.relay)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantAddrs = append([]netaddr.TransportAddr{netaddr.RelayAddr{URL: relay}}, wantAddrs...)
+			}
+			want := netaddr.NewEndpointAddr(id, wantAddrs...)
+
+			got, err := DecodeBytes(wantBytes)
+			if err != nil {
+				t.Fatalf("DecodeBytes(Rust vector): %v", err)
+			}
+			assertEndpointAddrEqual(t, got.Addr(), want)
+
+			if gotBytes := New(want).EncodeBytes(); !bytes.Equal(gotBytes, wantBytes) {
+				t.Fatalf("EncodeBytes = %x, want Rust bytes %x", gotBytes, wantBytes)
+			}
+		})
+	}
+}
+
+func TestIPv6ZoneIsNotEncoded(t *testing.T) {
 	id, err := key.ParseEndpointID("ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ip := netip.AddrPortFrom(netip.MustParseAddr("fe80::1").WithZone("123456789"), 1024)
-	addr := netaddr.NewEndpointAddr(id, netaddr.IPAddr{Addr: ip})
+	addr := netaddr.NewEndpointAddr(id, netaddr.IPAddr{Addr: netip.AddrPortFrom(netip.MustParseAddr("fe80::1").WithZone("123456789"), 1024)})
 	got, err := Decode(Encode(addr))
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
-	assertEndpointAddrEqual(t, got, addr)
+	gotAddr := got.IPAddrs()
+	if len(gotAddr) != 1 || gotAddr[0].String() != "[fe80::1]:1024" {
+		t.Fatalf("decoded IPv6 address = %v, want zone-free address [fe80::1]:1024", gotAddr)
+	}
 }
 
 func TestRoundTripIPv4In6(t *testing.T) {

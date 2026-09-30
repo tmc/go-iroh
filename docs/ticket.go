@@ -314,15 +314,6 @@ func (p *parser) skipTransportAddr() error {
 		if _, err := p.varint(); err != nil { // port
 			return wrapDecodeErr(err)
 		}
-		if family == 1 {
-			// IPv6 socket addresses also carry flowinfo and scope id.
-			if _, err := p.varint(); err != nil {
-				return wrapDecodeErr(err)
-			}
-			if _, err := p.varint(); err != nil {
-				return wrapDecodeErr(err)
-			}
-		}
 		return nil
 	case 2:
 		if _, err := p.varint(); err != nil { // custom address id
