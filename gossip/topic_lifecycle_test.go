@@ -73,7 +73,7 @@ func TestTopicReopenIgnoresPendingNeighborEvents(t *testing.T) {
 				n := 0
 				for _, ev := range events {
 					if ev.Kind == gossipproto.EmitEvent {
-						g.dispatch(ctx, []gossipproto.OutEvent{ev})
+						g.dispatch(context.Background(), []gossipproto.OutEvent{ev})
 						n++
 					}
 				}

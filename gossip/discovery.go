@@ -227,7 +227,7 @@ func (d *Discovery) publishPeerData(data dns.EndpointData) {
 		})...)
 	}
 	g.mu.Unlock()
-	g.dispatch(context.Background(), out)
+	_ = g.dispatch(context.Background(), out)
 }
 
 func (d *Discovery) handlePeerData(id key.EndpointID, b []byte) error {

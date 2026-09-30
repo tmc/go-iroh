@@ -16,6 +16,20 @@ import (
 
 const defaultTopicEventCap = 2048
 
+const (
+	// sendQueueCap is how many messages may wait to be written to one
+	// peer, as Rust iroh-gossip's SEND_QUEUE_CAP.
+	sendQueueCap = 64
+
+	// sendWriteTimeout is how long one write to a peer, including any dial
+	// it needs, may take before the peer is disconnected. A slow peer holds
+	// up its senders, as in Rust iroh-gossip, but Rust waits without limit.
+	// The limit is a deliberate divergence: the writes to peers that stop
+	// reading stall together and time out together, so however many such
+	// peers there are, they hold up the others for about this long.
+	sendWriteTimeout = 10 * time.Second
+)
+
 // JoinOptions configures a topic subscription.
 type JoinOptions struct {
 	// Bootstrap are the peers dialed to join the topic's overlay.
@@ -103,11 +117,16 @@ type Gossip struct {
 	nextGeneration uint64
 	peerAddrs      map[PeerID]netaddr.EndpointAddr
 	peerSenders    map[PeerID]*Sender
+	sendQueues     map[PeerID]*sendQueue
 	metrics        gossipMetrics
 	closed         bool
 	// joinWait is closed and replaced whenever a topic's neighbor set
 	// changes or a topic closes, waking every Joined caller.
 	joinWait chan struct{}
+
+	// testHookDialed, if set, runs after a dial to peer succeeds and before
+	// its connection is published.
+	testHookDialed func(peer PeerID)
 }
 
 // NewGossip returns a Gossip instance for ep.
@@ -120,6 +139,7 @@ func NewGossip(ep *iroh.Endpoint, opts ...GossipOption) *Gossip {
 		generations:    make(map[TopicID]uint64),
 		peerAddrs:      make(map[PeerID]netaddr.EndpointAddr),
 		peerSenders:    make(map[PeerID]*Sender),
+		sendQueues:     make(map[PeerID]*sendQueue),
 	}
 	for _, opt := range opts {
 		opt(g)
@@ -182,13 +202,45 @@ func (g *Gossip) Shutdown(ctx context.Context) {
 	g.neighbors = make(map[TopicID]map[PeerID]struct{})
 	g.generations = make(map[TopicID]uint64)
 	g.wakeJoinWaiters()
+	g.mu.Unlock()
+	_ = g.dispatch(ctx, out)
+
+	// Let the queued Disconnect messages go out, for as long as ctx allows
+	// and at most sendWriteTimeout: a peer that stopped reading is dropped
+	// by its write limit, but a slow one could take that long per message.
+	g.mu.Lock()
+	queues := make([]*sendQueue, 0, len(g.sendQueues))
+	for _, q := range g.sendQueues {
+		queues = append(queues, q)
+	}
+	g.mu.Unlock()
+	drain := time.NewTimer(sendWriteTimeout)
+	defer drain.Stop()
+wait:
+	for _, q := range queues {
+		select {
+		case <-q.done:
+		case <-ctx.Done():
+			break wait
+		case <-drain.C:
+			break wait
+		}
+	}
+
+	g.mu.Lock()
+	var stuck []*Sender
+	for peer, q := range g.sendQueues {
+		stuck = append(stuck, g.dropQueueLocked(peer, q))
+	}
 	senders := make([]*Sender, 0, len(g.peerSenders))
 	for peer, sender := range g.peerSenders {
 		delete(g.peerSenders, peer)
 		senders = append(senders, sender)
 	}
 	g.mu.Unlock()
-	g.dispatch(ctx, out)
+	for _, s := range stuck {
+		closeConn(s)
+	}
 	for _, sender := range senders {
 		_ = sender.Close()
 	}
@@ -213,7 +265,7 @@ func (g *Gossip) Accept(ctx context.Context, conn *iroh.Conn) error {
 	h := Handler{
 		MaxMessageSize: g.maxMessageSize,
 		Handle: func(ctx context.Context, from key.EndpointID, msg Message) error {
-			return g.receive(ctx, from, msg)
+			return g.receive(from, msg)
 		},
 	}
 	err := h.Accept(ctx, conn)
@@ -227,7 +279,7 @@ func (g *Gossip) Accept(ctx context.Context, conn *iroh.Conn) error {
 		Now:  time.Now(),
 	})
 	g.mu.Unlock()
-	g.dispatch(ctx, out)
+	_ = g.dispatch(context.Background(), out)
 	return err
 }
 
@@ -289,7 +341,7 @@ func (g *Gossip) SubscribeWithOpts(ctx context.Context, topic TopicID, opts Join
 		Now: time.Now(),
 	})
 	g.mu.Unlock()
-	g.dispatch(ctx, out)
+	_ = g.dispatch(ctx, out)
 	return t, nil
 }
 
@@ -306,7 +358,7 @@ func (g *Gossip) SubscribeAndJoin(ctx context.Context, topic TopicID, bootstrap 
 	return t, nil
 }
 
-func (g *Gossip) receive(ctx context.Context, from key.EndpointID, msg Message) error {
+func (g *Gossip) receive(from key.EndpointID, msg Message) error {
 	g.metrics.actorTickRx.Add(1)
 	g.metrics.recordRecv(gossipproto.TopicMessage(msg.Message))
 	g.mu.Lock()
@@ -317,10 +369,13 @@ func (g *Gossip) receive(ctx context.Context, from key.EndpointID, msg Message) 
 		Now:     time.Now(),
 	})
 	g.mu.Unlock()
-	g.dispatch(ctx, out)
+	_ = g.dispatch(context.Background(), out)
 	return nil
 }
 
+// command runs cmd on topic. Its sends wait for room in full peer queues for
+// as long as ctx allows; a send that cannot wait longer is abandoned, as if
+// lost, and command returns ctx.Err().
 func (g *Gossip) command(ctx context.Context, topic TopicID, cmd gossipproto.TopicCommand) error {
 	g.metrics.actorTickInEventRx.Add(1)
 	g.mu.Lock()
@@ -335,8 +390,7 @@ func (g *Gossip) command(ctx context.Context, topic TopicID, cmd gossipproto.Top
 		Now:     time.Now(),
 	})
 	g.mu.Unlock()
-	g.dispatch(ctx, out)
-	return nil
+	return g.dispatch(ctx, out)
 }
 
 func (g *Gossip) closeTopic(t *Topic) error {
@@ -367,7 +421,7 @@ func (g *Gossip) closeTopic(t *Topic) error {
 		})
 	}
 	g.mu.Unlock()
-	g.dispatch(context.Background(), out)
+	_ = g.dispatch(context.Background(), out)
 	return nil
 }
 
@@ -382,23 +436,25 @@ func (g *Gossip) handleLocked(in gossipproto.InEvent) []gossipproto.OutEvent {
 	return out
 }
 
-func (g *Gossip) dispatch(ctx context.Context, events []gossipproto.OutEvent) {
+// dispatch acts on events. It does not write to the network: messages are
+// queued for each peer's writer. A full queue blocks the caller, which may be
+// a local Broadcast or another peer's reader goroutine in receive, until the
+// peer's writer makes room or the peer is dropped for exceeding
+// sendWriteTimeout on a write. The wait is deliberate: it is backpressure, as
+// in Rust iroh-gossip.
+//
+// A message that cannot wait because ctx is done is abandoned, as if lost,
+// and dispatch goes on to the remaining events so the protocol state stays
+// consistent. It returns ctx.Err() if any message was abandoned.
+func (g *Gossip) dispatch(ctx context.Context, events []gossipproto.OutEvent) error {
+	var err error
 	for _, ev := range events {
 		g.metrics.actorTickMain.Add(1)
 		switch ev.Kind {
 		case gossipproto.SendMessage:
 			g.metrics.recordSend(ev.Message.Message)
-			if err := g.send(ctx, ev.To, ev.Message); err != nil {
-				g.mu.Lock()
-				out := g.handleLocked(gossipproto.InEvent{
-					Kind: gossipproto.PeerDisconnected,
-					Peer: ev.To,
-					Now:  time.Now(),
-				})
-				g.mu.Unlock()
-				if len(out) > 0 {
-					g.dispatch(ctx, out)
-				}
+			if _, qerr := g.enqueue(ctx, ev.To, sendItem{msg: ev.Message}, true); qerr != nil && err == nil {
+				err = qerr
 			}
 		case gossipproto.EmitEvent:
 			g.emit(ev.Topic, ev.Event, ev.Generation)
@@ -407,12 +463,191 @@ func (g *Gossip) dispatch(ctx context.Context, events []gossipproto.OutEvent) {
 		case gossipproto.ScheduleTimer:
 			g.schedule(ev.After, ev.Timer)
 		case gossipproto.DisconnectPeer:
-			g.disconnect(ev.To)
+			// Behind the peer's queued messages, which include the
+			// Disconnect that goes with this event. If ctx ends first,
+			// abandon those messages and disconnect now.
+			ok, qerr := g.enqueue(ctx, ev.To, sendItem{disconnect: true}, false)
+			if qerr != nil {
+				g.abandonQueue(ev.To)
+			}
+			if !ok {
+				g.disconnect(ev.To)
+			}
+		}
+	}
+	return err
+}
+
+// A sendQueue holds the messages waiting to be written to one peer. A
+// goroutine running [Gossip.writeQueue] writes them in order while the queue
+// is non-empty. g.mu guards the fields.
+type sendQueue struct {
+	items   []sendItem
+	sender  *Sender // the sender being written to, if any
+	dropped bool
+	room    chan struct{}   // closed when an item leaves the queue
+	ctx     context.Context // canceled when the queue is dropped
+	cancel  context.CancelFunc
+	done    chan struct{} // closed when the writer returns
+}
+
+// A sendItem is one message for a peer, or the instruction to close its
+// streams once the messages before it are written.
+type sendItem struct {
+	msg        gossipproto.Message
+	disconnect bool
+}
+
+// enqueue queues item for peer, starting a writer if none is running, or, if
+// start is false, only behind a running writer. If the queue is full, enqueue
+// waits for room, for the queue to be dropped, or for ctx to be done, in which
+// case it returns ctx.Err(). It needs no timer of its own: the writer is
+// always busy with one write, and that write's limit drops the queue. It
+// reports whether item was queued.
+func (g *Gossip) enqueue(ctx context.Context, peer PeerID, item sendItem, start bool) (bool, error) {
+	var q *sendQueue
+	for {
+		g.mu.Lock()
+		if q != nil && q.dropped {
+			// Dropped while we waited: the peer is gone.
+			g.mu.Unlock()
+			return false, nil
+		}
+		q = g.sendQueues[peer]
+		if q == nil {
+			if !start {
+				g.mu.Unlock()
+				return false, nil
+			}
+			q = &sendQueue{done: make(chan struct{})}
+			q.ctx, q.cancel = context.WithCancel(context.Background())
+			g.sendQueues[peer] = q
+			go g.writeQueue(peer, q)
+		}
+		if len(q.items) < sendQueueCap {
+			q.items = append(q.items, item)
+			g.mu.Unlock()
+			return true, nil
+		}
+		if q.room == nil {
+			q.room = make(chan struct{})
+		}
+		room := q.room
+		g.mu.Unlock()
+
+		select {
+		case <-room:
+		case <-ctx.Done():
+			return false, ctx.Err()
 		}
 	}
 }
 
-func (g *Gossip) send(ctx context.Context, peer PeerID, msg gossipproto.Message) error {
+// wakeLocked wakes the enqueue calls waiting for room in q. g.mu must be held.
+func (q *sendQueue) wakeLocked() {
+	if q.room != nil {
+		close(q.room)
+		q.room = nil
+	}
+}
+
+// writeQueue writes q's items to peer until q is empty or dropped. A write
+// that fails, or that takes longer than sendWriteTimeout, disconnects the
+// peer.
+func (g *Gossip) writeQueue(peer PeerID, q *sendQueue) {
+	defer close(q.done)
+	for {
+		g.mu.Lock()
+		if q.dropped || len(q.items) == 0 {
+			if g.sendQueues[peer] == q {
+				delete(g.sendQueues, peer)
+			}
+			q.cancel()
+			g.mu.Unlock()
+			return
+		}
+		item := q.items[0]
+		q.items = q.items[1:]
+		q.wakeLocked()
+		g.mu.Unlock()
+
+		if item.disconnect {
+			g.disconnect(peer)
+			continue
+		}
+		// Closing the connection is the only way to end a stalled
+		// write: it does not watch q.ctx once it is underway.
+		limit := time.AfterFunc(sendWriteTimeout, func() { g.dropPeer(peer, q) })
+		err := g.send(q, peer, item.msg)
+		limit.Stop()
+		if err != nil {
+			g.dropPeer(peer, q)
+			return
+		}
+	}
+}
+
+// dropPeer disconnects peer after a failed or stalled send: it drops the
+// peer's send queue, closing the connection a write may be blocked on, and
+// tells the protocol the peer is gone. It does nothing if q is no longer the
+// peer's queue.
+func (g *Gossip) dropPeer(peer PeerID, q *sendQueue) {
+	g.mu.Lock()
+	if q.dropped || g.sendQueues[peer] != q {
+		g.mu.Unlock()
+		return
+	}
+	stuck := g.dropQueueLocked(peer, q)
+	out := g.handleLocked(gossipproto.InEvent{
+		Kind: gossipproto.PeerDisconnected,
+		Peer: peer,
+		Now:  time.Now(),
+	})
+	g.mu.Unlock()
+	closeConn(stuck)
+	_ = g.dispatch(context.Background(), out)
+}
+
+// abandonQueue drops peer's send queue, closing the connection its writer
+// may be blocked on, without telling the protocol: the protocol has already
+// let the peer go.
+func (g *Gossip) abandonQueue(peer PeerID) {
+	g.mu.Lock()
+	var stuck *Sender
+	if q := g.sendQueues[peer]; q != nil && !q.dropped {
+		stuck = g.dropQueueLocked(peer, q)
+	}
+	g.mu.Unlock()
+	closeConn(stuck)
+}
+
+// dropQueueLocked discards q's pending items and stops its writer. It returns
+// the sender the writer may be blocked on, whose connection the caller must
+// close with [closeConn] after releasing g.mu. g.mu must be held.
+func (g *Gossip) dropQueueLocked(peer PeerID, q *sendQueue) *Sender {
+	q.dropped = true
+	q.items = nil
+	q.wakeLocked()
+	q.cancel()
+	if g.sendQueues[peer] == q {
+		delete(g.sendQueues, peer)
+	}
+	if q.sender != nil && g.peerSenders[peer] == q.sender {
+		delete(g.peerSenders, peer)
+	}
+	return q.sender
+}
+
+// closeConn closes the connection of a sender whose writes are being
+// abandoned, unblocking any write in progress.
+func closeConn(s *Sender) {
+	if s != nil {
+		_ = s.conn.CloseWithError(0, "gossip: peer dropped")
+	}
+}
+
+// send writes msg to peer, dialing it first if there is no connection.
+func (g *Gossip) send(q *sendQueue, peer PeerID, msg gossipproto.Message) error {
 	g.mu.Lock()
 	sender := g.peerSenders[peer]
 	addr, hasAddr := g.peerAddrs[peer]
@@ -421,34 +656,52 @@ func (g *Gossip) send(ctx context.Context, peer PeerID, msg gossipproto.Message)
 		if !hasAddr {
 			return fmt.Errorf("gossip: no address for peer %s", peer)
 		}
-		if err := g.connect(ctx, peer, addr); err != nil {
+		var err error
+		if sender, err = g.connect(q, peer, addr); err != nil {
 			return err
 		}
-		g.mu.Lock()
-		sender = g.peerSenders[peer]
-		g.mu.Unlock()
 	}
 	if sender == nil {
 		return fmt.Errorf("gossip: no sender for peer %s", peer)
 	}
-	return sender.Send(ctx, Message(msg))
+	g.mu.Lock()
+	if q.dropped {
+		g.mu.Unlock()
+		return errors.New("gossip: send queue dropped")
+	}
+	q.sender = sender
+	g.mu.Unlock()
+	return sender.Send(q.ctx, Message(msg))
 }
 
-func (g *Gossip) connect(ctx context.Context, peer PeerID, addr netaddr.EndpointAddr) error {
+// connect dials peer for q's writer and publishes the connection as q's
+// sender. If q is dropped while the dial is in flight, as a timed-out write
+// drops it, the new connection is closed instead: nothing would own it.
+func (g *Gossip) connect(q *sendQueue, peer PeerID, addr netaddr.EndpointAddr) (*Sender, error) {
 	g.metrics.actorTickDialer.Add(1)
-	conn, err := g.ep.Connect(ctx, addr, ALPN)
+	conn, err := g.ep.Connect(q.ctx, addr, ALPN)
 	if err != nil {
 		g.metrics.actorTickDialerFailure.Add(1)
-		return fmt.Errorf("gossip: connect peer: %w", err)
+		return nil, fmt.Errorf("gossip: connect peer: %w", err)
 	}
 	g.metrics.actorTickDialerSuccess.Add(1)
+	if g.testHookDialed != nil {
+		g.testHookDialed(peer)
+	}
+	sender := NewSender(conn, g.maxMessageSize)
 	g.mu.Lock()
-	g.peerSenders[peer] = NewSender(conn, g.maxMessageSize)
+	if q.dropped {
+		g.mu.Unlock()
+		closeConn(sender)
+		return nil, errors.New("gossip: send queue dropped")
+	}
+	g.peerSenders[peer] = sender
+	q.sender = sender
 	g.mu.Unlock()
 	go func() {
 		_ = g.Accept(conn.Context(), conn)
 	}()
-	return nil
+	return sender, nil
 }
 
 // joinWaiter returns a channel closed on the next neighbor-set change. Callers
@@ -547,7 +800,7 @@ func (g *Gossip) schedule(after time.Duration, timer gossipproto.Timer) {
 			Now:   time.Now(),
 		})
 		g.mu.Unlock()
-		g.dispatch(context.Background(), out)
+		_ = g.dispatch(context.Background(), out)
 	})
 }
 
@@ -581,6 +834,9 @@ func (t *Topic) Split() (*Sender, *Receiver) {
 }
 
 // Broadcast sends content to the topic's epidemic overlay.
+//
+// If a neighbor is not keeping up, Broadcast waits for it until ctx is done;
+// then content is not sent to that neighbor, and Broadcast returns ctx.Err().
 func (t *Topic) Broadcast(ctx context.Context, content []byte) error {
 	if t.isClosed() {
 		return errors.New("gossip: topic closed")
@@ -600,7 +856,8 @@ func (s *Sender) Broadcast(ctx context.Context, content []byte) error {
 	return s.topic.Broadcast(ctx, content)
 }
 
-// BroadcastNeighbors sends content to the topic's direct neighbors.
+// BroadcastNeighbors sends content to the topic's direct neighbors. It waits
+// for a neighbor that is not keeping up as [Topic.Broadcast] does.
 func (t *Topic) BroadcastNeighbors(ctx context.Context, content []byte) error {
 	if t.isClosed() {
 		return errors.New("gossip: topic closed")
