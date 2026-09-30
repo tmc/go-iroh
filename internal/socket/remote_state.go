@@ -61,6 +61,10 @@ const (
 // hole-punching is still gated separately.
 var ErrExtensionNotNegotiated = errors.New("socket: QUIC extension not negotiated (qng X1/X2/X3 gate)")
 
+// ErrNotClient is returned by hole-punching when no connection to the remote
+// is one this endpoint dialed. Only the client side starts NAT traversal.
+var ErrNotClient = errors.New("socket: nat traversal needs a client connection")
+
 // Connection is the minimal view of a QUIC connection the [RemoteStateActor]
 // needs. The iroh package adapts a qng *quic.Conn to it; tests use a fake. It
 // stays small on purpose: the actor only reads liveness and RTT.
@@ -85,9 +89,14 @@ type pathOpeningConnection interface {
 	OpenPath(context.Context) error
 }
 
+// natTraversalRoundConnection is a connection that can start QNT rounds.
+// Only the client side may: noq-proto's initiate_nat_traversal_round fails on
+// the server, and iroh's trigger_holepunching picks client connections only
+// (iroh 1.2.0 src/socket/remote_map/remote_state.rs:518-528).
 type natTraversalRoundConnection interface {
 	AddNATTraversalAddress(netip.AddrPort) error
 	InitiateNATTraversalRound(context.Context) ([]netip.AddrPort, error)
+	IsClient() bool
 }
 
 type natTraversalRemoteAddressConnection interface {
@@ -881,9 +890,11 @@ func (a *RemoteStateActor) ValidateDirectPath(ctx context.Context) error {
 }
 
 // TriggerHolepunch attempts to open a new direct path by NAT traversal. It is
-// gated on an active qng connection with QNT support: socket advertises its
-// already-known local candidates and asks qng to initiate one NAT traversal
-// round. qng owns QNT frames, probe timers, response matching, and path opening.
+// gated on an active qng connection with QNT support that this endpoint
+// dialed: socket advertises its already-known local candidates and asks qng to
+// initiate one NAT traversal round. qng owns QNT frames, probe timers, response
+// matching, and path opening. It returns [ErrNotClient] if every such
+// connection was accepted.
 func (a *RemoteStateActor) TriggerHolepunch() error {
 	a.mu.Lock()
 	conns := make([]Connection, 0, len(a.conns))
@@ -894,6 +905,7 @@ func (a *RemoteStateActor) TriggerHolepunch() error {
 	a.mu.Unlock()
 
 	negotiated := false
+	server := false
 	var target natTraversalRoundConnection
 	for _, conn := range conns {
 		mp, ok := conn.(multipathConnection)
@@ -901,13 +913,22 @@ func (a *RemoteStateActor) TriggerHolepunch() error {
 			continue
 		}
 		negotiated = true
-		if qnt, ok := conn.(natTraversalRoundConnection); ok {
-			target = qnt
-			break
+		qnt, ok := conn.(natTraversalRoundConnection)
+		if !ok {
+			continue
 		}
+		if !qnt.IsClient() {
+			server = true
+			continue
+		}
+		target = qnt
+		break
 	}
 	if !negotiated {
 		return ErrExtensionNotNegotiated
+	}
+	if target == nil && server {
+		return ErrNotClient
 	}
 	if target == nil {
 		return ErrExtensionNotNegotiated
@@ -916,8 +937,9 @@ func (a *RemoteStateActor) TriggerHolepunch() error {
 }
 
 // TriggerHolepunchConn attempts NAT traversal on conn. It returns
-// [context.Canceled] if conn is no longer registered, or
-// [ErrExtensionNotNegotiated] if conn does not support QNT.
+// [context.Canceled] if conn is no longer registered,
+// [ErrExtensionNotNegotiated] if conn does not support QNT, or [ErrNotClient]
+// if this endpoint accepted conn.
 func (a *RemoteStateActor) TriggerHolepunchConn(conn Connection) error {
 	a.mu.Lock()
 	_, registered := a.conns[conn]
@@ -933,6 +955,9 @@ func (a *RemoteStateActor) TriggerHolepunchConn(conn Connection) error {
 	target, ok := conn.(natTraversalRoundConnection)
 	if !ok {
 		return ErrExtensionNotNegotiated
+	}
+	if !target.IsClient() {
+		return ErrNotClient
 	}
 	return a.triggerHolepunch(target, candidates)
 }

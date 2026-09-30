@@ -2,6 +2,7 @@ package socket
 
 import (
 	"context"
+	"errors"
 	"iter"
 	"net/netip"
 	"sync"
@@ -30,6 +31,7 @@ type fakeConn struct {
 	removedNAT          []netip.AddrPort
 	remoteNAT           []netip.AddrPort
 	addNATErr           error
+	server              bool
 	done                chan struct{}
 	once                sync.Once
 }
@@ -42,6 +44,7 @@ func (c *fakeConn) SmoothedRTT() time.Duration { return c.rtt }
 func (c *fakeConn) Done() <-chan struct{}      { return c.done }
 func (c *fakeConn) RemoteAddr() Addr           { return c.addr }
 func (c *fakeConn) MultipathNegotiated() bool  { return c.multipathNegotiated }
+func (c *fakeConn) IsClient() bool             { return !c.server }
 func (c *fakeConn) Paths() []PathInfo {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -495,6 +498,62 @@ func TestActorTriggerHolepunchConnUsesRequestedConnection(t *testing.T) {
 			t.Fatalf("second connection InitiateNATTraversalRound calls = %d, want 1", got)
 		}
 	})
+}
+
+// TestActorTriggerHolepunchSkipsServerConnections checks that the actor starts
+// QNT rounds only on connections it dialed, as iroh does
+// (iroh 1.2.0 src/socket/remote_map/remote_state.rs:518-528).
+func TestActorTriggerHolepunchSkipsServerConnections(t *testing.T) {
+	tests := []struct {
+		name       string
+		server     []bool // one connection per entry
+		want       error
+		wantRounds []int64
+	}{
+		{"server only", []bool{true}, ErrNotClient, []int64{0}},
+		{"server then client", []bool{true, false}, nil, []int64{0, 1}},
+		{"client only", []bool{false}, nil, []int64{1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+				id := testEndpointID(t)
+				actor := m.Actor(id)
+				var conns []*fakeConn
+				for i, server := range tt.server {
+					c := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), uint16(9+i))), time.Millisecond)
+					c.multipathNegotiated = true
+					c.server = server
+					defer c.Close()
+					m.AddConnection(id, c)
+					conns = append(conns, c)
+				}
+				synctest.Wait()
+
+				if err := actor.TriggerHolepunch(); !errors.Is(err, tt.want) {
+					t.Fatalf("TriggerHolepunch = %v, want %v", err, tt.want)
+				}
+				for i, c := range conns {
+					if got := c.initiateRoundCalls.Load(); got != tt.wantRounds[i] {
+						t.Errorf("conn %d InitiateNATTraversalRound calls = %d, want %d", i, got, tt.wantRounds[i])
+					}
+					want := error(nil)
+					if c.server {
+						want = ErrNotClient
+					}
+					if err := actor.TriggerHolepunchConn(c); !errors.Is(err, want) {
+						t.Errorf("conn %d TriggerHolepunchConn = %v, want %v", i, err, want)
+					}
+					if c.server && c.initiateRoundCalls.Load() != 0 {
+						t.Errorf("conn %d: server connection started a QNT round", i)
+					}
+				}
+			})
+		})
+	}
 }
 
 // TestActorSendDatagramBlackhole asserts the blackhole invariant: SendDatagram

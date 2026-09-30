@@ -20,6 +20,12 @@ import (
 // when the n0_nat_traversal extension has not been negotiated.
 var ErrNATTraversalNotNegotiated = errors.New("quic: n0 nat traversal not negotiated")
 
+// ErrNATTraversalNotClient is returned by [Conn.InitiateNATTraversalRound] on
+// the server side of a connection. Only the client starts QNT rounds: a client
+// that receives REACH_OUT closes the connection with PROTOCOL_VIOLATION
+// (noq-proto 1.2.0 src/connection/mod.rs:5507-5515).
+var ErrNATTraversalNotClient = errors.New("quic: nat traversal round needs the client side")
+
 // ErrNATTraversalNotEnoughAddresses is returned when QNT is negotiated but a
 // traversal round cannot start because either the local candidate set or the
 // peer's ADD_ADDRESS set is empty.
@@ -172,9 +178,15 @@ func (c *Conn) AddRemoteNATTraversalAddress(addr netip.AddrPort) error {
 // REACH_OUT frames, owns NAT probe retry scheduling, matches PATH_RESPONSE
 // frames, and opens validated four-tuples as multipath paths. The returned
 // addresses are informational; qng, not socket, owns probing.
+//
+// On the server side it returns [ErrNATTraversalNotClient], as noq-proto's
+// initiate_nat_traversal_round does (src/connection/mod.rs:7163).
 func (c *Conn) InitiateNATTraversalRound(ctx context.Context) ([]netip.AddrPort, error) {
 	if !c.qntAPINegotiated() {
 		return nil, ErrNATTraversalNotNegotiated
+	}
+	if c.perspective == protocol.PerspectiveServer {
+		return nil, ErrNATTraversalNotClient
 	}
 	st := c.qntLocalState()
 	st.mu.Lock()

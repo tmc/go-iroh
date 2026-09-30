@@ -4257,6 +4257,9 @@ func (c *Conn) RemoteAddr() net.Addr { return c.conn.RemoteAddr() }
 // accepted. It is only meaningful on server-side early connections.
 func (c *Conn) RemoteAddrValidated() bool { return c.remoteAddrValidated }
 
+// IsClient reports whether this endpoint is the client of the connection.
+func (c *Conn) IsClient() bool { return c.perspective == protocol.PerspectiveClient }
+
 // getPathManager lazily initializes the Conn's pathManagerOutgoing.
 // May create multiple pathManagerOutgoing objects if called concurrently.
 func (c *Conn) getPathManager() *pathManagerOutgoing {

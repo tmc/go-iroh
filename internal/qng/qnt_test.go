@@ -465,6 +465,42 @@ func TestQNTRoundQueuesReachOutFramesToFramer(t *testing.T) {
 	}
 }
 
+// TestQNTServerRoundQueuesNoReachOut checks that the server side of a
+// connection never starts a QNT round. noq-proto 1.2.0 closes a connection
+// with PROTOCOL_VIOLATION when its client receives REACH_OUT
+// (src/connection/mod.rs:5507-5515).
+func TestQNTServerRoundQueuesNoReachOut(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	c.perspective = protocol.PerspectiveServer
+	c.framer = newFramer(noopConnFC())
+	c.sendingScheduled = make(chan struct{}, 1)
+	local := netip.MustParseAddrPort("192.0.2.1:1234")
+	remote := netip.MustParseAddrPort("198.51.100.1:1001")
+
+	if err := c.AddNATTraversalAddress(local); err != nil {
+		t.Fatalf("AddNATTraversalAddress: %v", err)
+	}
+	if err := c.AddRemoteNATTraversalAddress(remote); err != nil {
+		t.Fatalf("AddRemoteNATTraversalAddress: %v", err)
+	}
+	addrs, err := c.InitiateNATTraversalRound(context.Background())
+	if !errors.Is(err, ErrNATTraversalNotClient) {
+		t.Fatalf("InitiateNATTraversalRound err = %v, want ErrNATTraversalNotClient", err)
+	}
+	if len(addrs) != 0 {
+		t.Fatalf("InitiateNATTraversalRound addresses = %v, want none", addrs)
+	}
+	if pending := c.qntPendingReachOutFrames(); len(pending) != 0 {
+		t.Fatalf("pending REACH_OUT frames = %+v, want none", pending)
+	}
+	if queued := queuedReachOutFrames(c); len(queued) != 0 {
+		t.Fatalf("queued REACH_OUT frames = %+v, want none", queued)
+	}
+	if probes := c.qntPendingProbeAddresses(); len(probes) != 0 {
+		t.Fatalf("pending probes = %v, want none", probes)
+	}
+}
+
 func TestQNTRoundClearsPreviousPendingState(t *testing.T) {
 	c := newNegotiatedQNTConn(8, 16)
 	local1 := netip.MustParseAddrPort("192.0.2.1:1234")

@@ -791,11 +791,17 @@ func (a *connAdapter) RemoveNATTraversalAddress(addr netip.AddrPort) error {
 // InitiateNATTraversalRound asks qng to start one QNT round.
 func (a *connAdapter) InitiateNATTraversalRound(ctx context.Context) ([]netip.AddrPort, error) {
 	addrs, err := a.qc.InitiateNATTraversalRound(ctx)
-	if errors.Is(err, quic.ErrNATTraversalNotNegotiated) {
+	switch {
+	case errors.Is(err, quic.ErrNATTraversalNotNegotiated):
 		return nil, socket.ErrExtensionNotNegotiated
+	case errors.Is(err, quic.ErrNATTraversalNotClient):
+		return nil, socket.ErrNotClient
 	}
 	return addrs, err
 }
+
+// IsClient reports whether this endpoint dialed the connection.
+func (a *connAdapter) IsClient() bool { return a.qc.IsClient() }
 
 // NATTraversalAddresses reports the remote QNT candidate set qng has learned.
 func (a *connAdapter) NATTraversalAddresses() ([]netip.AddrPort, error) {
