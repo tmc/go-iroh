@@ -67,7 +67,7 @@ func ExampleDecodeBlobChunksToWriter() {
 	hash, ranges, encoded := exampleChunkProof()
 	var data bytes.Buffer
 	size, err := blobs.DecodeBlobChunksToWriter(hash, bytes.NewReader(encoded), ranges, &data)
-	fmt.Println(string(data.Bytes()), size, err)
+	fmt.Println(data.String(), size, err)
 	// Output: hello 5 <nil>
 }
 
@@ -76,7 +76,7 @@ func ExampleDownloadBlobChunks() {
 	stream := &exampleBlobStream{Reader: bytes.NewReader(encoded)}
 	var data bytes.Buffer
 	size, err := blobs.DownloadBlobChunks(context.Background(), stream, hash, ranges, &data)
-	fmt.Println(string(data.Bytes()), size, err)
+	fmt.Println(data.String(), size, err)
 	// Output: hello 5 <nil>
 }
 
