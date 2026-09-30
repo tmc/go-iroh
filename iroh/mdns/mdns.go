@@ -46,10 +46,12 @@ var (
 // Discovery publishes and resolves iroh endpoint addressing information over
 // multicast DNS. The zero value is not usable; create one with [New].
 //
-// One DNS-SD instance carries one SRV record and so one port. An endpoint whose
+// A Discovery announces one SRV record and so one port. An endpoint whose
 // direct addresses do not all share a port is announced on the port most of
 // them use, lowest port first on a tie, and the rest are dropped; see
-// [Discovery.Publish] for how that is reported.
+// [Discovery.Publish] for how that is reported. It resolves every port of an
+// announcement with several SRV records, as Rust sends for an endpoint bound
+// to more than one port.
 type Discovery struct {
 	id          key.EndpointID
 	serviceName string

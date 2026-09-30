@@ -18,6 +18,15 @@ import (
 // counted as answers.
 const goV023Announcement = "000084000000000500000000075f69726f687631045f756470056c6f63616c00000c000100000078004934677972756c70766a3573686d6835697379656d636f6a71347469366173696c7776766a32736679766a647777347a747571617361075f69726f687631045f756470056c6f63616c0034677972756c70766a3573686d6835697379656d636f6a71347469366173696c7776766a32736679766a647777347a747571617361075f69726f687631045f756470056c6f63616c0000210001000000780042000000001e6134677972756c70766a3573686d6835697379656d636f6a71347469366173696c7776766a32736679766a647777347a747571617361056c6f63616c0034677972756c70766a3573686d6835697379656d636f6a71347469366173696c7776766a32736679766a647777347a747571617361075f69726f687631045f756470056c6f63616c000010000100000078000034677972756c70766a3573686d6835697379656d636f6a71347469366173696c7776766a32736679766a647777347a747571617361056c6f63616c0000010001000000780004c000020134677972756c70766a3573686d6835697379656d636f6a71347469366173696c7776766a32736679766a647777347a747571617361056c6f63616c00001c000100000078001020010db8000000000000000000000001"
 
+// rustAnnouncement is a packet swarm-discovery 0.6.3 multicast for
+// go-iroh-examples' interop/mdns "mdns_peer announce" (iroh 1.1.0,
+// iroh-mdns-address-lookup 0.6.0, hickory-proto 0.26.3), captured off
+// 224.0.0.251:5353. It announces rustEndpointID at 127.0.0.1:4242 and
+// [::1]:4243 with a relay URL and user data: an SRV record per port, each
+// naming its own host, then the TXT record, with the address records in the
+// additional section and no PTR record.
+const rustAnnouncement = "00008400000000030000000234677972756c70766a3573686d6835697379656d636f6a71347469366173696c7776766a32736679766a647777347a747571617361075f69726f687631045f756470056c6f63616c000021000100000000004700000000109239677972756c70766a3573686d6835697379656d636f6a71347469366173696c7776766a32736679766a647777347a7475716173612d34323432056c6f63616c00c00c0021000100000000004700000000109339677972756c70766a3573686d6835697379656d636f6a71347469366173696c7776766a32736679766a647777347a7475716173612d34323433056c6f63616c00c00c0010000100000000003a2172656c61793d68747470733a2f2f72656c61792e6578616d706c652e636f6d2e2f17757365722d646174613d727573742d616e6e6f756e6365c065000100010000000000047f000001c0b8001c000100000000001000000000000000000000000000000001"
+
 const rustEndpointID = "362345bea9ec8ec3f512c11827261c9a3c092176ad53a9171548ed6e66748024"
 
 // section records where a resource record sits in a DNS message.
@@ -179,5 +188,42 @@ func TestParseGoV023Announcement(t *testing.T) {
 	}
 	if !sameAddrPorts(got.Data.IPAddrs(), want) {
 		t.Errorf("IPAddrs = %v, want %v", got.Data.IPAddrs(), want)
+	}
+}
+
+func TestParseRustAnnouncement(t *testing.T) {
+	packet, err := hex.DecodeString(rustAnnouncement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLayout := []rrLayout{
+		{answer, dnsTypeSRV, 0x47},
+		{answer, dnsTypeSRV, 0x47},
+		{answer, dnsTypeTXT, 0x3a},
+		{additional, dnsTypeA, 4},
+		{additional, dnsTypeAAAA, 16},
+	}
+	if got := layout(t, packet); !slices.Equal(got, wantLayout) {
+		t.Fatalf("layout = %v, want %v", got, wantLayout)
+	}
+	got, ok := parseAnnouncement(packet, DefaultServiceName)
+	if !ok {
+		t.Fatal("parseAnnouncement failed")
+	}
+	if got.ID != testEndpointID(t) {
+		t.Errorf("ID = %v, want %v", got.ID, testEndpointID(t))
+	}
+	want := []netip.AddrPort{
+		netip.MustParseAddrPort("127.0.0.1:4242"),
+		netip.MustParseAddrPort("[::1]:4243"),
+	}
+	if !sameAddrPorts(got.Data.IPAddrs(), want) {
+		t.Errorf("IPAddrs = %v, want %v", got.Data.IPAddrs(), want)
+	}
+	if relays := got.Data.RelayURLs(); len(relays) != 1 || relays[0].String() != "https://relay.example.com./" {
+		t.Errorf("RelayURLs = %v, want [https://relay.example.com./]", relays)
+	}
+	if user := got.Data.UserData(); user == nil || user.String() != "rust-announce" {
+		t.Errorf("UserData = %v, want rust-announce", user)
 	}
 }

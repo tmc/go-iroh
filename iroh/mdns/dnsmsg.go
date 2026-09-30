@@ -206,10 +206,13 @@ func parseAnnouncement(packet []byte, service string) (dns.EndpointInfo, bool) {
 	instService := "." + serviceName(service)
 	hosts := make(map[string][]netip.Addr)
 	txt := make(map[string]map[string]string)
-	srv := make(map[string]struct {
+	// An instance may have several SRV records: swarm-discovery sends one
+	// per port, each naming its own host (sender.rs:180-187).
+	type target struct {
 		port uint16
 		host string
-	})
+	}
+	srv := make(map[string][]target)
 	instances := make(map[string]struct{})
 	for _, rr := range msg.answers {
 		switch rr.typ {
@@ -218,10 +221,9 @@ func parseAnnouncement(packet []byte, service string) (dns.EndpointInfo, bool) {
 				instances[rr.ptr] = struct{}{}
 			}
 		case dnsTypeSRV:
-			srv[rr.name] = struct {
-				port uint16
-				host string
-			}{port: rr.port, host: rr.target}
+			if rr.port != 0 {
+				srv[rr.name] = append(srv[rr.name], target{rr.port, rr.target})
+			}
 			instances[rr.name] = struct{}{}
 		case dnsTypeTXT:
 			txt[rr.name] = rr.txt
@@ -239,15 +241,12 @@ func parseAnnouncement(packet []byte, service string) (dns.EndpointInfo, bool) {
 		if err != nil {
 			continue
 		}
-		s, ok := srv[inst]
-		if !ok || s.port == 0 {
-			continue
-		}
 		var data announcementData
 		data.id = id
-		data.port = s.port
-		for _, ip := range hosts[s.host] {
-			data.ips = append(data.ips, netip.AddrPortFrom(ip, s.port))
+		for _, s := range srv[inst] {
+			for _, ip := range hosts[s.host] {
+				data.ips = append(data.ips, netip.AddrPortFrom(ip, s.port))
+			}
 		}
 		if len(data.ips) == 0 {
 			continue
