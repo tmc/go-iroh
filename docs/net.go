@@ -74,6 +74,8 @@ func (h *Handler) Accept(ctx context.Context, conn *iroh.Conn) error {
 	if err != nil {
 		return fmt.Errorf("docs: read init: %w", err)
 	}
+	// A go-iroh v0.2.3 or earlier dialer opens with a heads report and skips
+	// reconciliation when the heads match.
 	if msg.Kind == syncMessageReport {
 		if h.Allow != nil && !h.Allow(msg.Namespace, conn.RemoteID()) {
 			if err := writeSyncFrame(s, syncWireMessage{Kind: syncMessageAbort, Reason: AbortNotFound}); err != nil {
@@ -136,28 +138,9 @@ func Sync(ctx context.Context, ep *iroh.Endpoint, addr netaddr.EndpointAddr, nam
 		}
 	}()
 
+	// The first frame is Init, as in iroh-docs's run_alice
+	// (src/net/codec.rs:105-116): Rust's Message has no report variant.
 	h := Handler{Store: store, BlobStore: blobStore, Config: config}
-	heads := store.encodeSyncHeads(namespace)
-	if err := writeSyncFrame(s, syncWireMessage{Kind: syncMessageReport, Namespace: namespace, Report: liveSyncReport{
-		Namespace: namespace,
-		Heads:     heads,
-	}}); err != nil {
-		return SyncOutcome{}, fmt.Errorf("docs: write sync report: %w", err)
-	}
-	report, err := readSyncFrame(s)
-	if err != nil {
-		return SyncOutcome{}, fmt.Errorf("docs: read sync report: %w", err)
-	}
-	if report.Kind == syncMessageAbort {
-		return SyncOutcome{}, fmt.Errorf("docs: sync aborted: %v", report.Reason)
-	}
-	if report.Kind != syncMessageReport || report.Report.Namespace != namespace {
-		return SyncOutcome{}, fmt.Errorf("docs: expected sync report")
-	}
-	if bytes.Equal(report.Report.Heads, heads) {
-		ok = true
-		return SyncOutcome{}, nil
-	}
 	init := store.InitialMessageInNamespace(namespace)
 	if err := writeSyncFrame(s, syncWireMessage{Kind: syncMessageInit, Namespace: namespace, Message: init}); err != nil {
 		return SyncOutcome{}, fmt.Errorf("docs: write init: %w", err)
