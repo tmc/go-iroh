@@ -1,5 +1,3 @@
-//go:build gaptests
-
 package docs
 
 import (
@@ -9,12 +7,11 @@ import (
 	"time"
 )
 
-// These tests propose a stronger boundary than the currently documented
-// memory-first insertion contract: the persistence gate also owns mutation,
-// and recovery must not announce an insertion waiting for its first save.
-// Holding persistMu makes the unsaved interval deterministic; no storage
-// failure or scheduler-dependent event order is needed.
-func TestFileStoreGapMutationBeforeSaveGate(t *testing.T) {
+// The persistence gate owns mutation, so recovery must not announce an
+// insertion waiting for its first save.
+// Holding persistMu blocks saving. The negative checks wait up to 100 ms for
+// the insertion goroutine to attempt mutation before checking visibility.
+func TestFileStoreMutationWaitsForSaveGate(t *testing.T) {
 	store, entry, finish := blockedFileStoreInsert(t)
 	defer finish()
 	if store.Len() != 0 {
@@ -25,7 +22,7 @@ func TestFileStoreGapMutationBeforeSaveGate(t *testing.T) {
 	}
 }
 
-func TestFileStoreGapRecoveryAnnouncesPendingInsert(t *testing.T) {
+func TestFileStoreRecoveryExcludesPendingInsert(t *testing.T) {
 	store, entry, finish := blockedFileStoreInsert(t)
 	defer finish()
 	events := store.snapshotEvents(entry.Entry.Namespace())
@@ -34,9 +31,9 @@ func TestFileStoreGapRecoveryAnnouncesPendingInsert(t *testing.T) {
 	}
 }
 
-// blockedFileStoreInsert returns with the insertion either visible in memory
-// or still waiting at the held persistence gate. The caller owns the gate until
-// finish; Put cannot save or publish an insertion event before then.
+// blockedFileStoreInsert holds the persistence gate while starting an insert.
+// The caller owns the gate until finish; Put cannot mutate, save, or publish
+// an insertion event before then.
 func blockedFileStoreInsert(t *testing.T) (*MemoryStore, SignedEntry, func()) {
 	t.Helper()
 	namespace := NewNamespaceSecret(repeat32(0xb2))
@@ -54,8 +51,8 @@ func blockedFileStoreInsert(t *testing.T) (*MemoryStore, SignedEntry, func()) {
 		done <- store.Put(entry)
 	}()
 	<-started
-	// The first observed mutation proves the gap. If mutations are gated, a
-	// bounded wait ends with an empty store and the stronger contract passes.
+	// Give the insertion goroutine up to 100 ms to attempt mutation. A
+	// gated insertion leaves the store empty until finish releases the gate.
 	deadline := time.NewTimer(100 * time.Millisecond)
 	defer deadline.Stop()
 	poll := time.NewTicker(time.Millisecond)
@@ -84,10 +81,9 @@ wait:
 	}
 }
 
-// Recovery currently publishes its newly allocated sequence before the insert
-// event allocated earlier in the same Put. This deterministic ordering test
-// assumes Sequence is monotonic within a subscriber stream.
-func TestFileStoreGapRecoverySequenceOrder(t *testing.T) {
+// Recovery follows the insertion event allocated earlier in the same Put,
+// keeping sequences monotonic within a subscriber stream.
+func TestFileStoreRecoverySequenceOrder(t *testing.T) {
 	namespace := NewNamespaceSecret(repeat32(0xb2))
 	author := NewAuthor(repeat32(0xa1))
 	dir := filepath.Join(t.TempDir(), "store")

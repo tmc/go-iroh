@@ -9,7 +9,8 @@ import (
 
 // NewFileStore opens a store that persists inserts to path. Check
 // [InsertOutcome.Err] for save failures; failed saves leave inserts in memory.
-// Concurrent saves on this store are serialized through snapshot and rename.
+// Inserts, saves, and event publication are serialized. Readers may observe
+// an insertion while its save is in progress or after its save fails.
 func NewFileStore(path string) (*MemoryStore, error) {
 	if path == "" {
 		return nil, errors.New("docs: empty store file path")
@@ -43,7 +44,10 @@ func (s *MemoryStore) SaveFile(path string) error {
 	defer s.persistMu.Unlock()
 	err := s.saveFile(path)
 	if path == s.persistPath {
-		s.setPersistError(err)
+		event, events := s.setPersistError(err)
+		if events != nil {
+			events.Send(event)
+		}
 	}
 	return err
 }

@@ -30,7 +30,7 @@ func (o InsertOutcome) Err() error { return o.err }
 // MemoryStore is an in-memory document entry store.
 type MemoryStore struct {
 	mu          sync.RWMutex
-	persistMu   sync.Mutex
+	persistMu   sync.Mutex // serializes mutation, persistence, and event publication
 	entries     map[string]SignedEntry
 	origins     map[string]InsertOrigin
 	events      *storeWatcher
@@ -426,6 +426,8 @@ func (s *MemoryStore) Put(entry SignedEntry) InsertOutcome {
 }
 
 func (s *MemoryStore) put(entry SignedEntry) InsertOutcome {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	outcome, _, _ := s.putEntry(entry, InsertOrigin{}, false)
 	return outcome
 }
@@ -434,17 +436,20 @@ func (s *MemoryStore) put(entry SignedEntry) InsertOutcome {
 // descendant keys exactly as [MemoryStore.Put] does. If a previous save failed,
 // even an unchanged insertion retries saving the current store.
 func (s *MemoryStore) PutWithOrigin(entry SignedEntry, origin InsertOrigin) InsertOutcome {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	outcome, event, events := s.putEntry(entry, origin, true)
-	if s.persistPath != "" {
-		s.persistMu.Lock()
-		if outcome.Inserted() || s.PersistError() != nil {
-			outcome.err = s.saveFile(s.persistPath)
-			s.setPersistError(outcome.err)
-		}
-		s.persistMu.Unlock()
+	var recovery StoreEvent
+	var recoveryEvents *storeWatcher
+	if s.persistPath != "" && (outcome.Inserted() || s.PersistError() != nil) {
+		outcome.err = s.saveFile(s.persistPath)
+		recovery, recoveryEvents = s.setPersistError(outcome.err)
 	}
 	if outcome.Inserted() && outcome.err == nil && events != nil {
 		events.Send(event)
+	}
+	if recoveryEvents != nil {
+		recoveryEvents.Send(recovery)
 	}
 	return outcome
 }
@@ -462,7 +467,9 @@ func (s *MemoryStore) PersistError() error {
 	return s.persistErr
 }
 
-func (s *MemoryStore) setPersistError(err error) {
+// setPersistError updates persistence state while persistMu is held. The caller
+// publishes recovery after any earlier insertion event.
+func (s *MemoryStore) setPersistError(err error) (StoreEvent, *storeWatcher) {
 	s.mu.Lock()
 	recovered := s.persistErr != nil && err == nil
 	s.persistErr = err
@@ -473,12 +480,15 @@ func (s *MemoryStore) setPersistError(err error) {
 	}
 	events := s.events
 	s.mu.Unlock()
-	if recovered && events != nil {
-		events.Send(event)
+	if recovered {
+		return event, events
 	}
+	return StoreEvent{}, nil
 }
 
 func (s *MemoryStore) contentReady(hash blobs.Hash) {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	s.mu.Lock()
 	s.seq++
 	event := StoreEvent{
