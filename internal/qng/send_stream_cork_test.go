@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
@@ -54,27 +55,29 @@ func TestSendStreamIsolatedWriteWakesSenderImmediately(t *testing.T) {
 // A stream drained in the middle of a burst is corked: the next write must not
 // wake the sender on its own, so the writes behind it can fill a packet.
 func TestSendStreamCorksAfterBurstDrain(t *testing.T) {
-	str, sender := newCorkTestStream()
-	for range sendStreamBurstMinWrites {
+	synctest.Test(t, func(t *testing.T) {
+		str, sender := newCorkTestStream()
+		for range sendStreamBurstMinWrites {
+			if _, err := str.Write(make([]byte, 32)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		drainOnce(t, str)
+		armBurst(str)
+		before := sender.count()
 		if _, err := str.Write(make([]byte, 32)); err != nil {
 			t.Fatal(err)
 		}
-	}
-	drainOnce(t, str)
-	armBurst(str)
-	before := sender.count()
-	if _, err := str.Write(make([]byte, 32)); err != nil {
-		t.Fatal(err)
-	}
-	if got := sender.count(); got != before {
-		t.Fatalf("sender woken %d times after the burst drain, want 0: the write was not corked", got-before)
-	}
-	str.mutex.Lock()
-	corked := str.corkPending
-	str.mutex.Unlock()
-	if !corked {
-		t.Fatal("corkPending not set")
-	}
+		if got := sender.count(); got != before {
+			t.Fatalf("sender woken %d times after the burst drain, want 0: the write was not corked", got-before)
+		}
+		str.mutex.Lock()
+		corked := str.corkPending
+		str.mutex.Unlock()
+		if !corked {
+			t.Fatal("corkPending not set")
+		}
+	})
 }
 
 // A stream drained after only a few writes is not in a burst, so the next
@@ -133,31 +136,33 @@ func TestSendStreamCorkReleasesAtThreshold(t *testing.T) {
 // A corked write must still reach the sender when the tail delay expires;
 // otherwise a stream that stops writing mid-burst stalls.
 func TestSendStreamCorkTimerWakesSender(t *testing.T) {
-	str, sender := newCorkTestStream()
-	for range sendStreamBurstMinWrites {
+	synctest.Test(t, func(t *testing.T) {
+		str, sender := newCorkTestStream()
+		for range sendStreamBurstMinWrites {
+			if _, err := str.Write(make([]byte, 32)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		drainOnce(t, str)
+		armBurst(str)
+		// Discard wakeups from the burst above, so the receive below can only
+		// observe a wakeup caused by the corked write's timer.
+		for len(sender.ch) > 0 {
+			<-sender.ch
+		}
+		before := sender.count()
 		if _, err := str.Write(make([]byte, 32)); err != nil {
 			t.Fatal(err)
 		}
-	}
-	drainOnce(t, str)
-	armBurst(str)
-	// Discard wakeups from the burst above, so the receive below can only
-	// observe a wakeup caused by the corked write's timer.
-	for len(sender.ch) > 0 {
-		<-sender.ch
-	}
-	before := sender.count()
-	if _, err := str.Write(make([]byte, 32)); err != nil {
-		t.Fatal(err)
-	}
-	if sender.count() != before {
-		t.Fatal("write was not corked, so this test would not exercise the timer")
-	}
-	select {
-	case <-sender.ch:
-	case <-time.After(2 * time.Second):
-		t.Fatal("cork timer never woke the sender: a stream that stops writing mid-burst would stall")
-	}
+		if sender.count() != before {
+			t.Fatal("write was not corked, so this test would not exercise the timer")
+		}
+		select {
+		case <-sender.ch:
+		case <-time.After(2 * time.Second):
+			t.Fatal("cork timer never woke the sender: a stream that stops writing mid-burst would stall")
+		}
+	})
 }
 
 // armBurst puts the stream in the state a burst drain leaves it in, without
