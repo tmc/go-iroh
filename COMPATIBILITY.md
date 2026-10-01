@@ -150,7 +150,7 @@ See the [harness README](https://github.com/tmc/go-iroh/blob/compat-harness/iroh
 This hand-written appendix records API and wire changes the matrix cannot
 show. Report generation preserves it.
 
-### v0.3.0 (unreleased)
+### v0.3.0
 
 - Added arbitrary blob chunk-range encoding, decoding, and downloads through
   `EncodeBlobChunks`, `DecodeBlobChunks`, `DecodeBlobChunksToWriter`,
