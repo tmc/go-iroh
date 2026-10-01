@@ -4,7 +4,7 @@ go-iroh is an independent Go implementation of iroh wire v1. This matrix records
 
 Go-client↔Go-relay pairings contain no Rust peer, so they are outside this matrix's scope; that path is covered by the standard test suite.
 
-Generated from commit `bb923ea14d0d39b32393c2d1099eb4252bdf25b8` at 2026-09-30T17:37:44Z. A pass requires a recorded Rust process and binary digest; setup errors, unsupported cells, and untested cells never count as passes.
+Generated from commit `3831acca99353f89ea85c98746c39c0fa8e24475` at 2026-10-01T00:25:10Z. A pass requires a recorded Rust process and binary digest; setup errors, unsupported cells, and untested cells never count as passes.
 
 ## How to read this table
 
