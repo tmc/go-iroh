@@ -93,7 +93,7 @@ func TestDownloaderCloseRejectsEmptyWithoutStore(t *testing.T) {
 	}), DownloaderOptions{})
 	_ = d.Close()
 	for _, hash := range []Hash{EmptyHash, NewHash([]byte("blob"))} {
-		tag, err := d.Download(nil, hash, nil)
+		tag, err := d.Download(context.Background(), hash, nil)
 		_ = tag.Close()
 		if !errors.Is(err, ErrDownloaderClosed) {
 			t.Fatalf("Download = %v", err)
@@ -118,12 +118,12 @@ func TestDownloaderCloseFromEvent(t *testing.T) {
 		d = NewDownloader(&downloadStore{}, BlobConnectorFunc(func(ctx context.Context, _ netaddr.EndpointAddr, _ string) (BlobConn, error) {
 			return nil, ctx.Err()
 		}), DownloaderOptions{OnEvent: func(DownloadEvent) { events.Add(1); _ = d.Close() }})
-		tag, err := d.Download(nil, NewHash([]byte("blob")), []netaddr.EndpointAddr{testEndpointAddr(94)})
+		tag, err := d.Download(context.Background(), NewHash([]byte("blob")), []netaddr.EndpointAddr{testEndpointAddr(94)})
 		_ = tag.Close()
 		if err == nil {
 			t.Fatal("download succeeded after callback closed downloader")
 		}
-		if err := d.Wait(nil); err != nil {
+		if err := d.Wait(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		if events.Load() == 0 {
@@ -143,7 +143,7 @@ func TestDownloaderCloseDiscardsLateConnection(t *testing.T) {
 		}), DownloaderOptions{StallTimeout: -1})
 		download := make(chan error, 1)
 		go func() {
-			tag, err := d.Download(nil, NewHash([]byte("blob")), []netaddr.EndpointAddr{testEndpointAddr(95)})
+			tag, err := d.Download(context.Background(), NewHash([]byte("blob")), []netaddr.EndpointAddr{testEndpointAddr(95)})
 			_ = tag.Close()
 			download <- err
 		}()
@@ -154,7 +154,7 @@ func TestDownloaderCloseDiscardsLateConnection(t *testing.T) {
 		if err := <-download; !errors.Is(err, ErrDownloaderClosed) {
 			t.Fatalf("download = %v", err)
 		}
-		if err := d.Wait(nil); err != nil {
+		if err := d.Wait(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		if n := conn.closes.Load(); n != 1 {
@@ -179,17 +179,17 @@ func TestDownloaderConcurrentCloseDownloadWait(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				tag, _ := d.Download(nil, NewHash([]byte{byte(i)}), []netaddr.EndpointAddr{testEndpointAddr(96)})
+				tag, _ := d.Download(context.Background(), NewHash([]byte{byte(i)}), []netaddr.EndpointAddr{testEndpointAddr(96)})
 				_ = tag.Close()
 			}()
 		}
 		synctest.Wait()
 		for range 16 {
 			wg.Add(1)
-			go func() { defer wg.Done(); _ = d.Close(); _ = d.Wait(nil) }()
+			go func() { defer wg.Done(); _ = d.Close(); _ = d.Wait(context.Background()) }()
 		}
 		wg.Wait()
-		if err := d.Wait(nil); err != nil {
+		if err := d.Wait(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -216,13 +216,13 @@ func TestDownloaderWaitJoinsEventCallback(t *testing.T) {
 		}})
 		downloaded := make(chan struct{})
 		go func() {
-			tag, _ := d.Download(nil, NewHash([]byte("blob")), []netaddr.EndpointAddr{testEndpointAddr(97)})
+			tag, _ := d.Download(context.Background(), NewHash([]byte("blob")), []netaddr.EndpointAddr{testEndpointAddr(97)})
 			_ = tag.Close()
 			close(downloaded)
 		}()
 		synctest.Wait()
 		waited := make(chan error, 1)
-		go func() { waited <- d.Wait(nil) }()
+		go func() { waited <- d.Wait(context.Background()) }()
 		synctest.Wait()
 		select {
 		case err := <-waited:
