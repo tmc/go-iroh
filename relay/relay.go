@@ -21,6 +21,15 @@ import (
 // DefaultQUICPort is the default port for relay QUIC address discovery.
 const DefaultQUICPort = 7842
 
+// Relative paths joined onto a relay URL, preserving any path prefix on the
+// relay URL (e.g. "https://example.com/prefix/" -> ".../prefix/relay").
+const (
+	// RelayRelativePath is the relative path of the relay WebSocket endpoint.
+	RelayRelativePath = "relay"
+	// RelayProbeRelativePath is the relative path of the relay latency probe.
+	RelayProbeRelativePath = "ping"
+)
+
 // number0 production relay hostnames.
 const (
 	naEastRelayHostname = "use1-1.relay.n0.iroh-canary.iroh.link."

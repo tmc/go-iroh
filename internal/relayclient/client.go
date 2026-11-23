@@ -24,10 +24,8 @@ import (
 	"github.com/tmc/go-iroh/internal/relayproto"
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
+	"github.com/tmc/go-iroh/relay"
 )
-
-// relayPath is the HTTP path of the relay WebSocket endpoint.
-const relayPath = "/relay"
 
 // maxFrameSize is the maximum relay frame size (1 MiB), matching MAX_FRAME_SIZE.
 const maxFrameSize = 1024 * 1024
@@ -285,14 +283,14 @@ func (c *Client) writeFrame(ctx context.Context, data []byte) error {
 }
 
 // websocketURL converts a relay URL (http/https) into the ws/wss dial URL with
-// the relay path, matching the Rust client.
+// the relative relay path joined onto any existing path prefix, matching the
+// Rust client.
 func websocketURL(u netaddr.RelayURL) (string, error) {
 	parsed := u.URL()
 	if parsed == nil {
 		return "", errors.New("relayclient: empty relay url")
 	}
-	dial := *parsed
-	dial.Path = relayPath
+	dial := parsed.ResolveReference(&url.URL{Path: relay.RelayRelativePath})
 	switch strings.ToLower(dial.Scheme) {
 	case "http", "ws":
 		dial.Scheme = "ws"

@@ -10,16 +10,18 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/netaddr"
+	"github.com/tmc/go-iroh/relay"
 )
 
-// runHTTPSProbe fetches the relay's probe path ("/ping") and times the round
-// trip. It follows no redirects, matching run_https_probe
-// (iroh/src/net_report/reportgen.rs:817). A non-2xx response is an error.
+// runHTTPSProbe fetches the relay's probe path ("ping" joined onto the relay
+// URL, preserving any path prefix) and times the round trip. It follows no
+// redirects, matching run_https_probe (iroh/src/net_report/reportgen.rs:817). A
+// non-2xx response is an error.
 //
 // tlsConfig, if non-nil, overrides TLS verification (used in tests with
 // self-signed certs).
-func runHTTPSProbe(ctx context.Context, relay netaddr.RelayURL, tlsConfig *tls.Config, proxy func(*url.URL) (*url.URL, error)) (*probeReport, error) {
-	probeURL, err := joinPath(relay, relayProbePath)
+func runHTTPSProbe(ctx context.Context, relayURL netaddr.RelayURL, tlsConfig *tls.Config, proxy func(*url.URL) (*url.URL, error)) (*probeReport, error) {
+	probeURL, err := joinPath(relayURL, relay.RelayProbeRelativePath)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +46,7 @@ func runHTTPSProbe(ctx context.Context, relay netaddr.RelayURL, tlsConfig *tls.C
 	// Drain the body (up to 8 KiB) to be polite to the server.
 	drain(resp.Body, 8<<10)
 
-	return &probeReport{probe: ProbeHTTPS, relay: relay, latency: latency}, nil
+	return &probeReport{probe: ProbeHTTPS, relay: relayURL, latency: latency}, nil
 }
 
 // checkCaptivePortal reports whether a captive portal is intercepting HTTP. It

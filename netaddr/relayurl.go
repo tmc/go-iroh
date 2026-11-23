@@ -50,9 +50,11 @@ func (r RelayURL) URL() *url.URL {
 	return &c
 }
 
-// String returns the normalized string form of the URL. An empty path is
-// rendered as "/", matching the WHATWG URL serialization used by the Rust
-// reference implementation (e.g. "https://example.com" -> "https://example.com/").
+// String returns the normalized string form of the URL. Special schemes
+// (http/https/ws/wss) normalize to a trailing "/" on the path, matching the
+// Rust reference implementation (e.g. "https://example.com" ->
+// "https://example.com/", "https://example.com/prefix" ->
+// "https://example.com/prefix/").
 func (r RelayURL) String() string { return r.s }
 
 // Host returns the host (without port) of the relay URL.
@@ -89,12 +91,16 @@ func (r *RelayURL) UnmarshalText(text []byte) error {
 }
 
 // normalizeURL applies the small subset of WHATWG URL normalization that the
-// reference implementation relies on: a special scheme (http/https/ws/wss) with
-// an empty path serializes with a "/" path, and the host is lower-cased.
+// reference implementation relies on: a special scheme (http/https/ws/wss)
+// ends its path with "/" so relative relay paths join under any path prefix,
+// and the host is lower-cased.
 func normalizeURL(u *url.URL) *url.URL {
 	u.Host = strings.ToLower(u.Host)
-	if u.Path == "" && isSpecialScheme(u.Scheme) {
-		u.Path = "/"
+	if u.Opaque == "" && isSpecialScheme(u.Scheme) && !strings.HasSuffix(u.Path, "/") {
+		u.Path += "/"
+		if u.RawPath != "" && !strings.HasSuffix(u.RawPath, "/") {
+			u.RawPath += "/"
+		}
 	}
 	return u
 }

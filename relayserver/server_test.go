@@ -149,7 +149,7 @@ func TestRelayServerTimesOutAuthentication(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	url := "ws" + strings.TrimPrefix(ts.URL, "http") + relayPath
+	url := "ws" + strings.TrimPrefix(ts.URL, "http") + "/relay"
 	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{
 		Subprotocols: relayproto.SupportedProtocolVersions(),
 	})
@@ -176,7 +176,7 @@ func TestRelayServerLimitsPendingAuthentication(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	url := "ws" + strings.TrimPrefix(ts.URL, "http") + relayPath
+	url := "ws" + strings.TrimPrefix(ts.URL, "http") + "/relay"
 	options := &websocket.DialOptions{Subprotocols: relayproto.SupportedProtocolVersions()}
 	first, _, err := websocket.Dial(ctx, url, options)
 	if err != nil {
@@ -456,5 +456,39 @@ func TestSentToTableIsBounded(t *testing.T) {
 	}
 	if !sess.sentTo[id] {
 		t.Fatalf("destination recorded after the reset is missing")
+	}
+}
+
+func TestRelayPathPrefixPreservation(t *testing.T) {
+	for _, strip := range []string{"/prefix", "/prefix/"} {
+		t.Run("strip="+strip, func(t *testing.T) {
+			srv := New()
+			mux := http.NewServeMux()
+			mux.Handle("/prefix/", http.StripPrefix(strip, srv))
+			ts := httptest.NewServer(mux)
+			defer ts.Close()
+
+			resp, err := http.Get(ts.URL + "/prefix/ping")
+			if err != nil {
+				t.Fatalf("GET /prefix/ping: %v", err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("GET /prefix/ping = %d, want %d", resp.StatusCode, http.StatusOK)
+			}
+
+			u, err := netaddr.ParseRelayURL(ts.URL + "/prefix")
+			if err != nil {
+				t.Fatalf("ParseRelayURL: %v", err)
+			}
+			sk, _ := key.GenerateSecretKey()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			c, err := relayclient.Connect(ctx, u, relayclient.Options{SecretKey: sk})
+			if err != nil {
+				t.Fatalf("Connect(%s): %v", u, err)
+			}
+			c.Close()
+		})
 	}
 }

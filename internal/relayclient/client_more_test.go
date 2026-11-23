@@ -491,12 +491,15 @@ func TestExpectConfirmationUnexpectedFrame(t *testing.T) {
 }
 
 func TestWebsocketURLPath(t *testing.T) {
-	// The dial URL path is always /relay, replacing any existing path, and the
-	// scheme maps http->ws, https->wss. iroh-relay/src/client.rs:265-275
-	// (set_path(RELAY_PATH) + set_scheme match).
+	// The dial URL joins "relay" onto the relay URL's path prefix, and the
+	// scheme maps http->ws, https->wss. Matches iroh-relay PR #4617.
 	cases := []struct{ in, want string }{
-		{"https://relay.example.com/anything", "wss://relay.example.com/relay"},
-		{"http://localhost:8080/foo/bar", "ws://localhost:8080/relay"},
+		{"https://relay.example.com", "wss://relay.example.com/relay"},
+		{"https://relay.example.com/", "wss://relay.example.com/relay"},
+		{"https://relay.example.com/prefix", "wss://relay.example.com/prefix/relay"},
+		{"https://relay.example.com/prefix/", "wss://relay.example.com/prefix/relay"},
+		{"http://localhost:8080/foo/bar", "ws://localhost:8080/foo/bar/relay"},
+		{"http://localhost:8080/foo/bar/", "ws://localhost:8080/foo/bar/relay"},
 		{"ws://relay.example.com", "ws://relay.example.com/relay"},
 		{"wss://relay.example.com", "wss://relay.example.com/relay"},
 	}

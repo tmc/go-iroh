@@ -370,3 +370,31 @@ func (s *loopbackDNS) resolver() *net.Resolver {
 		},
 	}
 }
+
+func TestHTTPSProbePreservesPathPrefix(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if r.URL.Path != "/prefix/a/ping" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	for _, suffix := range []string{"/prefix/a", "/prefix/a/"} {
+		gotPath = ""
+		u, err := netaddr.ParseRelayURL(srv.URL + suffix)
+		if err != nil {
+			t.Fatalf("ParseRelayURL(%q): %v", suffix, err)
+		}
+		rep, err := runHTTPSProbe(context.Background(), u, tlsInsecure(), nil)
+		if err != nil {
+			t.Fatalf("runHTTPSProbe(%q): %v (gotPath=%q)", suffix, err, gotPath)
+		}
+		if rep == nil || gotPath != "/prefix/a/ping" {
+			t.Fatalf("suffix %q: gotPath = %q, want /prefix/a/ping", suffix, gotPath)
+		}
+	}
+}
