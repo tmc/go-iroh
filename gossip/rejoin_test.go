@@ -98,11 +98,12 @@ func TestRepeatedJoinPeersRetriesOnce(t *testing.T) {
 			t.Fatalf("server received %d Joins, want %d", got, joins)
 		}
 
-		// Retries go out after 1s, 3s and 7s.
+		// Retries go out after 1s, 3s and 7s from rejoin, plus 1 at 5s
+		// from HyParView's maintenance pass when both views are empty.
 		time.Sleep(7 * gossip.RejoinDelay)
 		synctest.Wait()
-		if got := gs.Metrics().MsgsCtrlRecv - joins; got != 3 {
-			t.Errorf("server received %d retried Joins, want 3", got)
+		if got := gs.Metrics().MsgsCtrlRecv - joins; got != 4 {
+			t.Errorf("server received %d retried Joins, want 4", got)
 		}
 	})
 }

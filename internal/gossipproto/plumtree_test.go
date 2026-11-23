@@ -110,6 +110,7 @@ func TestPlumtreeStateDuplicateGossipPrunesSender(t *testing.T) {
 	content := []byte("hello")
 	id := MessageIDFromContent(content)
 	state := NewPlumtreeState(me, DefaultPlumtreeConfig())
+	state.addEager(from)
 	state.Handle(PlumtreeInEvent{
 		Kind: PlumtreeRecvMessage,
 		From: from,
@@ -148,6 +149,7 @@ func TestPlumtreeStateIHaveSchedulesAndGrafts(t *testing.T) {
 	from := PeerID(seq32(2))
 	id := MessageIDFromContent([]byte("hello"))
 	state := NewPlumtreeState(me, DefaultPlumtreeConfig())
+	state.addLazy(from)
 
 	got := state.Handle(PlumtreeInEvent{
 		Kind: PlumtreeRecvMessage,
@@ -247,6 +249,8 @@ func TestPlumtreeStateGraftRepliesFromCache(t *testing.T) {
 	content := []byte("hello")
 	id := MessageIDFromContent(content)
 	state := NewPlumtreeState(me, DefaultPlumtreeConfig())
+	state.addEager(from)
+	state.addLazy(requester)
 	state.Handle(PlumtreeInEvent{
 		Kind: PlumtreeRecvMessage,
 		From: from,
@@ -289,6 +293,8 @@ func TestPlumtreeStateOptimizeTree(t *testing.T) {
 	ihavePeer := PeerID(seq32(2))
 	gossipPeer := PeerID(seq32(3))
 	state := NewPlumtreeState(me, DefaultPlumtreeConfig())
+	state.addLazy(ihavePeer)
+	state.addEager(gossipPeer)
 
 	content := []byte("hi")
 	id := MessageIDFromContent(content)
@@ -441,5 +447,63 @@ func TestPlumtreeBroadcastDropsOversizedMessage(t *testing.T) {
 	}
 	if goesOut(limit - 1) {
 		t.Fatalf("broadcast of %d bytes sent at limit %d", len(content), limit-1)
+	}
+}
+
+func TestPlumtreeNonNeighborDoesNotMutatePeerSets(t *testing.T) {
+	now := time.Unix(1, 0)
+	me := PeerID(seq32(1))
+	stranger := PeerID(seq32(2))
+	content := []byte("hello")
+	id := MessageIDFromContent(content)
+
+	state := NewPlumtreeState(me, DefaultPlumtreeConfig())
+	state.Handle(PlumtreeInEvent{
+		Kind:    PlumtreeRecvMessage,
+		From:    stranger,
+		Now:     now,
+		Message: PlumtreeMessage{Kind: PlumtreePrune},
+	})
+	state.Handle(PlumtreeInEvent{
+		Kind:    PlumtreeRecvMessage,
+		From:    stranger,
+		Now:     now,
+		Message: PlumtreeMessage{Kind: PlumtreeIHave, IHave: []IHave{{ID: id, Round: 1}}},
+	})
+	state.Handle(PlumtreeInEvent{
+		Kind:    PlumtreeRecvMessage,
+		From:    stranger,
+		Now:     now,
+		Message: PlumtreeMessage{Kind: PlumtreeGraft, Graft: Graft{ID: &id, Round: 1}},
+	})
+	if len(state.eager) != 0 || len(state.lazy) != 0 || len(state.missing) != 0 {
+		t.Fatalf("non-neighbor control messages mutated sets: eager=%d lazy=%d missing=%d",
+			len(state.eager), len(state.lazy), len(state.missing))
+	}
+
+	// Deliver once, then duplicate from stranger: still sends Prune, does not add to lazy.
+	state.Handle(PlumtreeInEvent{
+		Kind: PlumtreeRecvMessage,
+		From: stranger,
+		Now:  now,
+		Message: PlumtreeMessage{
+			Kind:   PlumtreeGossip,
+			Gossip: Gossip{ID: id, Content: content, Scope: DeliveryScope{Kind: DeliveryScopeSwarm}},
+		},
+	})
+	got := state.Handle(PlumtreeInEvent{
+		Kind: PlumtreeRecvMessage,
+		From: stranger,
+		Now:  now,
+		Message: PlumtreeMessage{
+			Kind:   PlumtreeGossip,
+			Gossip: Gossip{ID: id, Content: content, Scope: DeliveryScope{Kind: DeliveryScopeSwarm}},
+		},
+	})
+	if len(got) != 1 || got[0].Kind != PlumtreeSendMessage || got[0].Message.Kind != PlumtreePrune {
+		t.Fatalf("duplicate from stranger = %#v, want single Prune", got)
+	}
+	if _, ok := state.lazy[stranger]; ok {
+		t.Fatal("stranger added to lazy set on duplicate gossip")
 	}
 }

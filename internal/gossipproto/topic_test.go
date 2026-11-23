@@ -18,23 +18,25 @@ func TestTopicStateJoinAndBroadcast(t *testing.T) {
 			Peers: []PeerID{peer},
 		},
 	})
-	want := []TopicOutEvent{
-		{
-			Kind: TopicSendMessage,
-			To:   peer,
-			Message: TopicMessage{
-				Kind:  TopicMessageSwarm,
-				Swarm: HyparviewMessage{Kind: HyparviewJoin},
-			},
-		},
-		{
-			Kind:  TopicScheduleTimer,
-			After: time.Minute,
-			Timer: TopicTimer{Kind: TopicTimerHyparview, Hyparview: HyparviewTimer{Kind: HyparviewTimerDoShuffle}},
+	if len(got) != 3 {
+		t.Fatalf("join len = %d, want 3: %#v", len(got), got)
+	}
+	wantJoin := TopicOutEvent{
+		Kind: TopicSendMessage,
+		To:   peer,
+		Message: TopicMessage{
+			Kind:  TopicMessageSwarm,
+			Swarm: HyparviewMessage{Kind: HyparviewJoin},
 		},
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("join = %#v, want %#v", got, want)
+	if !reflect.DeepEqual(got[0], wantJoin) {
+		t.Fatalf("join[0] = %#v, want %#v", got[0], wantJoin)
+	}
+	if got[1].Kind != TopicScheduleTimer || got[1].Timer.Kind != TopicTimerHyparview || got[1].Timer.Hyparview.Kind != HyparviewTimerDoShuffle {
+		t.Fatalf("join[1] = %#v, want DoShuffle timer", got[1])
+	}
+	if got[2].Kind != TopicScheduleTimer || got[2].Timer.Kind != TopicTimerHyparview || got[2].Timer.Hyparview.Kind != HyparviewTimerDoMaintenance || got[2].After != maintenanceInterval {
+		t.Fatalf("join[2] = %#v, want DoMaintenance timer", got[2])
 	}
 
 	got = state.Handle(TopicInEvent{

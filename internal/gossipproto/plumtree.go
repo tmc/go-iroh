@@ -299,15 +299,24 @@ func (s *PlumtreeState) handleMessage(sender PeerID, message PlumtreeMessage, no
 	} else {
 		s.stats.ControlMessagesReceived++
 	}
+	_, isEager := s.eager[sender]
+	_, isLazy := s.lazy[sender]
+	fromPeer := isEager || isLazy
 	switch message.Kind {
 	case PlumtreeGossip:
-		s.onGossip(sender, message.Gossip, now, out)
+		s.onGossip(sender, fromPeer, message.Gossip, now, out)
 	case PlumtreePrune:
-		s.addLazy(sender)
+		if fromPeer {
+			s.addLazy(sender)
+		}
 	case PlumtreeIHave:
-		s.onIHave(sender, message.IHave, out)
+		if fromPeer {
+			s.onIHave(sender, message.IHave, out)
+		}
 	case PlumtreeGraft:
-		s.onGraft(sender, message.Graft, out)
+		if fromPeer {
+			s.onGraft(sender, message.Graft, out)
+		}
 	}
 }
 
@@ -329,12 +338,14 @@ func (s *PlumtreeState) broadcast(content []byte, scope Scope, now time.Time, ou
 	s.eagerPush(message, s.me, out)
 }
 
-func (s *PlumtreeState) onGossip(sender PeerID, message Gossip, now time.Time, out *[]PlumtreeOutEvent) {
+func (s *PlumtreeState) onGossip(sender PeerID, fromPeer bool, message Gossip, now time.Time, out *[]PlumtreeOutEvent) {
 	if message.ID != MessageIDFromContent(message.Content) {
 		return
 	}
 	if _, ok := s.received[message.ID]; ok {
-		s.addLazy(sender)
+		if fromPeer {
+			s.addLazy(sender)
+		}
 		*out = append(*out, PlumtreeOutEvent{
 			Kind:    PlumtreeSendMessage,
 			To:      sender,
@@ -357,7 +368,9 @@ func (s *PlumtreeState) onGossip(sender PeerID, message Gossip, now time.Time, o
 		for _, target := range previous {
 			s.forgetMissing(target.peer)
 		}
-		s.optimizeTree(sender, forward, previous, out)
+		if fromPeer {
+			s.optimizeTree(sender, forward, previous, out)
+		}
 		if message.Scope.Round > Round(s.stats.MaxLastDeliveryHop) {
 			s.stats.MaxLastDeliveryHop = uint16(message.Scope.Round)
 		}

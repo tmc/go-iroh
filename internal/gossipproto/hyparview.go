@@ -5,6 +5,52 @@ import (
 	"time"
 )
 
+const (
+	// initialShuffleInterval is the delay before the first shuffle. The
+	// interval doubles after each shuffle up to Config.ShuffleInterval.
+	initialShuffleInterval = time.Second
+
+	// maintenanceInterval is the period of the maintenance pass that
+	// rejoins when alone and refills a short active view.
+	maintenanceInterval = 5 * time.Second
+
+	// maxBackoffPasses is the maximum number of maintenance passes between
+	// two rejoins or two refills (1st, 2nd, 4th, 8th, then every 12th).
+	maxBackoffPasses uint32 = 12
+
+	// maxRequestsPerRefill is the maximum number of neighbor requests a
+	// short node sends in one maintenance refill.
+	maxRequestsPerRefill = 3
+
+	// maxBootstrapPeers is the maximum number of contacts a topic remembers
+	// for rejoining when both views become empty.
+	maxBootstrapPeers = 8
+)
+
+// backoffDue reports whether the nth pass of a backoff schedule is due.
+func backoffDue(n uint32) bool {
+	if n == 0 {
+		return false
+	}
+	if n < maxBackoffPasses {
+		return n&(n-1) == 0
+	}
+	return n%maxBackoffPasses == 0
+}
+
+type refillLimitKind uint8
+
+const (
+	// refillAutomatic means no limit is active yet; a short node's next
+	// low-priority refill sets refillRequests.
+	refillAutomatic refillLimitKind = iota
+	// refillRequests caps a short node's refill to refillRemaining requests.
+	refillRequests
+	// refillRecovery is an unlimited refill after a neighbor leaves or
+	// while the active view is empty.
+	refillRecovery
+)
+
 // HyparviewConfig configures the HyParView membership state machine.
 type HyparviewConfig struct {
 	ActiveViewCapacity      int
@@ -102,6 +148,7 @@ type HyparviewTimerKind uint8
 
 const (
 	HyparviewTimerDoShuffle HyparviewTimerKind = iota
+	HyparviewTimerDoMaintenance
 	HyparviewTimerPendingNeighborRequest
 )
 
@@ -120,12 +167,19 @@ type HyparviewState struct {
 	active  peerList
 	passive peerList
 
-	shuffleScheduled bool
-	stats            HyparviewStats
+	timersScheduled     bool
+	nextShuffleInterval time.Duration
+	bootstrapPeers      []PeerID
+	passesAlone         uint32
+	passesShort         uint32
+	stats               HyparviewStats
 
 	pendingNeighbor map[PeerID]struct{}
 	peerData        map[PeerID]PeerData
 	aliveDisconnect map[PeerID]struct{}
+	refused         map[PeerID]struct{}
+	refillKind      refillLimitKind
+	refillRemaining int
 }
 
 // NewHyparviewState returns a HyParView state machine for me.
@@ -142,14 +196,17 @@ func NewHyparviewStateWithRand(me PeerID, data *PeerData, config HyparviewConfig
 	if r == nil {
 		r = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
+	nextShuffle := min(initialShuffleInterval, config.ShuffleInterval)
 	return &HyparviewState{
-		me:              me,
-		meData:          clonePeerDataPtr(data),
-		config:          config,
-		rand:            r,
-		pendingNeighbor: map[PeerID]struct{}{},
-		peerData:        map[PeerID]PeerData{},
-		aliveDisconnect: map[PeerID]struct{}{},
+		me:                  me,
+		meData:              clonePeerDataPtr(data),
+		config:              config,
+		rand:                r,
+		nextShuffleInterval: nextShuffle,
+		pendingNeighbor:     map[PeerID]struct{}{},
+		peerData:            map[PeerID]PeerData{},
+		aliveDisconnect:     map[PeerID]struct{}{},
+		refused:             map[PeerID]struct{}{},
 	}
 }
 
@@ -178,6 +235,8 @@ func (s *HyparviewState) Handle(ev HyparviewInEvent) []HyparviewOutEvent {
 		switch ev.Timer.Kind {
 		case HyparviewTimerDoShuffle:
 			s.handleShuffleTimer(&out)
+		case HyparviewTimerDoMaintenance:
+			s.handleMaintenanceTimer(&out)
 		case HyparviewTimerPendingNeighborRequest:
 			s.handlePendingNeighborTimer(ev.Timer.Peer, &out)
 		}
@@ -190,13 +249,14 @@ func (s *HyparviewState) Handle(ev HyparviewInEvent) []HyparviewOutEvent {
 	case HyparviewQuit:
 		s.handleQuit(&out)
 	}
-	if !s.shuffleScheduled {
+	if !s.timersScheduled {
+		s.timersScheduled = true
+		s.scheduleShuffle(&out)
 		out = append(out, HyparviewOutEvent{
 			Kind:  HyparviewScheduleTimer,
-			After: s.config.ShuffleInterval,
-			Timer: HyparviewTimer{Kind: HyparviewTimerDoShuffle},
+			After: maintenanceInterval,
+			Timer: HyparviewTimer{Kind: HyparviewTimerDoMaintenance},
 		})
-		s.shuffleScheduled = true
 	}
 	s.forgetStrangers()
 	return out
@@ -226,18 +286,45 @@ func (s *HyparviewState) handleMessage(from PeerID, message HyparviewMessage, ou
 	case HyparviewShuffle:
 		s.onShuffle(from, message.Shuffle, out)
 	case HyparviewShuffleReply:
-		s.onShuffleReply(message.ShuffleReply, out)
+		s.onShuffleReply(from, message.ShuffleReply, out)
 	case HyparviewNeighbor:
 		s.onNeighbor(from, message.Neighbor, out)
 	case HyparviewDisconnect:
 		s.onDisconnect(from, message.Disconnect, out)
 	}
-	if !isDisconnect && !s.active.contains(from) {
-		*out = append(*out, HyparviewOutEvent{Kind: HyparviewDisconnectPeer, To: from})
+	if !isDisconnect {
+		s.releaseIfUnused(from, out)
+	}
+}
+
+// releaseIfUnused disconnects peer unless it is a neighbor or we are waiting
+// for its Neighbor reply.
+func (s *HyparviewState) releaseIfUnused(peer PeerID, out *[]HyparviewOutEvent) {
+	if !s.active.contains(peer) && !s.isPending(peer) {
+		*out = append(*out, HyparviewOutEvent{Kind: HyparviewDisconnectPeer, To: peer})
 	}
 }
 
 func (s *HyparviewState) handleJoin(peer PeerID, out *[]HyparviewOutEvent) {
+	s.rememberBootstrap(peer)
+	s.join(peer, out)
+}
+
+func (s *HyparviewState) rememberBootstrap(peer PeerID) {
+	n := 0
+	for _, known := range s.bootstrapPeers {
+		if known != peer {
+			s.bootstrapPeers[n] = known
+			n++
+		}
+	}
+	s.bootstrapPeers = append(s.bootstrapPeers[:n], peer)
+	if len(s.bootstrapPeers) > maxBootstrapPeers {
+		s.bootstrapPeers = s.bootstrapPeers[len(s.bootstrapPeers)-maxBootstrapPeers:]
+	}
+}
+
+func (s *HyparviewState) join(peer PeerID, out *[]HyparviewOutEvent) {
 	*out = append(*out, HyparviewOutEvent{
 		Kind:    HyparviewSendMessage,
 		To:      peer,
@@ -304,7 +391,11 @@ func (s *HyparviewState) onNeighbor(from PeerID, details Neighbor, out *[]Hyparv
 }
 
 func (s *HyparviewState) onDisconnect(peer PeerID, details Disconnect, out *[]HyparviewOutEvent) {
+	requested := s.isPending(peer)
 	delete(s.pendingNeighbor, peer)
+	if requested && !s.active.contains(peer) {
+		s.refused[peer] = struct{}{}
+	}
 	if s.active.contains(peer) {
 		s.removeActive(peer, removalDisconnectReceived, details.Alive, true, out)
 	} else if details.Alive && s.passive.contains(peer) {
@@ -313,6 +404,7 @@ func (s *HyparviewState) onDisconnect(peer PeerID, details Disconnect, out *[]Hy
 }
 
 func (s *HyparviewState) handleConnectionClosed(peer PeerID, out *[]HyparviewOutEvent) {
+	requested := s.isPending(peer)
 	delete(s.pendingNeighbor, peer)
 	if s.active.contains(peer) {
 		s.removeActive(peer, removalConnectionClosed, false, true, out)
@@ -320,10 +412,14 @@ func (s *HyparviewState) handleConnectionClosed(peer PeerID, out *[]HyparviewOut
 	}
 	if _, ok := s.aliveDisconnect[peer]; ok {
 		delete(s.aliveDisconnect, peer)
-		return
+	} else {
+		s.passive.remove(peer)
+		delete(s.peerData, peer)
 	}
-	s.passive.remove(peer)
-	delete(s.peerData, peer)
+	// The neighbor request failed with its dial, before its timer fired.
+	if requested {
+		s.refillActiveFromPassive([]PeerID{peer}, out)
+	}
 }
 
 func (s *HyparviewState) handleQuit(out *[]HyparviewOutEvent) {
@@ -331,6 +427,7 @@ func (s *HyparviewState) handleQuit(out *[]HyparviewOutEvent) {
 		s.active.remove(peer)
 		s.sendDisconnect(peer, false, out)
 	}
+	clear(s.refused)
 }
 
 func (s *HyparviewState) onShuffle(from PeerID, shuffle Shuffle, out *[]HyparviewOutEvent) {
@@ -367,11 +464,25 @@ func (s *HyparviewState) sendShuffleReply(to PeerID, n int, out *[]HyparviewOutE
 	})
 }
 
-func (s *HyparviewState) onShuffleReply(reply ShuffleReply, out *[]HyparviewOutEvent) {
+func (s *HyparviewState) onShuffleReply(from PeerID, reply ShuffleReply, out *[]HyparviewOutEvent) {
+	newPeers := false
 	for _, node := range reply.Nodes {
-		s.addPassive(node.ID, node.Data, out)
+		if s.addPassive(node.ID, node.Data, out) {
+			newPeers = true
+		}
 	}
-	s.refillActiveFromPassive(nil, out)
+	// A peer that refuses our neighbor request sends this reply before its
+	// Disconnect. After a refusal, only a short node asks the next passive
+	// peer. Any other reply answers our shuffle.
+	hasPendingNeighbor := s.isPending(from)
+	if hasPendingNeighbor && !s.isShort() {
+		return
+	}
+	if !hasPendingNeighbor && newPeers && s.refillKind == refillRequests && s.refillRemaining == 0 {
+		s.startRefill(refillRequests, maxRequestsPerRefill, nil, out)
+	} else {
+		s.refillActiveFromPassive(nil, out)
+	}
 }
 
 func (s *HyparviewState) handleShuffleTimer(out *[]HyparviewOutEvent) {
@@ -393,11 +504,67 @@ func (s *HyparviewState) handleShuffleTimer(out *[]HyparviewOutEvent) {
 			},
 		})
 	}
+	s.scheduleShuffle(out)
+}
+
+func (s *HyparviewState) scheduleShuffle(out *[]HyparviewOutEvent) {
+	interval := s.nextShuffleInterval
+	s.nextShuffleInterval = min(interval*2, s.config.ShuffleInterval)
+	jitter := 0.75 + s.rand.Float64()*0.5
 	*out = append(*out, HyparviewOutEvent{
 		Kind:  HyparviewScheduleTimer,
-		After: s.config.ShuffleInterval,
+		After: time.Duration(float64(interval) * jitter),
 		Timer: HyparviewTimer{Kind: HyparviewTimerDoShuffle},
 	})
+}
+
+func (s *HyparviewState) handleMaintenanceTimer(out *[]HyparviewOutEvent) {
+	if s.active.len() == 0 && s.passive.len() == 0 {
+		s.passesAlone++
+		if backoffDue(s.passesAlone) {
+			for _, peer := range s.bootstrapPeers {
+				s.join(peer, out)
+			}
+		}
+	} else {
+		s.passesAlone = 0
+		if s.refillKind == refillRecovery && s.pendingOutsideActive() == 0 {
+			s.refillKind = refillAutomatic
+		}
+		if s.active.len() == 0 {
+			s.startRefill(refillRecovery, 0, nil, out)
+		} else if s.isShort() {
+			if s.refillKind != refillRecovery {
+				s.passesShort++
+				if backoffDue(s.passesShort) {
+					clear(s.refused)
+					s.startRefill(refillRequests, maxRequestsPerRefill, nil, out)
+				}
+			}
+		} else {
+			clear(s.refused)
+		}
+	}
+	*out = append(*out, HyparviewOutEvent{
+		Kind:  HyparviewScheduleTimer,
+		After: maintenanceInterval,
+		Timer: HyparviewTimer{Kind: HyparviewTimerDoMaintenance},
+	})
+}
+
+// isShort reports whether the active view is below half its capacity.
+func (s *HyparviewState) isShort() bool {
+	return s.active.len() < (s.config.ActiveViewCapacity+1)/2
+}
+
+func (s *HyparviewState) pendingOutsideActive() int {
+	n := 0
+	for peer := range s.pendingNeighbor {
+		if !s.active.contains(peer) {
+			n++
+		}
+	}
+	return n
 }
 
 func (s *HyparviewState) handlePendingNeighborTimer(peer PeerID, out *[]HyparviewOutEvent) {
@@ -406,6 +573,7 @@ func (s *HyparviewState) handlePendingNeighborTimer(peer PeerID, out *[]Hyparvie
 	}
 	delete(s.pendingNeighbor, peer)
 	s.passive.remove(peer)
+	s.releaseIfUnused(peer, out)
 	s.refillActiveFromPassive(nil, out)
 }
 
@@ -446,6 +614,10 @@ func (s *HyparviewState) addActive(peer PeerID, data *PeerData, priority Priorit
 			Kind:  HyparviewEmitEvent,
 			Event: HyparviewEvent{Kind: HyparviewNeighborUp, Peer: peer},
 		})
+		if s.refillKind != refillRecovery {
+			s.refillKind = refillAutomatic
+		}
+		s.passesShort = 0
 		if reply {
 			s.sendNeighbor(peer, priority, out)
 		}
@@ -453,10 +625,10 @@ func (s *HyparviewState) addActive(peer PeerID, data *PeerData, priority Priorit
 	return true
 }
 
-func (s *HyparviewState) addPassive(peer PeerID, data *PeerData, out *[]HyparviewOutEvent) {
+func (s *HyparviewState) addPassive(peer PeerID, data *PeerData, out *[]HyparviewOutEvent) bool {
 	s.insertPeerInfo(PeerInfo{ID: peer, Data: clonePeerDataPtr(data)}, out)
 	if peer == s.me || s.active.contains(peer) || s.passive.contains(peer) {
-		return
+		return false
 	}
 	if s.passive.len() >= s.config.PassiveViewCapacity {
 		if old, ok := s.passive.random(s.rand); ok {
@@ -464,6 +636,7 @@ func (s *HyparviewState) addPassive(peer PeerID, data *PeerData, out *[]Hyparvie
 		}
 	}
 	s.passive.insert(peer)
+	return true
 }
 
 type removalReason uint8
@@ -513,30 +686,58 @@ func (s *HyparviewState) removeActive(peer PeerID, reason removalReason, alive b
 		}
 	}
 	if refill {
-		s.refillActiveFromPassive([]PeerID{peer}, out)
+		clear(s.refused)
+		s.startRefill(refillRecovery, 0, []PeerID{peer}, out)
 	}
 }
 
+func (s *HyparviewState) startRefill(kind refillLimitKind, remaining int, skip []PeerID, out *[]HyparviewOutEvent) {
+	if s.refillKind != refillRecovery {
+		s.refillKind = kind
+		s.refillRemaining = remaining
+	}
+	s.refillActiveFromPassive(skip, out)
+}
+
 func (s *HyparviewState) refillActiveFromPassive(skip []PeerID, out *[]HyparviewOutEvent) {
-	if s.active.len()+len(s.pendingNeighbor) >= s.config.ActiveViewCapacity {
+	pendingOutside := s.pendingOutsideActive()
+	if s.active.len()+pendingOutside >= s.config.ActiveViewCapacity ||
+		(s.refillKind == refillRequests && s.refillRemaining == 0) {
 		return
+	}
+	priority := PriorityLow
+	if s.active.len() == 0 {
+		priority = PriorityHigh
+	}
+	if s.refillKind == refillAutomatic && priority == PriorityLow && s.isShort() {
+		s.refillKind = refillRequests
+		s.refillRemaining = maxRequestsPerRefill
 	}
 	var allSkip []PeerID
 	allSkip = append(allSkip, skip...)
 	for peer := range s.pendingNeighbor {
 		allSkip = append(allSkip, peer)
 	}
-	if peer, ok := s.passive.randomWithout(s.rand, allSkip...); ok {
-		priority := PriorityLow
-		if s.active.len() == 0 {
-			priority = PriorityHigh
+	if priority == PriorityLow {
+		for peer := range s.refused {
+			allSkip = append(allSkip, peer)
 		}
-		s.sendNeighbor(peer, priority, out)
-		*out = append(*out, HyparviewOutEvent{
-			Kind:  HyparviewScheduleTimer,
-			After: s.config.NeighborRequestTimeout,
-			Timer: HyparviewTimer{Kind: HyparviewTimerPendingNeighborRequest, Peer: peer},
-		})
+	}
+	peer, ok := s.passive.randomWithout(s.rand, allSkip...)
+	if !ok {
+		if s.refillKind == refillRecovery && pendingOutside == 0 {
+			s.refillKind = refillAutomatic
+		}
+		return
+	}
+	s.sendNeighbor(peer, priority, out)
+	*out = append(*out, HyparviewOutEvent{
+		Kind:  HyparviewScheduleTimer,
+		After: s.config.NeighborRequestTimeout,
+		Timer: HyparviewTimer{Kind: HyparviewTimerPendingNeighborRequest, Peer: peer},
+	})
+	if s.refillKind == refillRequests {
+		s.refillRemaining--
 	}
 }
 

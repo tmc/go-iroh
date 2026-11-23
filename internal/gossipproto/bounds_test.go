@@ -89,6 +89,8 @@ func TestPlumtreeMissingBounded(t *testing.T) {
 	bad := PeerID(seq32(2))
 	good := PeerID(seq32(3))
 	state := NewPlumtreeState(me, DefaultPlumtreeConfig())
+	state.addLazy(bad)
+	state.addLazy(good)
 	ihave := func(from PeerID, ihaves []IHave) {
 		state.Handle(PlumtreeInEvent{
 			Kind:    PlumtreeRecvMessage,
@@ -126,6 +128,7 @@ func TestPlumtreeMissingBounded(t *testing.T) {
 
 	for p := range 2 * maxMissing / maxMissingPerPeer {
 		from := PeerID(seq32(byte(10 + p)))
+		state.addLazy(from)
 		for i := range maxMissingPerPeer {
 			var b [16]byte
 			binary.BigEndian.PutUint64(b[:], uint64(p))
