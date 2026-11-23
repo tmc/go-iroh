@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -716,4 +717,157 @@ func TestServeRequestTooLarge(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBitfieldTotalBytes(t *testing.T) {
+	tests := []struct {
+		name string
+		bf   Bitfield
+		want uint64
+	}{
+		{name: "empty", bf: EmptyBitfield(), want: 0},
+		{name: "complete zero", bf: CompleteBitfield(0), want: 0},
+		{name: "complete partial chunk", bf: CompleteBitfield(1234), want: 1234},
+		{name: "first chunk of partial blob", bf: NewBitfield(2500, RangeChunks(0, 1)), want: ChunkSize},
+		{name: "last partial chunk", bf: NewBitfield(2500, RangeChunks(2, 3)), want: 2500 - 2*ChunkSize},
+		{name: "disjoint ranges", bf: NewBitfield(5000, RangeChunksMany(ChunkRange{Start: 0, End: 1}, ChunkRange{Start: 3, End: 5})), want: ChunkSize + (5000 - 3*ChunkSize)},
+		{name: "finite range past size", bf: NewBitfield(100, RangeChunks(10, 11)), want: 0},
+		{name: "open range past size", bf: NewBitfield(100, RangeChunksFrom(10)), want: 0},
+		{name: "mixed in-bounds and past-size", bf: NewBitfield(1500, RangeChunksMany(ChunkRange{Start: 0, End: 1}, ChunkRange{Start: 10, End: 12})), want: ChunkSize},
+		{name: "huge finite range avoids mul overflow", bf: NewBitfield(100, RangeChunks(maxChunkIndex()+1, math.MaxUint64)), want: 0},
+		{name: "huge open range avoids mul overflow", bf: NewBitfield(100, RangeChunksFrom(maxChunkIndex()+1)), want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.bf.TotalBytes(); got != tt.want {
+				t.Fatalf("TotalBytes() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+
+	// Verify a wire-decoded bitfield with a range past size also reports 0 bytes.
+	var wire []byte
+	if err := writeObserveItem(bytesBuffer{&wire}, NewBitfield(100, RangeChunks(10, 11))); err != nil {
+		t.Fatalf("writeObserveItem: %v", err)
+	}
+	decoded, err := readObserveItem(newByteReader(wire))
+	if err != nil {
+		t.Fatalf("readObserveItem: %v", err)
+	}
+	if got := decoded.TotalBytes(); got != 0 {
+		t.Fatalf("decoded TotalBytes() = %d, want 0", got)
+	}
+}
+
+func TestTruncatedExportAndTransferStreams(t *testing.T) {
+	data := vectorData(2*BlockSize + 321)
+	hash, encoded, err := EncodeBlob(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ranges := RangeChunksMany(ChunkRange{Start: 0, End: 2}, ChunkRange{Start: 17, End: 19})
+	var chunksEncoded bytes.Buffer
+	blob := NewMemBlob(data)
+	dr, err := blob.DataReader(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ob, err := blob.Outboard(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := EncodeBlobChunks(&chunksEncoded, hash, uint64(len(data)), dr, ob, ranges); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. ReadBlob detects a truncated underlying DataReader.
+	t.Run("ReadBlob truncated reader", func(t *testing.T) {
+		store := truncatedBlobStore{blob: blob, limit: BlockSize}
+		if _, err := ReadBlob(context.Background(), store, hash); !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Fatalf("ReadBlob truncated error = %v, want %v", err, io.ErrUnexpectedEOF)
+		}
+	})
+
+	// 2. Full BAO stream truncated at multiple boundaries.
+	for _, cut := range []int{0, 4, 8, 40, len(encoded) / 2, len(encoded) - 1} {
+		t.Run("DownloadBlob", func(t *testing.T) {
+			s := &trailingStream{resp: encoded[:cut], limit: 0}
+			if err := DownloadBlob(context.Background(), s, hash, io.Discard); !errors.Is(err, ErrInvalidBlob) {
+				t.Fatalf("DownloadBlob cut=%d error = %v, want %v", cut, err, ErrInvalidBlob)
+			}
+		})
+	}
+
+	// 3. Chunk-range BAO stream truncated at multiple boundaries.
+	chunkBytes := chunksEncoded.Bytes()
+	for _, cut := range []int{0, 4, 8, 40, len(chunkBytes) / 2, len(chunkBytes) - 1} {
+		t.Run("DownloadBlobChunks", func(t *testing.T) {
+			s := &trailingStream{resp: chunkBytes[:cut], limit: 0}
+			if _, err := DownloadBlobChunks(context.Background(), s, hash, ranges, io.Discard); !errors.Is(err, ErrInvalidBlob) {
+				t.Fatalf("DownloadBlobChunks cut=%d error = %v, want %v", cut, err, ErrInvalidBlob)
+			}
+		})
+	}
+
+	// 4. GetManyBlobBytes truncated after the first blob of two.
+	t.Run("GetManyBlobBytes truncated between blobs", func(t *testing.T) {
+		s := &trailingStream{resp: encoded, limit: 0}
+		if _, err := GetManyBlobBytes(context.Background(), s, []Hash{hash, hash}); !errors.Is(err, ErrInvalidBlob) {
+			t.Fatalf("GetManyBlobBytes truncated error = %v, want %v", err, ErrInvalidBlob)
+		}
+	})
+
+	// 5. GetHashSequenceBytes truncated right after the root hash sequence.
+	t.Run("GetHashSequenceBytes truncated after root", func(t *testing.T) {
+		seq := NewHashSequence([]Hash{hash})
+		rootHash, rootEncoded, err := EncodeBlob(seq.Bytes())
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := &trailingStream{resp: rootEncoded, limit: 0}
+		if _, _, err := GetHashSequenceBytes(context.Background(), s, rootHash); !errors.Is(err, ErrInvalidBlob) {
+			t.Fatalf("GetHashSequenceBytes truncated error = %v, want %v", err, ErrInvalidBlob)
+		}
+	})
+
+	// 6. Observe stream truncated mid-varint or right after length prefix.
+	for _, tt := range []struct {
+		name string
+		wire []byte
+	}{
+		{name: "truncated varint", wire: []byte{0x80}},
+		{name: "length prefix with zero body bytes", wire: []byte{0x04}},
+		{name: "partial body", wire: []byte{0x04, 0x01, 0x02}},
+	} {
+		t.Run("Observe/"+tt.name, func(t *testing.T) {
+			s := &trailingStream{resp: tt.wire, limit: 0}
+			var gotErr error
+			for _, err := range Observe(context.Background(), s, hash) {
+				if err != nil {
+					gotErr = err
+				}
+			}
+			if !errors.Is(gotErr, io.ErrUnexpectedEOF) {
+				t.Fatalf("Observe(%s) error = %v, want %v", tt.name, gotErr, io.ErrUnexpectedEOF)
+			}
+		})
+	}
+}
+
+type truncatedBlobStore struct {
+	blob  *MemBlob
+	limit int64
+}
+
+func (s truncatedBlobStore) Open(context.Context, Hash) (Blob, error) {
+	return truncatedBlob{MemBlob: s.blob, limit: s.limit}, nil
+}
+
+type truncatedBlob struct {
+	*MemBlob
+	limit int64
+}
+
+func (b truncatedBlob) DataReader(context.Context) (BlobReader, error) {
+	return byteReader{Reader: bytes.NewReader(b.data[:b.limit])}, nil
 }

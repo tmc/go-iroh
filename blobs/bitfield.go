@@ -2,8 +2,10 @@ package blobs
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 
 	"github.com/tmc/go-iroh/endpointticket"
 )
@@ -62,6 +64,38 @@ func (b Bitfield) IsComplete() bool {
 	return chunkRangesSubset(RangeChunks(0, chunkCount(b.size)), b.ranges)
 }
 
+// TotalBytes returns the number of bytes covered by b's chunk ranges,
+// clipped to b.Size(). Ranges starting at or past b.Size() contribute zero
+// bytes without underflowing or overflowing.
+func (b Bitfield) TotalBytes() uint64 {
+	if b.size == 0 {
+		return 0
+	}
+	ranges := b.ranges.normalize()
+	var total uint64
+	for _, r := range ranges.ranges {
+		start := chunkBytesSaturating(r.Start)
+		end := min(chunkBytesSaturating(r.End), b.size)
+		if end > start {
+			total += end - start
+		}
+	}
+	if ranges.open != nil {
+		start := chunkBytesSaturating(*ranges.open)
+		if b.size > start {
+			total += b.size - start
+		}
+	}
+	return total
+}
+
+func chunkBytesSaturating(chunk uint64) uint64 {
+	if chunk > maxChunkIndex() {
+		return math.MaxUint64
+	}
+	return chunk * ChunkSize
+}
+
 func (b Bitfield) encodeObserveItem(dst []byte) []byte {
 	dst = appendVarint(dst, b.size)
 	return encodeChunkRangesBoundaries(dst, b.ranges)
@@ -102,6 +136,9 @@ func readObserveItem(r *bufio.Reader) (Bitfield, error) {
 	}
 	item := make([]byte, n)
 	if _, err := io.ReadFull(r, item); err != nil {
+		if errors.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
+		}
 		return Bitfield{}, fmt.Errorf("blobs: read observe item: %w", err)
 	}
 	var bitfield Bitfield
@@ -122,6 +159,9 @@ func readVarintReader(r io.ByteReader) (uint64, error) {
 	for i := 0; ; i++ {
 		c, err := r.ReadByte()
 		if err != nil {
+			if i > 0 && errors.Is(err, io.EOF) {
+				return 0, io.ErrUnexpectedEOF
+			}
 			return 0, err
 		}
 		if c < 0x80 {
