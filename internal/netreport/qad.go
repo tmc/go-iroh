@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"strings"
 	"time"
 
 	tls "github.com/tmc/go-iroh/internal/itls/tls"
@@ -43,7 +44,13 @@ type qadConn struct {
 // It returns once the QUIC handshake completes. The caller must close the
 // returned connection with [qadConn.close].
 func newQADClient(dialAddr netip.AddrPort, host string, baseTLS *tls.Config, quicCfg *quic.Config) (*qadConn, error) {
-	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	network := "udp4"
+	bindIP := net.IPv4zero
+	if dialAddr.Addr().Is6() && !dialAddr.Addr().Is4In6() {
+		network = "udp6"
+		bindIP = net.IPv6zero
+	}
+	udpConn, err := net.ListenUDP(network, &net.UDPAddr{IP: bindIP, Port: 0})
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +90,7 @@ func qadTLSConfig(host string, base *tls.Config) *tls.Config {
 	cfg.MinVersion = tls.VersionTLS13
 	cfg.MaxVersion = tls.VersionTLS13
 	cfg.NextProtos = []string{alpnQAD}
-	cfg.ServerName = host
+	cfg.ServerName = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 	return cfg
 }
 

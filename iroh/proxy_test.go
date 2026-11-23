@@ -1,12 +1,20 @@
 package iroh
 
 import (
+	"bufio"
+	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/tmc/go-iroh/dns"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 func TestProxyFromEnvironmentSubprocess(t *testing.T) {
@@ -121,4 +129,122 @@ func ExampleProxyURL() {
 	}
 	fmt.Println(selected.Scheme, selected.Host)
 	// Output: http proxy.example:3128
+}
+
+// TestPkarrUsesEndpointProxy mirrors upstream n0-computer/iroh#4595: when an
+// endpoint is configured with WithProxy, pkarr resolver and publisher requests
+// registered via WithAddressLookup route through the endpoint's proxy.
+func TestPkarrUsesEndpointProxy(t *testing.T) {
+	capturingProxy := func(t *testing.T) (*url.URL, <-chan string) {
+		t.Helper()
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { ln.Close() })
+		reqCh := make(chan string, 2)
+		go func() {
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				go func(c net.Conn) {
+					defer c.Close()
+					line, err := bufio.NewReader(c).ReadString('\n')
+					if err == nil {
+						reqCh <- strings.TrimSpace(line)
+					}
+				}(conn)
+			}
+		}()
+		u, err := url.Parse("http://" + ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u, reqCh
+	}
+
+	t.Run("resolver", func(t *testing.T) {
+		proxyURL, reqCh := capturingProxy(t)
+		res, err := NewPkarrResolver("https://pkarr.test/pkarr", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var svcs AddressLookupServices
+		svcs.AddResolver(res)
+
+		ep, err := Bind(t.Context(), WithProxy(ProxyURL(proxyURL)), WithAddressLookup(&svcs))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ep.Shutdown(context.Background())
+
+		sk, _ := key.GenerateSecretKey()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for range svcs.Resolve(ctx, sk.Public().EndpointID()) {
+			break
+		}
+
+		select {
+		case line := <-reqCh:
+			if !strings.HasPrefix(line, "CONNECT pkarr.test:443 ") {
+				t.Fatalf("proxy received %q, want CONNECT pkarr.test:443", line)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("proxy did not receive pkarr resolver request")
+		}
+	})
+
+	t.Run("publisher", func(t *testing.T) {
+		proxyURL, reqCh := capturingProxy(t)
+		sk, _ := key.GenerateSecretKey()
+		pub, err := NewPkarrPublisher(sk, "https://pkarr.test/pkarr", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pub.Close()
+		var svcs AddressLookupServices
+		svcs.AddPublisher(pub)
+
+		ep, err := Bind(t.Context(), WithProxy(ProxyURL(proxyURL)), WithAddressLookup(&svcs))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ep.Shutdown(context.Background())
+
+		relayU, _ := netaddr.ParseRelayURL("https://relay.example")
+		pub.Publish(dns.NewEndpointData(netaddr.RelayAddr{URL: relayU}))
+
+		select {
+		case line := <-reqCh:
+			if !strings.HasPrefix(line, "CONNECT pkarr.test:443 ") {
+				t.Fatalf("proxy received %q, want CONNECT pkarr.test:443", line)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("proxy did not receive pkarr publisher request")
+		}
+	})
+}
+
+func TestWithProxyRedactsCredentialsInError(t *testing.T) {
+	badProxy, err := url.Parse("socks5://proxy-user:s3cret@proxy.example:1080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c config
+	if err := WithProxy(ProxyURL(badProxy))(&c); err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.proxy(&url.URL{Scheme: "https", Host: "relay.example"})
+	if err == nil {
+		t.Fatal("expected invalid proxy URL error")
+	}
+	if strings.Contains(err.Error(), "s3cret") {
+		t.Fatalf("error leaked password: %v", err)
+	}
+	if !strings.Contains(err.Error(), "proxy-user:") {
+		t.Fatalf("error = %q, want redacted URL preserving username", err)
+	}
 }

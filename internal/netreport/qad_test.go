@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"net/netip"
@@ -15,6 +16,8 @@ import (
 
 	tls "github.com/tmc/go-iroh/internal/itls/tls"
 	quic "github.com/tmc/go-iroh/internal/qng"
+	"github.com/tmc/go-iroh/netaddr"
+	"github.com/tmc/go-iroh/relay"
 )
 
 func TestQADWireConstants(t *testing.T) {
@@ -230,5 +233,117 @@ func TestQADObservedAddrNotNegotiatedReturnsPromptly(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed >= qadObservedAddrWait {
 		t.Fatalf("waited %v for a relay that never reports; want a prompt return", elapsed)
+	}
+}
+
+// TestQADIPv6LiteralRelayURL mirrors upstream n0-computer/iroh#4527: a relay
+// URL with an IPv6 literal host must verify against a certificate for the bare
+// IPv6 address (no brackets) and complete a QADv6 probe.
+func TestQADIPv6LiteralRelayURL(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want string
+	}{
+		{"https://relay.example.test", "relay.example.test"},
+		{"https://192.0.2.10", "192.0.2.10"},
+		{"https://[2001:db8::10]", "2001:db8::10"},
+		{"https://[::1]:8443", "::1"},
+	} {
+		u, err := netaddr.ParseRelayURL(tc.raw)
+		if err != nil {
+			t.Fatalf("ParseRelayURL(%q): %v", tc.raw, err)
+		}
+		if got := u.Host(); got != tc.want {
+			t.Errorf("RelayURL(%q).Host() = %q, want %q", tc.raw, got, tc.want)
+		}
+	}
+
+	probeSock, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
+	if err != nil {
+		t.Skipf("IPv6 loopback unavailable: %v", err)
+	}
+	probeSock.Close()
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "::1"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IPAddresses:           []net.IP{net.IPv6loopback},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsedCert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(parsedCert)
+
+	serverTLS := &tls.Config{
+		Certificates:           []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: priv}},
+		SessionTicketsDisabled: true,
+		MinVersion:             tls.VersionTLS13,
+		NextProtos:             []string{alpnQAD},
+	}
+	udpConn, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udpConn.Close()
+	ln, err := quic.Listen(udpConn, serverTLS, &quic.Config{
+		SendObservedAddressReports: true,
+		KeepAlivePeriod:            100 * time.Millisecond,
+		MaxIdleTimeout:             qadMaxIdle,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() {
+		for {
+			conn, err := ln.Accept(ctx)
+			if err != nil {
+				return
+			}
+			go func() { <-conn.Context().Done() }()
+		}
+	}()
+
+	quicPort := uint16(udpConn.LocalAddr().(*net.UDPAddr).Port)
+	httpsPort := 8443
+	if quicPort == 8443 {
+		httpsPort = 8444
+	}
+	u, err := netaddr.ParseRelayURL(fmt.Sprintf("https://[::1]:%d", httpsPort))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := relay.NewConfig(u, &relay.QUICConfig{Port: quicPort})
+	client := NewClient(relay.NewMap(cfg)).
+		WithQADTLSConfig(&tls.Config{RootCAs: roots}).
+		WithQUICConfig(&quic.Config{
+			ReceiveObservedAddressReports: true,
+			KeepAlivePeriod:               100 * time.Millisecond,
+			MaxIdleTimeout:                qadMaxIdle,
+		})
+
+	rep := client.runQADProbe(ctx, cfg, ProbeQADv6)
+	if rep == nil {
+		t.Fatal("runQADProbe(ProbeQADv6) returned nil for IPv6 literal relay URL")
+	}
+	if !rep.addr.IsValid() || !rep.addr.Addr().Is6() {
+		t.Fatalf("observed addr = %v, want valid IPv6 address", rep.addr)
 	}
 }

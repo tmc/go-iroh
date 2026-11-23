@@ -66,6 +66,7 @@ type Endpoint struct {
 	// back to the endpoint, so there is no import cycle.
 	remotes *socket.RemoteMap
 	lookup  *AddressLookupServices
+	proxy   func(*url.URL) (*url.URL, error)
 
 	mu          sync.Mutex
 	closed      bool
@@ -317,9 +318,10 @@ func WithRelayMode(mode relay.Mode) Option {
 	}
 }
 
-// WithProxy routes relay connections and net report HTTP requests through the
-// proxy returned for each target URL. A nil proxy URL means connect directly.
-// The proxy function may be called concurrently.
+// WithProxy routes relay connections, net report HTTP requests, and pkarr
+// address-lookup requests through the proxy returned for each target URL. A nil
+// proxy URL means connect directly. The proxy function may be called
+// concurrently.
 func WithProxy(proxy func(*url.URL) (*url.URL, error)) Option {
 	return func(c *config) error {
 		if proxy == nil {
@@ -666,10 +668,14 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		hooks:        append([]EndpointHooks(nil), c.hooks...),
 		custom:       append([]CustomTransport(nil), c.custom...),
 		lookup:       c.lookup,
+		proxy:        c.proxy,
 		closedCh:     make(chan struct{}),
 		acceptReady:  make(chan struct{}, 1),
 		admissions:   admissions{max: maxAdmitting},
 		stableIDs:    make(map[*quic.Conn]uint64),
+	}
+	if ep.proxy != nil && ep.lookup != nil {
+		ep.lookup.setProxy(ep.proxy)
 	}
 	// Assigned after the literal: the runner needs ep.transport so QAD
 	// probes ride the endpoint's own socket (see qadDialer).

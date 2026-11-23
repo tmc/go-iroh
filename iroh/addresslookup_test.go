@@ -692,7 +692,7 @@ func TestPkarrResolveBoundsResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client, err := newPkarrRelayClient(srv.URL, srv.Client())
+	client, err := newPkarrRelayClient(srv.URL, srv.Client(), nil)
 	if err != nil {
 		t.Fatalf("newPkarrRelayClient: %v", err)
 	}

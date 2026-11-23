@@ -285,6 +285,71 @@ func TestClientProxyFailureDoesNotLeakCredentials(t *testing.T) {
 	if strings.Contains(err.Error(), "proxy-secret") {
 		t.Fatalf("Connect error leaked proxy password: %v", err)
 	}
+	encoded := base64.StdEncoding.EncodeToString([]byte("proxy-user:proxy-secret"))
+	if strings.Contains(err.Error(), encoded) {
+		t.Fatalf("Connect error leaked base64 proxy credentials: %v", err)
+	}
+}
+
+func TestClientProxyAuthorizationEncoding(t *testing.T) {
+	// Matches upstream n0-computer/iroh#4591: standard base64 alphabet (RFC 7617)
+	// and percent-decoded userinfo before base64 encoding.
+	cases := []struct {
+		name     string
+		userinfo string
+		wantAuth string
+	}{
+		{
+			name:     "standard base64 alphabet",
+			userinfo: "user:s3cret~~",
+			wantAuth: "Basic dXNlcjpzM2NyZXR+fg==",
+		},
+		{
+			name:     "percent-encoded angle brackets",
+			userinfo: "user:s3cret%3E%3E",
+			wantAuth: "Basic dXNlcjpzM2NyZXQ+Pg==",
+		},
+		{
+			name:     "percent-encoded at sign",
+			userinfo: "user:p%40ss",
+			wantAuth: "Basic dXNlcjpwQHNz",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotCh := make(chan string, 1)
+			proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotCh <- r.Header.Get("Proxy-Authorization")
+				http.Error(w, "stop", http.StatusProxyAuthRequired)
+			}))
+			defer proxy.Close()
+
+			parsed, err := url.Parse(proxy.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			proxyURL, err := url.Parse("http://" + tc.userinfo + "@" + parsed.Host)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, err = dialProxy(context.Background(), proxyURL, "relay.example:443", nil)
+			if err == nil {
+				t.Fatal("dialProxy succeeded, want 407 failure")
+			}
+			if got := <-gotCh; got != tc.wantAuth {
+				t.Errorf("Proxy-Authorization = %q, want %q", got, tc.wantAuth)
+			}
+			// Neither raw password nor encoded credentials may leak into errors.
+			if pw, ok := proxyURL.User.Password(); ok && pw != "" && strings.Contains(err.Error(), pw) {
+				t.Errorf("error leaked password: %v", err)
+			}
+			if strings.Contains(err.Error(), strings.TrimPrefix(tc.wantAuth, "Basic ")) {
+				t.Errorf("error leaked base64 credentials: %v", err)
+			}
+		})
+	}
 }
 
 func TestDialProxyPreservesBufferedTunnelBytes(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"net/url"
 	"slices"
 	"sync"
 	"time"
@@ -217,6 +218,26 @@ type AddressLookupServices struct {
 	resolvers  []AddressResolver
 	lastData   *dns.EndpointData
 	addrFilter AddrFilter
+	proxy      func(*url.URL) (*url.URL, error)
+}
+
+// setProxy propagates the endpoint's proxy to registered and future pkarr
+// publishers and resolvers that were not configured with an explicit proxy or
+// HTTP client (upstream n0-computer/iroh#4595).
+func (s *AddressLookupServices) setProxy(proxy func(*url.URL) (*url.URL, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.proxy = proxy
+	for _, p := range s.publishers {
+		if pp, ok := p.(*PkarrPublisher); ok {
+			pp.client.setEndpointProxy(proxy)
+		}
+	}
+	for _, r := range s.resolvers {
+		if pr, ok := r.(*PkarrResolver); ok {
+			pr.client.setEndpointProxy(proxy)
+		}
+	}
 }
 
 // SetAddrFilter sets a filter applied to all data before publishing to any
@@ -232,6 +253,11 @@ func (s *AddressLookupServices) SetAddrFilter(f AddrFilter) {
 func (s *AddressLookupServices) AddPublisher(publisher AddressPublisher) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.proxy != nil {
+		if pp, ok := publisher.(*PkarrPublisher); ok {
+			pp.client.setEndpointProxy(s.proxy)
+		}
+	}
 	if s.lastData != nil {
 		publisher.Publish(*s.lastData)
 	}
@@ -242,6 +268,11 @@ func (s *AddressLookupServices) AddPublisher(publisher AddressPublisher) {
 func (s *AddressLookupServices) AddResolver(resolver AddressResolver) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.proxy != nil {
+		if pr, ok := resolver.(*PkarrResolver); ok {
+			pr.client.setEndpointProxy(s.proxy)
+		}
+	}
 	s.resolvers = append(s.resolvers, resolver)
 }
 

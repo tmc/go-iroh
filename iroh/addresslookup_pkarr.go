@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/tmc/go-iroh/dns"
+	"github.com/tmc/go-iroh/internal/proxyurl"
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/watch"
 )
@@ -53,6 +55,7 @@ const (
 type PkarrPublisher struct {
 	endpointID key.EndpointID
 	addrFilter AddrFilter
+	client     *pkarrRelayClient
 	value      *watch.Value[*dns.EndpointInfo]
 	cancel     context.CancelFunc
 	done       chan struct{}
@@ -73,6 +76,10 @@ type PkarrPublisherConfig struct {
 	// HTTPClient is used for relay requests. If nil, a client with a per-request
 	// timeout is used.
 	HTTPClient *http.Client
+	// Proxy selects an HTTP proxy for relay requests when HTTPClient is nil.
+	// If nil, the publisher inherits the endpoint's proxy when registered via
+	// [WithAddressLookup], or falls back to [http.ProxyFromEnvironment].
+	Proxy func(*url.URL) (*url.URL, error)
 }
 
 // NewPkarrPublisher creates a publisher that signs packets with secretKey,
@@ -83,6 +90,7 @@ func NewPkarrPublisher(secretKey key.SecretKey, relayURL string, cfg *PkarrPubli
 	republishInterval := DefaultRepublishInterval
 	filter := RelayOnlyFilter
 	var httpClient *http.Client
+	var proxy func(*url.URL) (*url.URL, error)
 	if cfg != nil {
 		if cfg.TTL != 0 {
 			ttl = cfg.TTL
@@ -94,9 +102,10 @@ func NewPkarrPublisher(secretKey key.SecretKey, relayURL string, cfg *PkarrPubli
 			filter = cfg.AddrFilter
 		}
 		httpClient = cfg.HTTPClient
+		proxy = cfg.Proxy
 	}
 
-	client, err := newPkarrRelayClient(relayURL, httpClient)
+	client, err := newPkarrRelayClient(relayURL, httpClient, proxy)
 	if err != nil {
 		return nil, fmt.Errorf("pkarr publisher: %w", err)
 	}
@@ -104,6 +113,7 @@ func NewPkarrPublisher(secretKey key.SecretKey, relayURL string, cfg *PkarrPubli
 	p := &PkarrPublisher{
 		endpointID: secretKey.Public().EndpointID(),
 		addrFilter: filter,
+		client:     client,
 		value:      watch.NewValue[*dns.EndpointInfo](nil),
 		cancel:     cancel,
 		done:       make(chan struct{}),
@@ -231,16 +241,22 @@ type PkarrResolverConfig struct {
 	// HTTPClient is used for relay requests. If nil, a client with a per-request
 	// timeout is used.
 	HTTPClient *http.Client
+	// Proxy selects an HTTP proxy for relay requests when HTTPClient is nil.
+	// If nil, the resolver inherits the endpoint's proxy when registered via
+	// [WithAddressLookup], or falls back to [http.ProxyFromEnvironment].
+	Proxy func(*url.URL) (*url.URL, error)
 }
 
 // NewPkarrResolver creates a resolver that resolves from the pkarr relay at
 // relayURL.
 func NewPkarrResolver(relayURL string, cfg *PkarrResolverConfig) (*PkarrResolver, error) {
 	var httpClient *http.Client
+	var proxy func(*url.URL) (*url.URL, error)
 	if cfg != nil {
 		httpClient = cfg.HTTPClient
+		proxy = cfg.Proxy
 	}
-	client, err := newPkarrRelayClient(relayURL, httpClient)
+	client, err := newPkarrRelayClient(relayURL, httpClient, proxy)
 	if err != nil {
 		return nil, fmt.Errorf("pkarr resolver: %w", err)
 	}
@@ -283,19 +299,62 @@ func (r *PkarrResolver) Resolve(ctx context.Context, id key.EndpointID) iter.Seq
 // iroh/src/address_lookup/pkarr.rs PkarrRelayClient; the route and body match
 // iroh-dns-server/src/http/pkarr.rs (put/get).
 type pkarrRelayClient struct {
-	httpClient *http.Client
-	relayURL   *url.URL
+	httpClient    *http.Client
+	relayURL      *url.URL
+	explicitProxy bool
+	endpointProxy atomic.Pointer[func(*url.URL) (*url.URL, error)]
 }
 
-func newPkarrRelayClient(relayURL string, client *http.Client) (*pkarrRelayClient, error) {
+func newPkarrRelayClient(relayURL string, client *http.Client, proxy func(*url.URL) (*url.URL, error)) (*pkarrRelayClient, error) {
 	u, err := url.Parse(relayURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse relay url: %w", err)
 	}
-	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+	c := &pkarrRelayClient{
+		relayURL:      u,
+		explicitProxy: client != nil || proxy != nil,
 	}
-	return &pkarrRelayClient{httpClient: client, relayURL: u}, nil
+	if client == nil {
+		tr := &http.Transport{
+			Proxy: func(req *http.Request) (*url.URL, error) {
+				if proxy != nil {
+					return validatedProxyURL(proxy, req.URL)
+				}
+				if epProxy := c.endpointProxy.Load(); epProxy != nil && *epProxy != nil {
+					return validatedProxyURL(*epProxy, req.URL)
+				}
+				return http.ProxyFromEnvironment(req)
+			},
+		}
+		client = &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: tr,
+		}
+	}
+	c.httpClient = client
+	return c, nil
+}
+
+func (c *pkarrRelayClient) setEndpointProxy(proxy func(*url.URL) (*url.URL, error)) {
+	if c == nil || c.explicitProxy {
+		return
+	}
+	if proxy == nil {
+		c.endpointProxy.Store(nil)
+		return
+	}
+	c.endpointProxy.Store(&proxy)
+}
+
+func validatedProxyURL(proxy func(*url.URL) (*url.URL, error), target *url.URL) (*url.URL, error) {
+	u, err := proxy(target)
+	if err != nil || u == nil {
+		return u, err
+	}
+	if err := proxyurl.Validate(u); err != nil {
+		return nil, fmt.Errorf("iroh: invalid proxy URL %s", u.Redacted())
+	}
+	return u, nil
 }
 
 // keyURL returns "<relay>/<z32>" for the endpoint id's z-base-32 encoding.
