@@ -225,6 +225,13 @@ func (s *HyparviewState) PassivePeers() []PeerID {
 	return s.passive.slice()
 }
 
+// WantsConnection reports whether this topic currently wants to keep a
+// connection open to peer (it is in the active view or awaiting a Neighbor
+// reply).
+func (s *HyparviewState) WantsConnection(peer PeerID) bool {
+	return s.active.contains(peer) || s.isPending(peer)
+}
+
 // Handle applies ev and returns protocol outputs for the caller to process.
 func (s *HyparviewState) Handle(ev HyparviewInEvent) []HyparviewOutEvent {
 	var out []HyparviewOutEvent

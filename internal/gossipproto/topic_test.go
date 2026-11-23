@@ -163,6 +163,52 @@ func TestStateThreadsMaxPayloadSizeToPlumtree(t *testing.T) {
 	}
 }
 
+func TestStateTopicWantsConnection(t *testing.T) {
+	me := PeerID(seq32(1))
+	peer := PeerID(seq32(2))
+	topic1 := TopicID(seq32(10))
+	topic2 := TopicID(seq32(20))
+	state := NewStateWithRand(me, nil, DefaultConfig(), testRand(t))
+
+	for _, topic := range []TopicID{topic1, topic2} {
+		state.Handle(InEvent{
+			Kind:    CommandEvent,
+			Topic:   topic,
+			Command: TopicCommand{Kind: TopicCommandJoin},
+		})
+		state.Handle(InEvent{
+			Kind: RecvMessage,
+			From: peer,
+			Message: Message{
+				Topic:   topic,
+				Message: TopicMessage{Kind: TopicMessageSwarm, Swarm: HyparviewMessage{Kind: HyparviewJoin}},
+			},
+		})
+	}
+	if !state.TopicWantsConnection(topic1, peer) || !state.TopicWantsConnection(topic2, peer) || !state.WantsConnection(peer) {
+		t.Fatal("both topics should want connection to active peer")
+	}
+
+	// Peer leaves topic2: topic1 still wants the connection, topic2 does not.
+	state.Handle(InEvent{
+		Kind: RecvMessage,
+		From: peer,
+		Message: Message{
+			Topic:   topic2,
+			Message: TopicMessage{Kind: TopicMessageSwarm, Swarm: HyparviewMessage{Kind: HyparviewDisconnect}},
+		},
+	})
+	if !state.TopicWantsConnection(topic1, peer) {
+		t.Fatal("topic1 should still want peer")
+	}
+	if state.TopicWantsConnection(topic2, peer) {
+		t.Fatal("topic2 should no longer want peer")
+	}
+	if !state.WantsConnection(peer) {
+		t.Fatal("state should still want peer for topic1")
+	}
+}
+
 func hasDisconnect(events []OutEvent, peer PeerID) bool {
 	for _, ev := range events {
 		if ev.Kind == DisconnectPeer && ev.To == peer {

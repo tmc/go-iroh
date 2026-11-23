@@ -125,6 +125,7 @@ type Gossip struct {
 	nextGeneration uint64
 	peerAddrs      map[PeerID]netaddr.EndpointAddr
 	peerSenders    map[PeerID]*Sender
+	peerOpenTopics map[PeerID]map[TopicID]struct{}
 	sendQueues     map[PeerID]*sendQueue
 	metrics        gossipMetrics
 	closed         bool
@@ -148,6 +149,7 @@ func NewGossip(ep *iroh.Endpoint, opts ...GossipOption) *Gossip {
 		rejoins:        make(map[TopicID]*rejoin),
 		peerAddrs:      make(map[PeerID]netaddr.EndpointAddr),
 		peerSenders:    make(map[PeerID]*Sender),
+		peerOpenTopics: make(map[PeerID]map[TopicID]struct{}),
 		sendQueues:     make(map[PeerID]*sendQueue),
 	}
 	for _, opt := range opts {
@@ -252,6 +254,7 @@ wait:
 	senders := make([]*Sender, 0, len(g.peerSenders))
 	for peer, sender := range g.peerSenders {
 		delete(g.peerSenders, peer)
+		delete(g.peerOpenTopics, peer)
 		senders = append(senders, sender)
 	}
 	g.mu.Unlock()
@@ -289,6 +292,7 @@ func (g *Gossip) Accept(ctx context.Context, conn *iroh.Conn) error {
 	g.mu.Lock()
 	if g.peerSenders[from] == sender {
 		delete(g.peerSenders, from)
+		delete(g.peerOpenTopics, from)
 	}
 	out := g.handleLocked(gossipproto.InEvent{
 		Kind: gossipproto.PeerDisconnected,
@@ -569,7 +573,47 @@ func (g *Gossip) dispatch(ctx context.Context, events []gossipproto.OutEvent) er
 			}
 		}
 	}
+	g.finishUnwantedStreams()
 	return err
+}
+
+// finishUnwantedStreams finishes the stream of every topic that may have an
+// open stream to a peer it no longer wants. When a writer is running for the
+// peer, the finish is queued behind already-queued messages so they go out
+// first; otherwise the stream is closed directly.
+func (g *Gossip) finishUnwantedStreams() {
+	type directClose struct {
+		sender *Sender
+		topic  TopicID
+	}
+	var direct []directClose
+
+	g.mu.Lock()
+	if g.state == nil {
+		g.mu.Unlock()
+		return
+	}
+	for peer, topics := range g.peerOpenTopics {
+		for topic := range topics {
+			if g.state.TopicWantsConnection(topic, peer) {
+				continue
+			}
+			delete(topics, topic)
+			if _, queued := g.queueLocked(peer, sendItem{finish: true, finishTopic: topic}, false); !queued {
+				if sender := g.peerSenders[peer]; sender != nil {
+					direct = append(direct, directClose{sender: sender, topic: topic})
+				}
+			}
+		}
+		if len(topics) == 0 {
+			delete(g.peerOpenTopics, peer)
+		}
+	}
+	g.mu.Unlock()
+
+	for _, c := range direct {
+		_ = c.sender.FinishTopic(c.topic)
+	}
 }
 
 // A sendQueue holds the messages waiting to be written to one peer. A
@@ -585,11 +629,14 @@ type sendQueue struct {
 	done    chan struct{} // closed when the writer returns
 }
 
-// A sendItem is one message for a peer, or the instruction to close its
-// streams once the messages before it are written.
+// A sendItem is one message for a peer, the instruction to finish one topic's
+// stream, or the instruction to close all of its streams once the messages
+// before it are written.
 type sendItem struct {
-	msg        gossipproto.Message
-	disconnect bool
+	msg         gossipproto.Message
+	disconnect  bool
+	finish      bool
+	finishTopic TopicID
 	// generation, if non-zero, is the generation of msg.Topic the message
 	// belongs to. It is not sent once that generation has ended.
 	generation uint64
@@ -645,10 +692,18 @@ func (g *Gossip) queueLocked(peer PeerID, item sendItem, start bool) (*sendQueue
 		g.sendQueues[peer] = q
 		go g.writeQueue(peer, q)
 	}
-	if len(q.items) >= sendQueueCap {
+	// Finish items take no queue capacity so a topic can always close its
+	// stream behind queued messages even on a full queue.
+	if !item.finish && len(q.items) >= sendQueueCap {
 		return q, false
 	}
 	q.items = append(q.items, item)
+	if !item.finish && !item.disconnect {
+		if g.peerOpenTopics[peer] == nil {
+			g.peerOpenTopics[peer] = make(map[TopicID]struct{})
+		}
+		g.peerOpenTopics[peer][item.msg.Topic] = struct{}{}
+	}
 	return q, true
 }
 
@@ -682,6 +737,15 @@ func (g *Gossip) writeQueue(peer PeerID, q *sendQueue) {
 
 		if item.disconnect {
 			g.disconnect(peer)
+			continue
+		}
+		if item.finish {
+			g.mu.Lock()
+			sender := g.peerSenders[peer]
+			g.mu.Unlock()
+			if sender != nil {
+				_ = sender.FinishTopic(item.finishTopic)
+			}
 			continue
 		}
 		// Closing the connection is the only way to end a stalled
@@ -743,6 +807,7 @@ func (g *Gossip) dropQueueLocked(peer PeerID, q *sendQueue) *Sender {
 	}
 	if q.sender != nil && g.peerSenders[peer] == q.sender {
 		delete(g.peerSenders, peer)
+		delete(g.peerOpenTopics, peer)
 	}
 	return q.sender
 }
@@ -927,6 +992,7 @@ func (g *Gossip) disconnect(peer PeerID) {
 	g.mu.Lock()
 	sender := g.peerSenders[peer]
 	delete(g.peerSenders, peer)
+	delete(g.peerOpenTopics, peer)
 	g.mu.Unlock()
 	if sender != nil {
 		_ = sender.Close()

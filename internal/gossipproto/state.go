@@ -131,6 +131,22 @@ func (s *State) HasActivePeers(topic TopicID) bool {
 	return st != nil && st.HasActivePeers()
 }
 
+// TopicWantsConnection reports whether topic wants to keep a connection to peer.
+func (s *State) TopicWantsConnection(topic TopicID, peer PeerID) bool {
+	st := s.topics[topic]
+	return st != nil && st.WantsConnection(peer)
+}
+
+// WantsConnection reports whether any joined topic wants a connection to peer.
+func (s *State) WantsConnection(peer PeerID) bool {
+	for _, st := range s.topics {
+		if st.WantsConnection(peer) {
+			return true
+		}
+	}
+	return false
+}
+
 // Handle applies ev and returns protocol outputs for the caller to process.
 func (s *State) Handle(ev InEvent) []OutEvent {
 	switch ev.Kind {

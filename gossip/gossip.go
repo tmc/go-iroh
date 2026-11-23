@@ -149,6 +149,30 @@ func (s *Sender) Send(ctx context.Context, msg Message) error {
 	return nil
 }
 
+// FinishTopic closes the send stream for topic, if one is open.
+func (s *Sender) FinishTopic(topic TopicID) error {
+	if s == nil || s.topic != nil {
+		return nil
+	}
+	s.mu.Lock()
+	w := s.streams[topic]
+	delete(s.streams, topic)
+	s.mu.Unlock()
+	if w == nil {
+		return nil
+	}
+	return w.Close()
+}
+
+func (s *Sender) hasOpenStream(topic TopicID) bool {
+	if s == nil || s.topic != nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.streams[topic] != nil
+}
+
 // Close closes all open topic streams.
 func (s *Sender) Close() error {
 	if s.topic != nil {

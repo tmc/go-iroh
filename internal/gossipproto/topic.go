@@ -156,6 +156,11 @@ func (s *TopicState) HasActivePeers() bool {
 	return len(s.swarm.ActivePeers()) > 0
 }
 
+// WantsConnection reports whether the topic wants to keep a connection to peer.
+func (s *TopicState) WantsConnection(peer PeerID) bool {
+	return s.swarm.WantsConnection(peer)
+}
+
 // Handle applies ev and returns protocol outputs for the caller to process.
 func (s *TopicState) Handle(ev TopicInEvent) []TopicOutEvent {
 	var out []TopicOutEvent
