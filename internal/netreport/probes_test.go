@@ -36,6 +36,9 @@ func TestNewProbeClient(t *testing.T) {
 	if tr.TLSClientConfig != nil {
 		t.Error("TLSClientConfig set without a config")
 	}
+	if !tr.DisableKeepAlives {
+		t.Error("DisableKeepAlives = false, want true")
+	}
 
 	// CheckRedirect must refuse to follow redirects (matches reqwest
 	// redirect::Policy::none in reportgen.rs).
@@ -396,5 +399,32 @@ func TestHTTPSProbePreservesPathPrefix(t *testing.T) {
 		if rep == nil || gotPath != "/prefix/a/ping" {
 			t.Fatalf("suffix %q: gotPath = %q, want /prefix/a/ping", suffix, gotPath)
 		}
+	}
+}
+
+func TestCaptivePortalRequestsNonKeepAlive(t *testing.T) {
+	var gotClose bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotClose = r.Close || strings.EqualFold(r.Header.Get("Connection"), "close")
+		challenge := r.Header.Get(challengeHeader)
+		w.Header().Set("Connection", "close")
+		w.Header().Set(responseHeader, "response "+challenge)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	u, err := netaddr.ParseRelayURL(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasPortal, err := checkCaptivePortal(context.Background(), u, nil, nil)
+	if err != nil {
+		t.Fatalf("checkCaptivePortal: %v", err)
+	}
+	if hasPortal {
+		t.Error("hasPortal = true, want false")
+	}
+	if !gotClose {
+		t.Error("server did not observe Connection: close on /generate_204 request")
 	}
 }

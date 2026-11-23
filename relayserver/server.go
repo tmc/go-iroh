@@ -13,6 +13,8 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -26,13 +28,26 @@ import (
 	"github.com/tmc/go-iroh/relay"
 )
 
+// HTTP headers used by [HTTPAccessControl] requests (upstream
+// n0-computer/iroh#4586). Both headers carry the connecting endpoint's ID so
+// existing auth services that still read X-Iroh-NodeId continue working.
 const (
-	maxFrameSize            = 1024 * 1024
-	defaultEstablishTimeout = 30 * time.Second
-	defaultWriteTimeout     = 2 * time.Second
-	defaultClientRate       = 64 * 1024 * 1024
-	defaultMaxQueuedBytes   = 8 * 1024 * 1024
-	defaultMaxPendingAuth   = 256
+	HeaderEndpointID = "X-Iroh-Endpoint-Id"
+	// HeaderNodeID is deprecated; use [HeaderEndpointID].
+	HeaderNodeID = "X-Iroh-NodeId"
+)
+
+const (
+	captivePortalPath            = "generate_204"
+	captivePortalChallengeHeader = "X-Iroh-Challenge"
+	captivePortalResponseHeader  = "X-Iroh-Response"
+	maxFrameSize                 = 1024 * 1024
+	defaultEstablishTimeout      = 30 * time.Second
+	defaultCaptivePortalTimeout  = 30 * time.Second
+	defaultWriteTimeout          = 2 * time.Second
+	defaultClientRate            = 64 * 1024 * 1024
+	defaultMaxQueuedBytes        = 8 * 1024 * 1024
+	defaultMaxPendingAuth        = 256
 )
 
 // maxSentTo bounds a session's destination table. Its keys are chosen by the
@@ -47,14 +62,16 @@ const maxSentTo = 1024
 
 // Server is an iroh relay protocol HTTP handler.
 type Server struct {
-	mu               sync.Mutex
-	clients          map[key.EndpointID]*session
-	establishTimeout time.Duration
-	writeTimeout     time.Duration
-	clientRate       int64
-	maxQueuedBytes   int64
-	pendingAuth      chan struct{}
-	metrics          relayMetrics
+	mu                   sync.Mutex
+	clients              map[key.EndpointID]*session
+	establishTimeout     time.Duration
+	captivePortalTimeout time.Duration
+	writeTimeout         time.Duration
+	clientRate           int64
+	maxQueuedBytes       int64
+	pendingAuth          chan struct{}
+	accessControl        func(ctx context.Context, id key.EndpointID) error
+	metrics              relayMetrics
 }
 
 type relayMetrics struct {
@@ -73,6 +90,50 @@ func WithClientRate(bytesPerSecond int64) Option {
 	return func(s *Server) { s.clientRate = bytesPerSecond }
 }
 
+// WithAccessControl sets a callback invoked after authentication to decide
+// whether an endpoint may connect to the relay. Returning a non-nil error
+// denies the connection with a ServerDeniesAuth frame.
+func WithAccessControl(fn func(ctx context.Context, id key.EndpointID) error) Option {
+	return func(s *Server) { s.accessControl = fn }
+}
+
+// HTTPAccessControl returns an access-control function suitable for
+// [WithAccessControl] that sends an empty-body HTTP POST to authURL for each
+// connecting endpoint. It sets both [HeaderEndpointID] ("X-Iroh-Endpoint-Id")
+// and the deprecated [HeaderNodeID] ("X-Iroh-NodeId") to the endpoint's ID, and
+// sets an Authorization Bearer header when bearerToken is non-empty. Access is
+// granted only on HTTP 200 with response body "true".
+func HTTPAccessControl(authURL, bearerToken string, client *http.Client) func(ctx context.Context, id key.EndpointID) error {
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	return func(ctx context.Context, id key.EndpointID) error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, authURL, nil)
+		if err != nil {
+			return fmt.Errorf("relayserver: build access request: %w", err)
+		}
+		idStr := id.String()
+		req.Header.Set(HeaderEndpointID, idStr)
+		req.Header.Set(HeaderNodeID, idStr)
+		if bearerToken != "" {
+			req.Header.Set("Authorization", "Bearer "+bearerToken)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("relayserver: access check: %w", err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 64))
+		if err != nil {
+			return fmt.Errorf("relayserver: read access response: %w", err)
+		}
+		if resp.StatusCode != http.StatusOK || string(body) != "true" {
+			return fmt.Errorf("relayserver: access denied (status %d)", resp.StatusCode)
+		}
+		return nil
+	}
+}
+
 // New returns a relay server with default settings.
 // Use [NewWithOptions] to configure it.
 func New() *Server { return NewWithOptions() }
@@ -80,12 +141,13 @@ func New() *Server { return NewWithOptions() }
 // NewWithOptions returns a relay server configured by opts.
 func NewWithOptions(opts ...Option) *Server {
 	s := &Server{
-		clients:          make(map[key.EndpointID]*session),
-		establishTimeout: defaultEstablishTimeout,
-		writeTimeout:     defaultWriteTimeout,
-		clientRate:       defaultClientRate,
-		maxQueuedBytes:   defaultMaxQueuedBytes,
-		pendingAuth:      make(chan struct{}, defaultMaxPendingAuth),
+		clients:              make(map[key.EndpointID]*session),
+		establishTimeout:     defaultEstablishTimeout,
+		captivePortalTimeout: defaultCaptivePortalTimeout,
+		writeTimeout:         defaultWriteTimeout,
+		clientRate:           defaultClientRate,
+		maxQueuedBytes:       defaultMaxQueuedBytes,
+		pendingAuth:          make(chan struct{}, defaultMaxPendingAuth),
 	}
 	for _, o := range opts {
 		o(s)
@@ -103,18 +165,50 @@ func (s *Server) Snapshot() metrics.Snapshot {
 	}
 }
 
-// ServeHTTP handles relay WebSocket requests at /relay and net-report latency
-// probes at /ping. Rust iroh clients require a 200 from /ping before selecting
-// a relay as their home relay (iroh-relay/src/http.rs).
+// ServeHTTP handles relay WebSocket requests at /relay, net-report latency
+// probes at /ping, and captive-portal checks at /generate_204. Rust iroh
+// clients require a 200 from /ping before selecting a relay as their home
+// relay (iroh-relay/src/http.rs).
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch strings.TrimPrefix(r.URL.Path, "/") {
 	case relay.RelayRelativePath:
 		s.handleRelay(w, r)
 	case relay.RelayProbeRelativePath:
 		w.WriteHeader(http.StatusOK)
+	case captivePortalPath:
+		s.handleCaptivePortal(w, r)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (s *Server) handleCaptivePortal(w http.ResponseWriter, r *http.Request) {
+	if s.captivePortalTimeout > 0 {
+		rc := http.NewResponseController(w)
+		deadline := time.Now().Add(s.captivePortalTimeout)
+		_ = rc.SetReadDeadline(deadline)
+		_ = rc.SetWriteDeadline(deadline)
+	}
+	// Close the connection after responding (no HTTP keep-alive), matching
+	// upstream n0-computer/iroh#4614.
+	w.Header().Set("Connection", "close")
+	if challenge := r.Header.Get(captivePortalChallengeHeader); isValidCaptivePortalChallenge(challenge) {
+		w.Header().Set(captivePortalResponseHeader, "response "+challenge)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func isValidCaptivePortalChallenge(s string) bool {
+	if len(s) == 0 || len(s) > 64 {
+		return false
+	}
+	for i := range len(s) {
+		c := s[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 type session struct {
@@ -172,6 +266,13 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		authCancel()
 		return
+	}
+	if s.accessControl != nil {
+		if err := s.accessControl(authCtx, id); err != nil {
+			deny(authCtx, conn, "not allowed")
+			authCancel()
+			return
+		}
 	}
 	<-s.pendingAuth
 	pendingAuth = false

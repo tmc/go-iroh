@@ -89,6 +89,7 @@ func serve(ctx context.Context, ln net.Listener, logger *log.Logger, shutdownTim
 	mux.Handle("/relay", relay)
 	// Rust iroh clients probe /ping before selecting a home relay.
 	mux.Handle("/ping", relay)
+	mux.Handle("/generate_204", relay)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "ok\n")
 	})

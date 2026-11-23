@@ -75,6 +75,7 @@ func checkCaptivePortal(ctx context.Context, relay netaddr.RelayURL, tlsConfig *
 	if err != nil {
 		return false, fmt.Errorf("build request: %w", err)
 	}
+	req.Close = true
 	req.Header.Set(challengeHeader, challenge)
 
 	resp, err := client.Do(req)
@@ -106,10 +107,12 @@ func joinPath(relay netaddr.RelayURL, path string) (string, error) {
 	return u.ResolveReference(ref).String(), nil
 }
 
-// newProbeClient builds an HTTP client that never follows redirects, mirroring
-// the reqwest builders in reportgen.rs (redirect::Policy::none).
+// newProbeClient builds an HTTP client that never follows redirects and
+// disables keep-alives, mirroring the one-shot probe clients in reportgen.rs.
 func newProbeClient(tlsConfig *tls.Config, proxy func(*url.URL) (*url.URL, error)) *http.Client {
-	transport := &http.Transport{}
+	transport := &http.Transport{
+		DisableKeepAlives: true,
+	}
 	if proxy != nil {
 		transport.Proxy = func(req *http.Request) (*url.URL, error) {
 			return proxy(req.URL)

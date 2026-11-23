@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -490,5 +491,123 @@ func TestRelayPathPrefixPreservation(t *testing.T) {
 			}
 			c.Close()
 		})
+	}
+}
+
+func TestHTTPAccessControlSendsEndpointIDAndLegacyNodeID(t *testing.T) {
+	var allow atomic.Bool
+	allow.Store(true)
+
+	type seenReq struct {
+		method     string
+		endpointID string
+		nodeID     string
+		auth       string
+	}
+	seenCh := make(chan seenReq, 4)
+	authSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenCh <- seenReq{
+			method:     r.Method,
+			endpointID: r.Header.Get(HeaderEndpointID),
+			nodeID:     r.Header.Get(HeaderNodeID),
+			auth:       r.Header.Get("Authorization"),
+		}
+		if allow.Load() {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("true"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("false"))
+	}))
+	defer authSrv.Close()
+
+	for _, useTLS := range []bool{false, true} {
+		name := "challenge-auth"
+		if useTLS {
+			name = "tls-key-material-auth"
+		}
+		t.Run(name, func(t *testing.T) {
+			srv := NewWithOptions(WithAccessControl(HTTPAccessControl(authSrv.URL, "service-secret", authSrv.Client())))
+			var ts *httptest.Server
+			var opts relayclient.Options
+			if useTLS {
+				ts = httptest.NewTLSServer(srv)
+				opts.TLSConfig = ts.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+			} else {
+				ts = httptest.NewServer(srv)
+			}
+			defer ts.Close()
+
+			u, err := netaddr.ParseRelayURL(ts.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sk, _ := key.GenerateSecretKey()
+			opts.SecretKey = sk
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			allow.Store(true)
+			c, err := relayclient.Connect(ctx, u, opts)
+			if err != nil {
+				t.Fatalf("Connect(allow): %v", err)
+			}
+			c.Close()
+
+			got := <-seenCh
+			wantID := sk.Public().EndpointID().String()
+			if got.method != http.MethodPost {
+				t.Errorf("auth method = %q, want POST", got.method)
+			}
+			if got.endpointID != wantID {
+				t.Errorf("%s = %q, want %q", HeaderEndpointID, got.endpointID, wantID)
+			}
+			if got.nodeID != wantID {
+				t.Errorf("%s = %q, want %q", HeaderNodeID, got.nodeID, wantID)
+			}
+			if got.auth != "Bearer service-secret" {
+				t.Errorf("Authorization = %q, want %q", got.auth, "Bearer service-secret")
+			}
+
+			allow.Store(false)
+			if c, err := relayclient.Connect(ctx, u, opts); err == nil {
+				c.Close()
+				t.Fatal("Connect(deny) succeeded, want ErrServerDeniedAuth")
+			} else if !errors.Is(err, relayproto.ErrServerDeniedAuth) {
+				t.Fatalf("Connect(deny) error = %v, want ErrServerDeniedAuth", err)
+			}
+			<-seenCh
+		})
+	}
+}
+
+func TestCaptivePortalGenerate204NonKeepAlive(t *testing.T) {
+	srv := New()
+	if srv.captivePortalTimeout != 30*time.Second {
+		t.Fatalf("captivePortalTimeout = %v, want 30s", srv.captivePortalTimeout)
+	}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/generate_204", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Iroh-Challenge", "ts_relay.example")
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+	if got := resp.Header.Get("X-Iroh-Response"); got != "response ts_relay.example" {
+		t.Errorf("X-Iroh-Response = %q, want %q", got, "response ts_relay.example")
+	}
+	if !resp.Close {
+		t.Error("resp.Close = false, want true (Connection: close / non-keepalive)")
 	}
 }
