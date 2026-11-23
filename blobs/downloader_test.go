@@ -146,6 +146,40 @@ func TestDownloaderConcurrentOnEvent(t *testing.T) {
 	}
 }
 
+func TestDownloaderCustomALPN(t *testing.T) {
+	const customALPN = "/custom-blobs/1"
+	data := []byte("hello custom alpn")
+	hash := NewHash(data)
+	addr := testEndpointAddr(8)
+	conn := &fakeBlobConnector{
+		alpn: customALPN,
+		blobs: map[string]map[Hash][]byte{
+			addr.String(): {hash: data},
+		},
+	}
+
+	// Default downloader uses blobs.ALPN and fails against a custom-ALPN provider.
+	defaultStore := &downloadStore{}
+	defaultDownloader := NewDownloader(defaultStore, conn, DownloaderOptions{})
+	t.Cleanup(func() { _ = defaultDownloader.Close() })
+	if _, err := defaultDownloader.Download(context.Background(), hash, []netaddr.EndpointAddr{addr}); err == nil {
+		t.Fatal("default Downloader succeeded against custom-ALPN provider, want error")
+	}
+
+	// Downloader configured with customALPN succeeds.
+	customStore := &downloadStore{}
+	customDownloader := NewDownloader(customStore, conn, DownloaderOptions{ALPN: customALPN})
+	t.Cleanup(func() { _ = customDownloader.Close() })
+	tag, err := customDownloader.Download(context.Background(), hash, []netaddr.EndpointAddr{addr})
+	if err != nil {
+		t.Fatalf("custom-ALPN Download: %v", err)
+	}
+	defer tag.Close()
+	if got := customStore.blobs[hash]; !bytes.Equal(got, data) {
+		t.Fatalf("stored blob = %q, want %q", got, data)
+	}
+}
+
 type downloadStore struct {
 	mu    sync.Mutex
 	blobs map[Hash][]byte
@@ -180,6 +214,7 @@ func (w *downloadStoreWriter) Close() error { w.done = true; return nil }
 
 type fakeBlobConnector struct {
 	mu       sync.Mutex
+	alpn     string
 	blobs    map[string]map[Hash][]byte
 	fail     map[string]error
 	connects map[string]int
@@ -187,7 +222,11 @@ type fakeBlobConnector struct {
 }
 
 func (c *fakeBlobConnector) Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn string) (BlobConn, error) {
-	if alpn != ALPN {
+	wantALPN := c.alpn
+	if wantALPN == "" {
+		wantALPN = ALPN
+	}
+	if alpn != wantALPN {
 		return nil, errors.New("wrong alpn")
 	}
 	if err := ctx.Err(); err != nil {

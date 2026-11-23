@@ -91,6 +91,9 @@ type DownloaderOptions struct {
 	// Download abandons it with [ErrProviderStalled] and tries the next.
 	// Zero means [DefaultStallTimeout]; a negative value disables the limit.
 	StallTimeout time.Duration
+	// ALPN is the application protocol name used to connect to providers.
+	// An empty value uses [ALPN]. Providers must accept the same ALPN.
+	ALPN string
 }
 
 // Downloader downloads blobs from multiple providers.
@@ -121,6 +124,9 @@ func NewDownloader(store Sink, conn BlobConnector, opts DownloaderOptions) *Down
 	}
 	if opts.StallTimeout == 0 {
 		opts.StallTimeout = DefaultStallTimeout
+	}
+	if opts.ALPN == "" {
+		opts.ALPN = ALPN
 	}
 	return &Downloader{store: store, conn: conn, opts: opts, conns: make(map[string]BlobConn)}
 }
@@ -387,7 +393,11 @@ func (d *Downloader) connection(ctx context.Context, addr netaddr.EndpointAddr) 
 	if conn != nil {
 		return conn, nil
 	}
-	conn, err := d.conn.Connect(ctx, addr, ALPN)
+	alpn := d.opts.ALPN
+	if alpn == "" {
+		alpn = ALPN
+	}
+	conn, err := d.conn.Connect(ctx, addr, alpn)
 	if err != nil {
 		return nil, err
 	}
