@@ -1,9 +1,12 @@
 package gossipproto
 
 import (
+	"math"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/tmc/go-iroh/internal/postcard"
 )
 
 func TestPlumtreeStateGossip(t *testing.T) {
@@ -204,7 +207,7 @@ func TestPlumtreeStateDispatchChunksIHave(t *testing.T) {
 	me := PeerID(seq32(1))
 	peer := PeerID(seq32(2))
 	config := DefaultPlumtreeConfig()
-	config.MaxPayloadSize = 3 + 2*iHavePostcardMaxSize
+	config.MaxPayloadSize = 6 + 2*iHavePostcardMaxSize
 	state := NewPlumtreeState(me, config)
 	state.lazyQueue[peer] = []IHave{
 		{ID: MessageID(seq32(10)), Round: 1},
@@ -373,5 +376,70 @@ func TestPlumtreeStateOptimizeTree(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("optimization = %#v, want %#v", got, want)
+	}
+}
+
+func TestMaxGossipSizeCoversEveryRound(t *testing.T) {
+	encodedSize := func(content []byte, scope DeliveryScope) int {
+		b, err := postcard.Marshal(PlumtreeMessage{
+			Kind: PlumtreeGossip,
+			Gossip: Gossip{
+				ID:      MessageIDFromContent(content),
+				Content: content,
+				Scope:   scope,
+			},
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return len(b)
+	}
+	for _, n := range []int{0, 127, 128, 4000, 20000} {
+		content := make([]byte, n)
+		maxSwarm := MaxGossipSize(n, ScopeSwarm)
+		for _, round := range []Round{0, 127, 128, 16383, 16384} {
+			if got := encodedSize(content, DeliveryScope{Kind: DeliveryScopeSwarm, Round: round}); got > maxSwarm {
+				t.Fatalf("len=%d round=%d: size %d > max %d", n, round, got, maxSwarm)
+			}
+		}
+		if got := encodedSize(content, DeliveryScope{Kind: DeliveryScopeSwarm, Round: math.MaxUint16}); got != maxSwarm {
+			t.Fatalf("len=%d max round: size %d, want %d", n, got, maxSwarm)
+		}
+		if got, want := encodedSize(content, DeliveryScope{Kind: DeliveryScopeNeighbors}), MaxGossipSize(n, ScopeNeighbors); got != want {
+			t.Fatalf("len=%d neighbors: size %d, want %d", n, got, want)
+		}
+	}
+}
+
+func TestPlumtreeBroadcastDropsOversizedMessage(t *testing.T) {
+	now := time.Unix(1, 0)
+	me := PeerID(seq32(1))
+	peer := PeerID(seq32(2))
+	content := make([]byte, 1024)
+	limit := MaxGossipSize(len(content), ScopeSwarm) + 2
+
+	goesOut := func(maxMessageSize int) bool {
+		cfg := DefaultPlumtreeConfig()
+		cfg.MaxPayloadSize = MaxPlumtreeSize(maxMessageSize)
+		st := NewPlumtreeState(me, cfg)
+		st.Handle(PlumtreeInEvent{Kind: PlumtreeNeighborUp, Neighbor: peer, Now: now})
+		for _, ev := range st.Handle(PlumtreeInEvent{
+			Kind:    PlumtreeBroadcast,
+			Content: content,
+			Scope:   ScopeSwarm,
+			Now:     now,
+		}) {
+			if ev.Kind == PlumtreeSendMessage && ev.Message.Kind == PlumtreeGossip {
+				return true
+			}
+		}
+		return false
+	}
+
+	if !goesOut(limit) {
+		t.Fatalf("broadcast of %d bytes dropped at limit %d", len(content), limit)
+	}
+	if goesOut(limit - 1) {
+		t.Fatalf("broadcast of %d bytes sent at limit %d", len(content), limit-1)
 	}
 }

@@ -2,6 +2,7 @@ package gossip_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"testing"
@@ -549,5 +550,56 @@ func TestGossipTopicJoinedAlongsideEvents(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal("events iterator never saw NeighborUp")
 		}
+	}
+}
+
+func TestBroadcastRejectsOversizedMessage(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const maxMsg = 1024
+	ep, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	defer ep.Shutdown(ctx)
+
+	g := gossip.NewGossip(ep, gossip.WithMaxMessageSize(maxMsg))
+	defer g.Shutdown(ctx)
+
+	var topicID gossip.TopicID
+	topicID[0] = 1
+	topic, err := g.Subscribe(ctx, topicID, nil)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer topic.Close()
+
+	sender, _ := topic.Split()
+	limit := topic.MaxContentSize()
+	if got := sender.MaxContentSize(); got != limit {
+		t.Fatalf("sender.MaxContentSize() = %d, want %d", got, limit)
+	}
+	if got := g.MaxContentSize(); got != limit {
+		t.Fatalf("g.MaxContentSize() = %d, want %d", got, limit)
+	}
+	if limit <= 0 || limit >= maxMsg {
+		t.Fatalf("unexpected MaxContentSize = %d for maxMessageSize = %d", limit, maxMsg)
+	}
+
+	if err := topic.Broadcast(ctx, make([]byte, limit)); err != nil {
+		t.Fatalf("Broadcast(limit) = %v, want nil", err)
+	}
+	if err := topic.Broadcast(ctx, make([]byte, limit+1)); !errors.Is(err, gossip.ErrMessageTooLarge) {
+		t.Fatalf("Broadcast(limit+1) = %v, want ErrMessageTooLarge", err)
+	}
+	if err := sender.Broadcast(ctx, make([]byte, limit+1)); !errors.Is(err, gossip.ErrMessageTooLarge) {
+		t.Fatalf("Sender.Broadcast(limit+1) = %v, want ErrMessageTooLarge", err)
+	}
+	if err := topic.BroadcastNeighbors(ctx, make([]byte, limit)); err != nil {
+		t.Fatalf("BroadcastNeighbors(limit) = %v, want nil", err)
+	}
+	if err := topic.BroadcastNeighbors(ctx, make([]byte, limit+1)); !errors.Is(err, gossip.ErrMessageTooLarge) {
+		t.Fatalf("BroadcastNeighbors(limit+1) = %v, want ErrMessageTooLarge", err)
 	}
 }

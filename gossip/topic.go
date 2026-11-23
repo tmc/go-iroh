@@ -93,8 +93,14 @@ type Event struct {
 // GossipOption configures a Gossip instance.
 type GossipOption func(*Gossip)
 
+// ErrMessageTooLarge reports that a broadcast content exceeds the topic's
+// maximum content size (see [Topic.MaxContentSize]).
+var ErrMessageTooLarge = errors.New("gossip: message too large")
+
 // WithMaxMessageSize sets the maximum postcard frame body size. Non-positive
-// values use the Rust default.
+// values use the Rust default. The limit applies to the encoded message, which
+// is about 40 bytes longer than its content. Every node in a swarm should use
+// the same limit.
 func WithMaxMessageSize(n int) GossipOption {
 	return func(g *Gossip) {
 		if n > 0 {
@@ -161,6 +167,13 @@ func (g *Gossip) MaxMessageSize() int {
 		return gossipproto.DefaultMaxMessageSize
 	}
 	return gossipproto.NormalizeMaxMessageSize(g.maxMessageSize)
+}
+
+// MaxContentSize returns the largest message content that [Topic.Broadcast]
+// and [Topic.BroadcastNeighbors] accept so that the encoded frame fits within
+// [Gossip.MaxMessageSize] at every hop.
+func (g *Gossip) MaxContentSize() int {
+	return gossipproto.MaxContentSize(g.MaxMessageSize())
 }
 
 // Handler returns the protocol handler for registering this Gossip with an
@@ -771,7 +784,13 @@ func (g *Gossip) send(q *sendQueue, peer PeerID, item sendItem) error {
 	if stale {
 		return nil
 	}
-	return sender.Send(q.ctx, Message(item.msg))
+	err := sender.Send(q.ctx, Message(item.msg))
+	if errors.Is(err, gossipproto.ErrFrameTooLarge) {
+		// WriteFrame rejects oversized frames before writing any bytes,
+		// so the stream and connection remain intact.
+		return nil
+	}
+	return err
 }
 
 // connect dials peer for q's writer and publishes the connection as q's
@@ -928,6 +947,27 @@ type Topic struct {
 // ID returns the topic ID.
 func (t *Topic) ID() TopicID { return t.id }
 
+// MaxContentSize returns the largest message content that [Topic.Broadcast]
+// and [Topic.BroadcastNeighbors] accept.
+func (t *Topic) MaxContentSize() int {
+	if t == nil {
+		return gossipproto.MaxContentSize(gossipproto.DefaultMaxMessageSize)
+	}
+	return t.g.MaxContentSize()
+}
+
+// MaxContentSize returns the largest message content that [Sender.Broadcast]
+// and [Sender.BroadcastNeighbors] accept.
+func (s *Sender) MaxContentSize() int {
+	if s == nil {
+		return gossipproto.MaxContentSize(gossipproto.DefaultMaxMessageSize)
+	}
+	if s.topic != nil {
+		return s.topic.MaxContentSize()
+	}
+	return gossipproto.MaxContentSize(s.maxSize)
+}
+
 // Split returns separate sender and receiver handles for t.
 func (t *Topic) Split() (*Sender, *Receiver) {
 	return &Sender{topic: t}, &Receiver{topic: t}
@@ -935,11 +975,17 @@ func (t *Topic) Split() (*Sender, *Receiver) {
 
 // Broadcast sends content to the topic's epidemic overlay.
 //
+// It returns an error matching [ErrMessageTooLarge] if len(content) exceeds
+// [Topic.MaxContentSize].
+//
 // If a neighbor is not keeping up, Broadcast waits for it until ctx is done;
 // then content is not sent to that neighbor, and Broadcast returns ctx.Err().
 func (t *Topic) Broadcast(ctx context.Context, content []byte) error {
 	if t.isClosed() {
 		return errors.New("gossip: topic closed")
+	}
+	if limit := t.MaxContentSize(); len(content) > limit {
+		return fmt.Errorf("%w: %d bytes exceeds limit of %d bytes", ErrMessageTooLarge, len(content), limit)
 	}
 	return t.g.command(ctx, t.id, gossipproto.TopicCommand{
 		Kind:    gossipproto.TopicCommandBroadcast,
@@ -956,11 +1002,16 @@ func (s *Sender) Broadcast(ctx context.Context, content []byte) error {
 	return s.topic.Broadcast(ctx, content)
 }
 
-// BroadcastNeighbors sends content to the topic's direct neighbors. It waits
-// for a neighbor that is not keeping up as [Topic.Broadcast] does.
+// BroadcastNeighbors sends content to the topic's direct neighbors. It returns
+// an error matching [ErrMessageTooLarge] if len(content) exceeds
+// [Topic.MaxContentSize], and waits for a neighbor that is not keeping up as
+// [Topic.Broadcast] does.
 func (t *Topic) BroadcastNeighbors(ctx context.Context, content []byte) error {
 	if t.isClosed() {
 		return errors.New("gossip: topic closed")
+	}
+	if limit := t.MaxContentSize(); len(content) > limit {
+		return fmt.Errorf("%w: %d bytes exceeds limit of %d bytes", ErrMessageTooLarge, len(content), limit)
 	}
 	return t.g.command(ctx, t.id, gossipproto.TopicCommand{
 		Kind:    gossipproto.TopicCommandBroadcast,

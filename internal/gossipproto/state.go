@@ -102,7 +102,7 @@ func NewStateWithRand(me PeerID, data PeerData, config Config, r *rand.Rand) *St
 		r = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
 	config.MaxMessageSize = NormalizeMaxMessageSize(config.MaxMessageSize)
-	config.Topic.Broadcast.MaxPayloadSize = MaxPayloadSize(config.MaxMessageSize)
+	config.Topic.Broadcast.MaxPayloadSize = MaxPlumtreeSize(config.MaxMessageSize)
 	return &State{
 		me:         me,
 		meData:     clonePeerData(data),

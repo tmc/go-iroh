@@ -155,7 +155,7 @@ func TestStateThreadsMaxPayloadSizeToPlumtree(t *testing.T) {
 	if st == nil {
 		t.Fatal("topic state was not created")
 	}
-	want := MaxPayloadSize(MinMaxMessageSize)
+	want := MaxPlumtreeSize(MinMaxMessageSize)
 	if got := st.gossip.MaxPayloadSize(); got != want {
 		t.Fatalf("MaxPayloadSize = %d, want %d", got, want)
 	}

@@ -1,8 +1,11 @@
 package gossipproto
 
 import (
+	"math"
+	"math/bits"
 	"time"
 
+	"github.com/tmc/go-iroh/internal/postcard"
 	"lukechampine.com/blake3"
 )
 
@@ -43,22 +46,70 @@ func DefaultPlumtreeConfig() PlumtreeConfig {
 		MessageCacheRetention: 30 * time.Second,
 		MessageIDRetention:    90 * time.Second,
 		CacheEvictInterval:    time.Second,
-		MaxPayloadSize:        DefaultMaxPayloadSize(),
+		MaxPayloadSize:        MaxPlumtreeSize(DefaultMaxMessageSize),
 	}
 }
 
-// MaxPayloadSize returns the largest PlumTree payload that fits in
-// maxMessageSize with the Go gossip stream frame shape.
+// MaxPlumtreeSize returns the largest encoded PlumTree message that fits a
+// frame. A frame holds the TopicMessage enum tag (1 byte) and the PlumTree
+// message, and must be strictly shorter than maxMessageSize.
+func MaxPlumtreeSize(maxMessageSize int) int {
+	return NormalizeMaxMessageSize(maxMessageSize) - 2
+}
+
+// MaxGossipSize returns the largest encoded size of a PlumTree Gossip message
+// with contentLen bytes of content, accounting for the round growing up to
+// math.MaxUint16 at subsequent hops.
+func MaxGossipSize(contentLen int, scope Scope) int {
+	if contentLen < 0 {
+		contentLen = 0
+	}
+	dscope := DeliveryScope{Kind: DeliveryScopeSwarm, Round: Round(math.MaxUint16)}
+	if scope == ScopeNeighbors {
+		dscope = DeliveryScope{Kind: DeliveryScopeNeighbors}
+	}
+	empty := PlumtreeMessage{
+		Kind: PlumtreeGossip,
+		Gossip: Gossip{
+			Scope: dscope,
+		},
+	}
+	b, err := postcard.Marshal(empty)
+	if err != nil {
+		panic(err)
+	}
+	prefixSize := 1
+	if contentLen > 0 {
+		prefixSize = (bits.Len(uint(contentLen)) + 6) / 7
+	}
+	return len(b) - 1 + prefixSize + contentLen
+}
+
+// BroadcastFits reports whether a broadcast with contentLen bytes of content
+// fits a frame at every hop.
+func BroadcastFits(contentLen int, scope Scope, maxMessageSize int) bool {
+	return MaxGossipSize(contentLen, scope) <= MaxPlumtreeSize(maxMessageSize)
+}
+
+// MaxContentSize returns the largest broadcast content length that fits a frame
+// at every hop.
+func MaxContentSize(maxMessageSize int) int {
+	for n := MaxPlumtreeSize(maxMessageSize); n >= 0; n-- {
+		if BroadcastFits(n, ScopeSwarm, maxMessageSize) {
+			return n
+		}
+	}
+	return 0
+}
+
+// MaxPayloadSize returns the largest broadcast content that fits in
+// maxMessageSize at every hop.
 func MaxPayloadSize(maxMessageSize int) int {
-	n := NormalizeMaxMessageSize(maxMessageSize) - plumtreePayloadHeaderSize()
-	if n < 0 {
-		return 0
-	}
-	return n
+	return MaxContentSize(maxMessageSize)
 }
 
-// DefaultMaxPayloadSize returns the Rust-default PlumTree payload budget.
-func DefaultMaxPayloadSize() int { return MaxPayloadSize(DefaultMaxMessageSize) }
+// DefaultMaxPayloadSize returns the Rust-default PlumTree content budget.
+func DefaultMaxPayloadSize() int { return MaxContentSize(DefaultMaxMessageSize) }
 
 // PlumtreeStats are counters tracked by the PlumTree state machine.
 type PlumtreeStats struct {
@@ -187,7 +238,7 @@ func NewPlumtreeState(me PeerID, config PlumtreeConfig) *PlumtreeState {
 		config = DefaultPlumtreeConfig()
 	}
 	if config.MaxPayloadSize <= 0 {
-		config.MaxPayloadSize = DefaultMaxPayloadSize()
+		config.MaxPayloadSize = MaxPlumtreeSize(DefaultMaxMessageSize)
 	}
 	return &PlumtreeState{
 		me:                     me,
@@ -261,6 +312,9 @@ func (s *PlumtreeState) handleMessage(sender PeerID, message PlumtreeMessage, no
 }
 
 func (s *PlumtreeState) broadcast(content []byte, scope Scope, now time.Time, out *[]PlumtreeOutEvent) {
+	if MaxGossipSize(len(content), scope) > s.maxPayloadSize {
+		return
+	}
 	id := MessageIDFromContent(content)
 	dscope := DeliveryScope{Kind: DeliveryScopeSwarm}
 	if scope == ScopeNeighbors {
@@ -423,7 +477,9 @@ func (s *PlumtreeState) onGraft(sender PeerID, graft Graft, out *[]PlumtreeOutEv
 }
 
 func (s *PlumtreeState) onDispatchTimer(out *[]PlumtreeOutEvent) {
-	chunkLen := (s.maxPayloadSize - 3) / iHavePostcardMaxSize
+	// Reserve 1 byte for the enum discriminator and 5 bytes for the list
+	// length varint (enough for any list that fits a frame).
+	chunkLen := (s.maxPayloadSize - 6) / iHavePostcardMaxSize
 	if chunkLen < 1 {
 		chunkLen = 1
 	}

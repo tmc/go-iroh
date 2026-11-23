@@ -30,23 +30,6 @@ type Message struct {
 	Message TopicMessage
 }
 
-func plumtreePayloadHeaderSize() int {
-	msg := TopicMessage{
-		Kind: TopicMessageGossip,
-		Gossip: PlumtreeMessage{
-			Kind: PlumtreeGossip,
-			Gossip: Gossip{
-				Scope: DeliveryScope{Kind: DeliveryScopeSwarm},
-			},
-		},
-	}
-	b, err := postcard.Marshal(msg)
-	if err != nil {
-		panic(err)
-	}
-	return len(b)
-}
-
 // TopicMessage is either a membership or broadcast message.
 type TopicMessage struct {
 	Kind   TopicMessageKind
