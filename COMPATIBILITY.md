@@ -150,6 +150,38 @@ See the [harness README](https://github.com/tmc/go-iroh/blob/compat-harness/iroh
 This hand-written appendix records API and wire changes the matrix cannot
 show. Report generation preserves it.
 
+### v0.3.1 (unreleased)
+
+- `blobs` rejects non-canonical `RangeSpec` and `RangeSpecSeq` encodings on
+  decode (non-increasing or overflowing boundaries/offsets and repeated specs),
+  guards `Bitfield.TotalBytes` against out-of-range chunk underflow/overflow,
+  and reports `io.ErrUnexpectedEOF` on truncated observe items and varints.
+- Added `DownloaderOptions.ALPN` for custom blob ALPNs, `FSStore.Close` with
+  `ErrStoreClosed`, leftover temp-file cleanup on `NewFSStore`, and orphan
+  outboard cleanup during `FSStore.GC`.
+- `netaddr.RelayURL` preserves path prefixes by normalizing special-scheme URLs
+  to a trailing `/`, and relay WebSocket and probe clients join relative paths
+  (`relay.RelayRelativePath`, `relay.RelayProbeRelativePath`).
+- `relayserver` added `WithAccessControl` and `HTTPAccessControl` (sending
+  `X-Iroh-Endpoint-Id` alongside the deprecated `X-Iroh-NodeId`), non-keepalive
+  `/generate_204` captive-portal handling, and dropping oversized outbound
+  datagrams without disconnecting receivers. Empty incoming relay datagrams are
+  dropped before queueing.
+- QAD probes bind an IPv6 UDP socket and strip brackets from TLS `ServerName`
+  for IPv6 literal relay URLs. `WithProxy` propagates to `PkarrPublisher` and
+  `PkarrResolver` (which also accept `Proxy` in their configs), and proxy
+  validation errors redact credentials.
+- Added `Endpoint.NetworkChange` to immediately refresh local direct addresses
+  when no relays are configured and trigger a net-report refresh when relays
+  are configured.
+- `gossip.Discovery` caps stored addresses per peer at 32 (newest first).
+  `Topic.Broadcast` and `Topic.BroadcastNeighbors` reject payloads above
+  `MaxContentSize` with `ErrMessageTooLarge`.
+- Gossip membership adds rejoin-when-alone with backoff, early shuffling with
+  exponential backoff, bounded refill backoff for short active views, ignoring
+  PlumTree control updates from non-neighbors, and finishing per-topic send
+  streams (`Sender.FinishTopic`) when a topic no longer wants a peer.
+
 ### v0.3.0
 
 - Added arbitrary blob chunk-range encoding, decoding, and downloads through
