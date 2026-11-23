@@ -110,6 +110,63 @@ func TestDiscoveryPeersBounded(t *testing.T) {
 	}
 }
 
+// TestDiscoveryPeerAddrsBounded checks that a peer whose addresses keep
+// changing keeps its newest addresses first, capped at discoveryAddrCap.
+func TestDiscoveryPeerAddrsBounded(t *testing.T) {
+	self := key.UncheckedEndpointID([32]byte{0xff})
+	peer := key.UncheckedEndpointID([32]byte{0x01})
+	d := New(self)
+
+	addr := func(port uint16) netip.AddrPort {
+		return netip.AddrPortFrom(netip.AddrFrom4([4]byte{10, 0, 0, 1}), port)
+	}
+	for port := range uint16(1000) {
+		b, err := encodeDiscoveryPeerData(dns.NewEndpointData(netaddr.IPAddr{Addr: addr(port)}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := d.handlePeerData(peer, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	item, ok := d.item(peer)
+	if !ok {
+		t.Fatal("peer missing")
+	}
+	got := item.EndpointInfo().Data.IPAddrs()
+	if len(got) != discoveryAddrCap {
+		t.Fatalf("stored addresses = %d, want %d", len(got), discoveryAddrCap)
+	}
+	if got[0] != addr(999) {
+		t.Errorf("newest address = %v, want %v", got[0], addr(999))
+	}
+	if got[len(got)-1] != addr(1000-discoveryAddrCap) {
+		t.Errorf("oldest kept address = %v, want %v", got[len(got)-1], addr(1000-discoveryAddrCap))
+	}
+
+	// A single update carrying more than discoveryAddrCap addresses is also capped.
+	peer2 := key.UncheckedEndpointID([32]byte{0x02})
+	many := make([]netaddr.TransportAddr, 0, discoveryAddrCap+10)
+	for port := range uint16(discoveryAddrCap + 10) {
+		many = append(many, netaddr.IPAddr{Addr: addr(port + 2000)})
+	}
+	b, err := encodeDiscoveryPeerData(dns.NewEndpointData(many...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.handlePeerData(peer2, b); err != nil {
+		t.Fatal(err)
+	}
+	item2, ok := d.item(peer2)
+	if !ok {
+		t.Fatal("peer2 missing")
+	}
+	if got := item2.EndpointInfo().Data.IPAddrs(); len(got) != discoveryAddrCap {
+		t.Fatalf("single-update stored addresses = %d, want %d", len(got), discoveryAddrCap)
+	}
+}
+
 // BenchmarkDiscoveryPeerChurn measures caching peer data for a new identity
 // once the cache is full, so that every call evicts a peer.
 func BenchmarkDiscoveryPeerChurn(b *testing.B) {

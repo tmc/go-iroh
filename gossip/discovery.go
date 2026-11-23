@@ -28,6 +28,10 @@ const (
 	// member can announce data for any number of identities, so past the
 	// cap the least recently updated peer is forgotten.
 	discoveryPeerCap = 1024
+
+	// discoveryAddrCap bounds the addresses kept per peer. New addresses
+	// come first, followed by previously stored ones, up to this limit.
+	discoveryAddrCap = 32
 )
 
 // DefaultDiscoveryTopic is the default topic used by Discovery.
@@ -251,7 +255,16 @@ func (d *Discovery) handlePeerData(id key.EndpointID, b []byte) error {
 		p = &discoveryPeer{id: id}
 		d.peers[id] = p
 	}
-	p.data = cloneEndpointData(data)
+	merged := dns.NewEndpointData(data.Addrs()...)
+	merged.AddAddrs(p.data.Addrs()...)
+	if addrs := merged.Addrs(); len(addrs) > discoveryAddrCap {
+		merged = dns.NewEndpointData(addrs[:discoveryAddrCap]...)
+	}
+	if u := data.UserData(); u != nil {
+		uc := *u
+		merged = merged.WithUserData(&uc)
+	}
+	p.data = merged
 	p.lastUpdated = uint64(time.Now().UnixMicro())
 	p.prev, p.next = &d.updated, d.updated.next
 	p.next.prev = p
