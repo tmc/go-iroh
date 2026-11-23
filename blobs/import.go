@@ -25,6 +25,9 @@ func (s *FSStore) ImportFile(path string, mode ImportMode) (Hash, error) {
 	if s == nil {
 		return Hash{}, errors.New("blobs: nil fs store")
 	}
+	if s.isClosed() {
+		return Hash{}, ErrStoreClosed
+	}
 	if path == "" {
 		return Hash{}, errors.New("blobs: empty import path")
 	}
@@ -106,7 +109,7 @@ func (s *FSStore) finishImport(dataTmp *os.File, syncData, protect bool) (Hash, 
 		dataTmp.Close()
 		return Hash{}, nil, fmt.Errorf("blobs: stat import data: %w", err)
 	}
-	outTmp, err := os.CreateTemp(s.baoDir, ".import-outboard-*")
+	outTmp, err := os.CreateTemp(s.baoDir, importOutboardTempPrefix+"*")
 	if err != nil {
 		dataTmp.Close()
 		return Hash{}, nil, fmt.Errorf("blobs: create import outboard: %w", err)
@@ -142,6 +145,9 @@ func (s *FSStore) finishImport(dataTmp *os.File, syncData, protect bool) (Hash, 
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return Hash{}, nil, ErrStoreClosed
+	}
 	if !fileExists(s.dataPath(hash)) || !fileExists(s.outboardPath(hash)) {
 		if err := os.Rename(dataTmp.Name(), s.dataPath(hash)); err != nil {
 			return Hash{}, nil, fmt.Errorf("blobs: install import data: %w", err)
@@ -163,10 +169,14 @@ func (s *FSStore) finishImport(dataTmp *os.File, syncData, protect bool) (Hash, 
 	return hash, tag, nil
 }
 
-// importTempPrefix names in-flight import and write temporaries. It must not
-// parse as a [Hash]: [FSStore.GC] walks the data directory and skips names
-// that [ParseHash] rejects, which is what keeps uncommitted content alive.
-const importTempPrefix = ".import-data-"
+// importTempPrefix and importOutboardTempPrefix name in-flight import and write
+// temporaries. They must not parse as a [Hash]: [FSStore.GC] walks the data
+// directory and skips names that [ParseHash] rejects, which is what keeps
+// uncommitted content alive.
+const (
+	importTempPrefix         = ".import-data-"
+	importOutboardTempPrefix = ".import-outboard-"
+)
 
 func removeTemp(name string) {
 	_ = os.Remove(name)

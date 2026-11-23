@@ -52,6 +52,9 @@ func (s *FSStore) SetTag(name string, value HashAndFormat) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return ErrStoreClosed
+	}
 	if s.tags == nil {
 		s.tags = make(map[string]HashAndFormat)
 	}
@@ -69,6 +72,9 @@ func (s *FSStore) Tag(name string) (HashAndFormat, bool, error) {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.closed {
+		return HashAndFormat{}, false, ErrStoreClosed
+	}
 	value, ok := s.tags[name]
 	return value, ok, nil
 }
@@ -80,6 +86,9 @@ func (s *FSStore) DeleteTag(name string) (bool, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return false, ErrStoreClosed
+	}
 	if _, ok := s.tags[name]; !ok {
 		return false, nil
 	}
@@ -97,6 +106,9 @@ func (s *FSStore) Tags() ([]TagInfo, error) {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.closed {
+		return nil, ErrStoreClosed
+	}
 	out := make([]TagInfo, 0, len(s.tags))
 	for name, value := range s.tags {
 		out = append(out, TagInfo{Name: name, Value: value})
@@ -146,6 +158,9 @@ func (s *FSStore) NewTempTag(value HashAndFormat) (*TempTag, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return nil, ErrStoreClosed
+	}
 	return s.newTempTagLocked(value), nil
 }
 
@@ -189,6 +204,9 @@ func (s *FSStore) GCWithEvents(ctx context.Context, onEvent func(GCEvent)) (GCRe
 	if err := ctxErr(ctx); err != nil {
 		return GCResult{}, err
 	}
+	if s.isClosed() {
+		return GCResult{}, ErrStoreClosed
+	}
 	live := make(map[Hash]struct{})
 	roots := s.gcRoots()
 	for _, value := range roots {
@@ -227,9 +245,47 @@ func (s *FSStore) GCWithEvents(ctx context.Context, onEvent func(GCEvent)) (GCRe
 		deleted++
 		emitGCEvent(onEvent, GCEvent{Kind: GCEventDelete, Hash: hash, Deleted: deleted})
 	}
+	if err := s.gcRemoveOrphanOutboards(ctx, live); err != nil {
+		return GCResult{}, err
+	}
 	result := GCResult{Deleted: deleted}
 	emitGCEvent(onEvent, GCEvent{Kind: GCEventDone, Deleted: deleted})
 	return result, nil
+}
+
+func (s *FSStore) gcRemoveOrphanOutboards(ctx context.Context, live map[Hash]struct{}) error {
+	entries, err := os.ReadDir(s.baoDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("blobs: read outboard dir: %w", err)
+	}
+	for _, entry := range entries {
+		if err := ctxErr(ctx); err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			continue
+		}
+		hash, err := ParseHash(entry.Name())
+		if err != nil {
+			continue
+		}
+		if _, ok := live[hash]; ok {
+			continue
+		}
+		s.mu.Lock()
+		remove := !s.closed && !s.protectsHashLocked(hash) && !fileExists(s.dataPath(hash))
+		if remove {
+			err = os.Remove(filepath.Join(s.baoDir, entry.Name()))
+		}
+		s.mu.Unlock()
+		if remove && err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("blobs: remove orphan outboard: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *FSStore) gcRoots() []HashAndFormat {
@@ -248,6 +304,9 @@ func (s *FSStore) gcRoots() []HashAndFormat {
 func (s *FSStore) gcClaimDelete(hash Hash) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
 	return !s.protectsHashLocked(hash)
 }
 

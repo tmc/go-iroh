@@ -8,10 +8,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"lukechampine.com/blake3/bao"
 )
+
+// ErrStoreClosed is returned by [FSStore] operations after [FSStore.Close].
+var ErrStoreClosed = errors.New("blobs: store closed")
 
 // FSStore is a filesystem-backed store for complete raw blobs.
 type FSStore struct {
@@ -21,6 +25,7 @@ type FSStore struct {
 	tags    map[string]HashAndFormat
 	temp    map[uint64]HashAndFormat
 	nextTag uint64
+	closed  bool
 	mu      sync.RWMutex
 }
 
@@ -43,7 +48,58 @@ func NewFSStore(dir string) (*FSStore, error) {
 	if err := s.loadTags(); err != nil {
 		return nil, err
 	}
+	s.cleanupTempFiles()
 	return s, nil
+}
+
+// Close marks s as closed. Subsequent operations fail with [ErrStoreClosed]
+// instead of panicking. Close is safe to call more than once.
+func (s *FSStore) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	s.closed = true
+	s.temp = nil
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *FSStore) isClosed() bool {
+	s.mu.RLock()
+	closed := s.closed
+	s.mu.RUnlock()
+	return closed
+}
+
+// cleanupTempFiles removes leftover temporary files from prior interrupted
+// imports or atomic writes.
+func (s *FSStore) cleanupTempFiles() {
+	cleanDir := func(dir string, match func(string) bool) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			if match(e.Name()) {
+				_ = os.Remove(filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+	cleanDir(s.dataDir, func(name string) bool {
+		return strings.HasPrefix(name, importTempPrefix) || isAtomicTempName(name)
+	})
+	cleanDir(s.baoDir, func(name string) bool {
+		return strings.HasPrefix(name, importOutboardTempPrefix) || isAtomicTempName(name)
+	})
+	cleanDir(s.dir, isAtomicTempName)
+}
+
+func isAtomicTempName(name string) bool {
+	return strings.HasPrefix(name, ".") && strings.Contains(name, ".tmp-")
 }
 
 // Add stores data as a complete raw blob and returns its hash.
@@ -60,6 +116,9 @@ func (s *FSStore) Add(data []byte) (Hash, error) {
 	hash := Hash(root)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return Hash{}, ErrStoreClosed
+	}
 	if err := writeFileAtomic(s.dataPath(hash), data, 0o644); err != nil {
 		return Hash{}, fmt.Errorf("blobs: write data: %w", err)
 	}
@@ -78,11 +137,14 @@ func (s *FSStore) Open(ctx context.Context, hash Hash) (Blob, error) {
 	if s == nil {
 		return nil, ErrBlobNotFound
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return nil, ErrStoreClosed
+	}
 	if hash == EmptyHash {
 		return NewMemBlob(nil), nil
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	info, err := os.Stat(s.dataPath(hash))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrBlobNotFound
@@ -106,6 +168,9 @@ func (s *FSStore) NewBlob(ctx context.Context) (BlobWriter, error) {
 	}
 	if s == nil {
 		return nil, errors.New("blobs: nil store")
+	}
+	if s.isClosed() {
+		return nil, ErrStoreClosed
 	}
 	tmp, err := os.CreateTemp(s.dataDir, importTempPrefix+"*")
 	if err != nil {
@@ -131,19 +196,21 @@ func (w *fsBlobWriter) Commit() (*TempTag, error) {
 	if w.done {
 		return nil, errors.New("blobs: commit after commit")
 	}
+	w.done = true
+	name := w.tmp.Name()
+	defer removeTemp(name)
 	if err := w.tmp.Sync(); err != nil {
+		_ = w.tmp.Close()
 		return nil, fmt.Errorf("blobs: sync blob data: %w", err)
 	}
 	if _, err := w.tmp.Seek(0, io.SeekStart); err != nil {
+		_ = w.tmp.Close()
 		return nil, fmt.Errorf("blobs: rewind blob data: %w", err)
 	}
-	name := w.tmp.Name()
 	_, tag, err := w.store.finishImport(w.tmp, false, true)
 	if err != nil {
 		return nil, err
 	}
-	w.done = true
-	removeTemp(name)
 	return tag, nil
 }
 
@@ -166,14 +233,20 @@ func (s *FSStore) BlobStatus(ctx context.Context, hash Hash) (BlobStatus, error)
 	if err := ctxErr(ctx); err != nil {
 		return NotFoundBlobStatus(), err
 	}
-	if hash == EmptyHash {
-		return CompleteBlobStatus(0), nil
-	}
 	if s == nil {
+		if hash == EmptyHash {
+			return CompleteBlobStatus(0), nil
+		}
 		return NotFoundBlobStatus(), nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.closed {
+		return NotFoundBlobStatus(), ErrStoreClosed
+	}
+	if hash == EmptyHash {
+		return CompleteBlobStatus(0), nil
+	}
 	info, err := os.Stat(s.dataPath(hash))
 	if errors.Is(err, os.ErrNotExist) {
 		return NotFoundBlobStatus(), nil
@@ -214,6 +287,9 @@ func (e fsEntry) DataReader(ctx context.Context) (BlobReader, error) {
 	}
 	e.store.mu.RLock()
 	defer e.store.mu.RUnlock()
+	if e.store.closed {
+		return nil, ErrStoreClosed
+	}
 	f, err := os.Open(e.store.dataPath(e.hash))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrBlobNotFound
@@ -230,6 +306,9 @@ func (e fsEntry) Outboard(ctx context.Context) (Outboard, error) {
 	}
 	e.store.mu.RLock()
 	defer e.store.mu.RUnlock()
+	if e.store.closed {
+		return nil, ErrStoreClosed
+	}
 	f, err := os.Open(e.store.outboardPath(e.hash))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrBlobNotFound
