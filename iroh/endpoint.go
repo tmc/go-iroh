@@ -84,11 +84,15 @@ type Endpoint struct {
 	addrWatch   *watch.Value[netaddr.EndpointAddr]
 	// externalPinned holds addresses pinned via AddExternalAddr until
 	// RemoveExternalAddr. externalDiscovered holds the latest net report's
-	// reflexive addresses, replaced wholesale per report. Kept apart so a
-	// report cannot drop pinned candidates, nor pinning keep stale ones.
-	externalPinned     []netip.AddrPort
-	externalDiscovered []netip.AddrPort
-	netReport          netReportRunner
+	// reflexive addresses, replaced wholesale per report. localDiscovered holds
+	// local interface addresses refreshed on NetworkChange when no relays are
+	// configured. Kept apart so each source can replace its own set cleanly.
+	externalPinned      []netip.AddrPort
+	externalDiscovered  []netip.AddrPort
+	localDiscovered     []netip.AddrPort
+	localInterfaceAddrs func() []netip.Addr
+	netChangeCh         chan struct{}
+	netReport           netReportRunner
 	lastReport         *NetReport
 	nextStable         uint64
 	stableIDs          map[*quic.Conn]uint64
@@ -121,9 +125,10 @@ type config struct {
 	disableIP        bool
 	relayMode        relay.Mode
 	lookup           *AddressLookupServices
-	disableNetReport bool
-	netReport        netReportRunner
-	netReportEvery   time.Duration
+	disableNetReport    bool
+	netReport           netReportRunner
+	netReportEvery      time.Duration
+	localInterfaceAddrs func() []netip.Addr
 	natPMP           bool
 	natPMPGateway    netip.Addr
 	natPMPPort       uint16
@@ -413,6 +418,13 @@ func withNATPMPPort(port uint16) Option {
 	}
 }
 
+func withLocalInterfaceAddrs(fn func() []netip.Addr) Option {
+	return func(c *config) error {
+		c.localInterfaceAddrs = fn
+		return nil
+	}
+}
+
 // WithKeyLogWriter writes TLS traffic secrets for direct peer QUIC handshakes
 // in NSS SSLKEYLOGFILE format. It is for debugging only; writing these secrets
 // compromises connection confidentiality.
@@ -665,14 +677,19 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		disableIP:    c.disableIP || udp == nil,
 		relayFirst:   c.relayFirst,
 		verifySource: c.verifySource,
-		hooks:        append([]EndpointHooks(nil), c.hooks...),
-		custom:       append([]CustomTransport(nil), c.custom...),
-		lookup:       c.lookup,
-		proxy:        c.proxy,
-		closedCh:     make(chan struct{}),
-		acceptReady:  make(chan struct{}, 1),
-		admissions:   admissions{max: maxAdmitting},
-		stableIDs:    make(map[*quic.Conn]uint64),
+		hooks:               append([]EndpointHooks(nil), c.hooks...),
+		custom:              append([]CustomTransport(nil), c.custom...),
+		lookup:              c.lookup,
+		proxy:               c.proxy,
+		localInterfaceAddrs: c.localInterfaceAddrs,
+		netChangeCh:         make(chan struct{}, 1),
+		closedCh:            make(chan struct{}),
+		acceptReady:         make(chan struct{}, 1),
+		admissions:          admissions{max: maxAdmitting},
+		stableIDs:           make(map[*quic.Conn]uint64),
+	}
+	if ep.localInterfaceAddrs == nil {
+		ep.localInterfaceAddrs = hostInterfaceAddrs
 	}
 	if ep.proxy != nil && ep.lookup != nil {
 		ep.lookup.setProxy(ep.proxy)
@@ -868,14 +885,82 @@ func (e *Endpoint) LocalAddr() netip.AddrPort {
 	return e.udp.LocalAddr().(*net.UDPAddr).AddrPort()
 }
 
-// externalNATLocked returns the pinned and net-report-discovered external
-// candidates, pinned first, deduplicated. e.mu must be held.
+// externalNATLocked returns the pinned, net-report-discovered, and locally
+// discovered direct candidates, deduplicated. e.mu must be held.
 func (e *Endpoint) externalNATLocked() []netip.AddrPort {
 	out := append([]netip.AddrPort(nil), e.externalPinned...)
 	for _, addr := range e.externalDiscovered {
 		out = appendUniqueNATTraversalCandidate(out, addr)
 	}
+	for _, addr := range e.localDiscovered {
+		out = appendUniqueNATTraversalCandidate(out, addr)
+	}
 	return out
+}
+
+// NetworkChange notifies the endpoint that the host's network interfaces or
+// routes have changed.
+//
+// When no relays are configured, NetworkChange immediately refreshes local
+// direct addresses from the host's network interfaces and updates [WatchAddr]
+// and NAT traversal candidates without waiting for a periodic refresh (upstream
+// n0-computer/iroh#4605). When relays are configured and net_report is enabled,
+// it triggers an immediate net_report refresh.
+func (e *Endpoint) NetworkChange() {
+	if e.isClosed() {
+		return
+	}
+	if e.relay == nil {
+		e.updateLocalDirectAddrs()
+		if e.netReport != nil {
+			select {
+			case e.netChangeCh <- struct{}{}:
+			default:
+			}
+		}
+		return
+	}
+	if e.netReport != nil {
+		select {
+		case e.netChangeCh <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (e *Endpoint) updateLocalDirectAddrs() bool {
+	if e.disableIP || e.localInterfaceAddrs == nil {
+		return false
+	}
+	local := e.LocalAddr()
+	if !local.IsValid() || local.Port() == 0 {
+		return false
+	}
+	var next []netip.AddrPort
+	if !local.Addr().IsUnspecified() {
+		next = appendUniqueNATTraversalCandidate(next, local)
+	} else {
+		v4Only := local.Addr().Is4()
+		for _, ip := range e.localInterfaceAddrs() {
+			ip = ip.Unmap()
+			if v4Only && !ip.Is4() {
+				continue
+			}
+			next = appendUniqueNATTraversalCandidate(next, netip.AddrPortFrom(ip, local.Port()))
+		}
+	}
+
+	e.mu.Lock()
+	if equalAddrPorts(e.localDiscovered, next) {
+		e.mu.Unlock()
+		return false
+	}
+	e.localDiscovered = next
+	e.updateAddrWatchLocked()
+	e.mu.Unlock()
+
+	e.advertiseNATTraversalCandidates()
+	return true
 }
 
 // localNATTraversalCandidates returns concrete local direct addresses this
@@ -1053,6 +1138,9 @@ func (e *Endpoint) runNetReport(ctx context.Context, interval time.Duration) {
 			return
 		case <-t.C:
 			_ = e.refreshNetReport(ctx)
+		case <-e.netChangeCh:
+			_ = e.refreshNetReport(ctx)
+			t.Reset(interval)
 		}
 	}
 }
