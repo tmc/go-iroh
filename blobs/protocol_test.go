@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/tmc/go-iroh/endpointticket"
@@ -245,5 +246,219 @@ func TestRequestTypeWireValues(t *testing.T) {
 		if uint64(tt.got) != tt.want {
 			t.Errorf("%s = %d, want %d", tt.name, tt.got, tt.want)
 		}
+	}
+}
+
+func encodeRawRangeSpec(spans []uint64) []byte {
+	b := appendVarint(nil, uint64(len(spans)))
+	for _, s := range spans {
+		b = appendVarint(b, s)
+	}
+	return b
+}
+
+type rawRangeSpecSeqItem struct {
+	delta uint64
+	spans []uint64
+}
+
+func encodeRawRangeSpecSeq(items []rawRangeSpecSeqItem) []byte {
+	b := appendVarint(nil, uint64(len(items)))
+	for _, item := range items {
+		b = appendVarint(b, item.delta)
+		b = append(b, encodeRawRangeSpec(item.spans)...)
+	}
+	return b
+}
+
+func TestDecodeRangeSpecRejectsNonCanonical(t *testing.T) {
+	valid := []struct {
+		name  string
+		spans []uint64
+		want  ChunkRanges
+	}{
+		{name: "empty", spans: nil, want: RangeEmpty()},
+		{name: "all", spans: []uint64{0}, want: RangeAll()},
+		{name: "verified size", spans: []uint64{math.MaxUint64}, want: RangeLastChunk()},
+		{
+			name:  "disjoint",
+			spans: []uint64{2, 5, 3, 1},
+			want:  RangeChunksMany(ChunkRange{Start: 2, End: 7}, ChunkRange{Start: 10, End: 11}),
+		},
+	}
+	for _, tt := range valid {
+		t.Run("valid/"+tt.name, func(t *testing.T) {
+			var got RangeSpec
+			err := decodeToEnd(encodeRawRangeSpec(tt.spans), func(p *parser) error {
+				var err error
+				got, err = decodeRangeSpec(p)
+				return err
+			})
+			if err != nil {
+				t.Fatalf("decodeRangeSpec(%v) error = %v", tt.spans, err)
+			}
+			if !chunkRangesEqual(got.ChunkRanges(), tt.want) {
+				t.Fatalf("ChunkRanges = %#v, want %#v", got.ChunkRanges(), tt.want)
+			}
+		})
+	}
+
+	invalid := []struct {
+		name  string
+		spans []uint64
+	}{
+		{name: "repeated boundary", spans: []uint64{1, 0}},
+		{name: "double zero", spans: []uint64{0, 0}},
+		{name: "zero third span", spans: []uint64{1, 2, 0}},
+		{name: "boundary overflow", spans: []uint64{math.MaxUint64, 1}},
+		{name: "boundary overflow later", spans: []uint64{10, math.MaxUint64 - 5}},
+	}
+	for _, tt := range invalid {
+		t.Run("invalid/"+tt.name, func(t *testing.T) {
+			raw := encodeRawRangeSpec(tt.spans)
+			err := decodeToEnd(raw, func(p *parser) error {
+				_, err := decodeRangeSpec(p)
+				return err
+			})
+			if !errors.Is(err, endpointticket.ErrVerify) {
+				t.Fatalf("decodeRangeSpec(%v) error = %v, want %v", tt.spans, err, endpointticket.ErrVerify)
+			}
+			// ObserveRequest embeds RangeSpec directly, so it must reject the same input.
+			var obs []byte
+			obs = appendVarint(obs, uint64(RequestObserve))
+			h := testHash()
+			obs = append(obs, h[:]...)
+			obs = append(obs, raw...)
+			if _, err := DecodeObserveRequestBytes(obs); !errors.Is(err, endpointticket.ErrVerify) {
+				t.Fatalf("DecodeObserveRequestBytes(%v) error = %v, want %v", tt.spans, err, endpointticket.ErrVerify)
+			}
+		})
+	}
+}
+
+func TestDecodeChunkRangesSeqRejectsNonCanonical(t *testing.T) {
+	valid := []struct {
+		name  string
+		items []rawRangeSpecSeqItem
+		want  ChunkRangesSeq
+	}{
+		{
+			name:  "empty",
+			items: nil,
+			want:  ChunkRangesSeqEmpty(),
+		},
+		{
+			name: "single blob",
+			items: []rawRangeSpecSeqItem{
+				{delta: 0, spans: []uint64{0}},
+				{delta: 1, spans: nil},
+			},
+			want: ChunkRangesSeqFromRanges([]ChunkRanges{RangeAll()}),
+		},
+		{
+			name: "leading empty via first offset",
+			items: []rawRangeSpecSeqItem{
+				{delta: 2, spans: []uint64{0}},
+			},
+			want: ChunkRangesSeqFromRangesOpen([]ChunkRanges{RangeEmpty(), RangeEmpty(), RangeAll()}),
+		},
+	}
+	for _, tt := range valid {
+		t.Run("valid/"+tt.name, func(t *testing.T) {
+			var got ChunkRangesSeq
+			err := decodeToEnd(encodeRawRangeSpecSeq(tt.items), func(p *parser) error {
+				var err error
+				got, err = decodeChunkRangesSeq(p)
+				return err
+			})
+			if err != nil {
+				t.Fatalf("decodeChunkRangesSeq error = %v", err)
+			}
+			if !bytes.Equal(got.encode(nil), tt.want.encode(nil)) {
+				t.Fatalf("decoded = %x, want %x", got.encode(nil), tt.want.encode(nil))
+			}
+		})
+	}
+
+	invalid := []struct {
+		name  string
+		items []rawRangeSpecSeqItem
+	}{
+		{
+			name: "repeated offset",
+			items: []rawRangeSpecSeqItem{
+				{delta: 0, spans: []uint64{0}},
+				{delta: 0, spans: nil},
+			},
+		},
+		{
+			name: "offset overflow",
+			items: []rawRangeSpecSeqItem{
+				{delta: math.MaxUint64, spans: []uint64{0}},
+				{delta: 1, spans: nil},
+			},
+		},
+		{
+			name: "range boundary overflow",
+			items: []rawRangeSpecSeqItem{
+				{delta: 0, spans: []uint64{math.MaxUint64, 1}},
+			},
+		},
+		{
+			name: "repeated range boundary",
+			items: []rawRangeSpecSeqItem{
+				{delta: 0, spans: []uint64{1, 0}},
+			},
+		},
+		{
+			name: "repeated spec",
+			items: []rawRangeSpecSeqItem{
+				{delta: 0, spans: []uint64{0}},
+				{delta: 1, spans: []uint64{0}},
+			},
+		},
+		{
+			name: "empty first spec at 0",
+			items: []rawRangeSpecSeqItem{
+				{delta: 0, spans: nil},
+			},
+		},
+		{
+			name: "empty first spec at nonzero",
+			items: []rawRangeSpecSeqItem{
+				{delta: 3, spans: nil},
+				{delta: 1, spans: []uint64{0}},
+			},
+		},
+	}
+	for _, tt := range invalid {
+		t.Run("invalid/"+tt.name, func(t *testing.T) {
+			raw := encodeRawRangeSpecSeq(tt.items)
+			err := decodeToEnd(raw, func(p *parser) error {
+				_, err := decodeChunkRangesSeq(p)
+				return err
+			})
+			if !errors.Is(err, endpointticket.ErrVerify) {
+				t.Fatalf("decodeChunkRangesSeq error = %v, want %v", err, endpointticket.ErrVerify)
+			}
+			// RequestGet and RequestGetMany must also reject non-canonical sequences.
+			h := testHash()
+			var getReq []byte
+			getReq = appendVarint(getReq, uint64(RequestGet))
+			getReq = append(getReq, h[:]...)
+			getReq = append(getReq, raw...)
+			if _, err := DecodeGetRequestBytes(getReq); !errors.Is(err, endpointticket.ErrVerify) {
+				t.Fatalf("DecodeGetRequestBytes error = %v, want %v", err, endpointticket.ErrVerify)
+			}
+
+			var getManyReq []byte
+			getManyReq = appendVarint(getManyReq, uint64(RequestGetMany))
+			getManyReq = appendVarint(getManyReq, 1)
+			getManyReq = append(getManyReq, h[:]...)
+			getManyReq = append(getManyReq, raw...)
+			if _, err := DecodeRequestBytes(getManyReq); !errors.Is(err, endpointticket.ErrVerify) {
+				t.Fatalf("DecodeRequestBytes(GetMany) error = %v, want %v", err, endpointticket.ErrVerify)
+			}
+		})
 	}
 }

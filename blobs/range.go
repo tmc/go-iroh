@@ -197,11 +197,20 @@ func decodeRangeSpec(p *parser) (RangeSpec, error) {
 		return RangeSpec{}, wrapDecodeErr(endpointticket.ErrTruncated)
 	}
 	spans := make([]uint64, 0, n)
-	for range n {
+	var current uint64
+	for i := range n {
 		span, err := p.varint()
 		if err != nil {
 			return RangeSpec{}, wrapDecodeErr(err)
 		}
+		if i > 0 && span == 0 {
+			return RangeSpec{}, verifyErr("range spec boundaries must be strictly increasing", nil)
+		}
+		next, ok := checkedAdd(current, span)
+		if !ok {
+			return RangeSpec{}, verifyErr("range spec boundary overflow", nil)
+		}
+		current = next
 		spans = append(spans, span)
 	}
 	return RangeSpec{spans: spans}, nil
@@ -322,16 +331,28 @@ func decodeChunkRangesSeq(p *parser) (ChunkRangesSeq, error) {
 	}
 	entries := make([]chunkRangesSeqEntry, 0, n)
 	var offset uint64
-	for range n {
+	prev := RangeSpecEmpty()
+	for i := range n {
 		delta, err := p.varint()
 		if err != nil {
 			return ChunkRangesSeq{}, wrapDecodeErr(err)
 		}
-		offset += delta
+		if i > 0 && delta == 0 {
+			return ChunkRangesSeq{}, verifyErr("range spec seq offsets must be strictly increasing", nil)
+		}
+		next, ok := checkedAdd(offset, delta)
+		if !ok {
+			return ChunkRangesSeq{}, verifyErr("range spec seq offset overflow", nil)
+		}
+		offset = next
 		spec, err := decodeRangeSpec(p)
 		if err != nil {
 			return ChunkRangesSeq{}, err
 		}
+		if slices.Equal(spec.spans, prev.spans) {
+			return ChunkRangesSeq{}, verifyErr("range spec seq must not repeat a spec", nil)
+		}
+		prev = spec
 		entries = append(entries, chunkRangesSeqEntry{offset: offset, ranges: spec.ChunkRanges()})
 	}
 	return ChunkRangesSeq{entries: entries}, nil
