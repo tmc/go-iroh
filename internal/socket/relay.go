@@ -62,6 +62,13 @@ func (t *RelayTransport) forwardRecv(ctx context.Context) {
 // the same way, iroh/src/socket/transports/relay.rs:115). The pooled Contents
 // buffer is released once ReadFrom has copied out the last segment.
 func (t *RelayTransport) deliver(ctx context.Context, dm RelayRecvDatagram) {
+	// Empty datagrams are valid relay traffic, but cannot contain a QUIC
+	// packet. Drop them here rather than queuing an empty batch (upstream
+	// n0-computer/iroh#4646).
+	if len(dm.Datagrams.Contents) == 0 {
+		dm.Datagrams.Release()
+		return
+	}
 	remote := RelayAddr(dm.URL, dm.Src)
 	b := dm.Datagrams.Contents
 	stride := max(len(b), 1)

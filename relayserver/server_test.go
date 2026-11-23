@@ -611,3 +611,117 @@ func TestCaptivePortalGenerate204NonKeepAlive(t *testing.T) {
 		t.Error("resp.Close = false, want true (Connection: close / non-keepalive)")
 	}
 }
+
+func TestEmptyDatagramDoesNotDisconnect(t *testing.T) {
+	srv := New()
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	u, err := netaddr.ParseRelayURL(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	skA, _ := key.GenerateSecretKey()
+	skB, _ := key.GenerateSecretKey()
+	idA := skA.Public().EndpointID()
+	idB := skB.Public().EndpointID()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	clientA, err := relayclient.Connect(ctx, u, relayclient.Options{SecretKey: skA})
+	if err != nil {
+		t.Fatalf("connect A: %v", err)
+	}
+	defer clientA.Close()
+	clientB, err := relayclient.Connect(ctx, u, relayclient.Options{SecretKey: skB})
+	if err != nil {
+		t.Fatalf("connect B: %v", err)
+	}
+	defer clientB.Close()
+
+	// Empty datagram A -> B must pass through without disconnecting either client.
+	if err := clientA.Send(ctx, relayproto.ClientToRelayMsg{
+		Type:          relayproto.FrameClientToRelayDatagram,
+		DstEndpointID: idB,
+		Datagrams:     relayproto.Datagrams{},
+	}); err != nil {
+		t.Fatalf("send empty A->B: %v", err)
+	}
+	got, err := clientB.Recv(ctx)
+	if err != nil {
+		t.Fatalf("recv empty at B: %v", err)
+	}
+	if !got.RemoteEndpointID.Equal(idA) || len(got.Datagrams.Contents) != 0 {
+		t.Fatalf("B got %+v, want empty datagram from A", got)
+	}
+	got.Datagrams.Release()
+
+	// Subsequent non-empty datagram confirms both connections remain usable.
+	if err := clientA.Send(ctx, relayproto.ClientToRelayMsg{
+		Type:          relayproto.FrameClientToRelayDatagram,
+		DstEndpointID: idB,
+		Datagrams:     relayproto.DatagramsFromBytes([]byte("still alive")),
+	}); err != nil {
+		t.Fatalf("send non-empty A->B: %v", err)
+	}
+	got, err = clientB.Recv(ctx)
+	if err != nil {
+		t.Fatalf("recv non-empty at B: %v", err)
+	}
+	defer got.Datagrams.Release()
+	if string(got.Datagrams.Contents) != "still alive" {
+		t.Fatalf("B got %q, want %q", got.Datagrams.Contents, "still alive")
+	}
+}
+
+func TestOversizedPacketDroppedWithoutDisconnectingReceiver(t *testing.T) {
+	srv := New()
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	u, err := netaddr.ParseRelayURL(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	skA, _ := key.GenerateSecretKey()
+	skB, _ := key.GenerateSecretKey()
+	idA := skA.Public().EndpointID()
+	idB := skB.Public().EndpointID()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	clientB, err := relayclient.Connect(ctx, u, relayclient.Options{SecretKey: skB})
+	if err != nil {
+		t.Fatalf("connect B: %v", err)
+	}
+	defer clientB.Close()
+
+	// Payload of MaxPacketSize bytes exceeds MaxPacketSize once the 32-byte
+	// sender EndpointID and ECN byte are added.
+	src := &session{id: idA}
+	srv.handleClientMsg(src, relayproto.ClientToRelayMsg{
+		Type:          relayproto.FrameClientToRelayDatagram,
+		DstEndpointID: idB,
+		Datagrams:     relayproto.Datagrams{Contents: make([]byte, relayproto.MaxPacketSize)},
+	})
+	if snap := srv.Snapshot(); snap["datagrams_dropped"] != 1 {
+		t.Fatalf("datagrams_dropped = %d, want 1", snap["datagrams_dropped"])
+	}
+
+	// Receiver B must stay connected and receive the next valid packet.
+	srv.handleClientMsg(src, relayproto.ClientToRelayMsg{
+		Type:          relayproto.FrameClientToRelayDatagram,
+		DstEndpointID: idB,
+		Datagrams:     relayproto.DatagramsFromBytes([]byte("still here")),
+	})
+	got, err := clientB.Recv(ctx)
+	if err != nil {
+		t.Fatalf("recv after oversized drop: %v", err)
+	}
+	defer got.Datagrams.Release()
+	if !got.RemoteEndpointID.Equal(idA) || string(got.Datagrams.Contents) != "still here" {
+		t.Fatalf("B got %+v, want %q from A", got, "still here")
+	}
+}

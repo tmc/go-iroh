@@ -114,22 +114,27 @@ func (m RelayToClientMsg) AppendTo(dst []byte) []byte {
 
 // EncodedLen returns the number of bytes AppendTo writes.
 func (m RelayToClientMsg) EncodedLen() int {
-	payload := 0
+	return frameTypeEncodedLen(m.frameType()) + m.PayloadLen()
+}
+
+// PayloadLen returns the number of payload bytes after the frame type varint.
+func (m RelayToClientMsg) PayloadLen() int {
 	switch m.Type {
 	case FrameRelayToClientDatagram, FrameRelayToClientDatagramBat:
-		payload = 32 + m.Datagrams.encodedLen()
+		return 32 + m.Datagrams.encodedLen()
 	case FrameEndpointGone:
-		payload = 32
+		return 32
 	case FramePing, FramePong:
-		payload = 8
+		return 8
 	case FrameStatus:
-		payload = 1
+		return 1
 	case FrameRestarting:
-		payload = 8
+		return 8
 	case FrameHealth:
-		payload = len(m.Health)
+		return len(m.Health)
+	default:
+		return 0
 	}
-	return frameTypeEncodedLen(m.frameType()) + payload
 }
 
 // frameType returns the wire frame type for m, deriving the datagram batch

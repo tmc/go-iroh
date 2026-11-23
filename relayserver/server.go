@@ -477,6 +477,12 @@ func (s *Server) lookup(id key.EndpointID) *session {
 }
 
 func (s *session) enqueue(msg relayproto.RelayToClientMsg) bool {
+	// If a packet exceeds MaxPacketSize, that is an issue with the sender, not
+	// the receiver. Drop the packet rather than sending an unparseable frame
+	// that would disconnect the receiver (upstream n0-computer/iroh#4694).
+	if msg.PayloadLen() > relayproto.MaxPacketSize {
+		return false
+	}
 	b := relayproto.GetBuf(msg.EncodedLen())
 	*b = msg.AppendTo((*b)[:0])
 	n := int64(len(*b))

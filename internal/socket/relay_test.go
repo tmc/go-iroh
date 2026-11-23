@@ -471,3 +471,44 @@ func TestRelayTransportSendBatch(t *testing.T) {
 		t.Fatal("reassembled payload differs")
 	}
 }
+
+func TestRelayTransportDropsEmptyDatagram(t *testing.T) {
+	sock := NewSocket()
+	recvCh := make(chan recvBatch, 4)
+	rt := NewRelayTransport(sock, nil, recvCh)
+
+	u, err := netaddr.ParseRelayURL("https://relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, _ := key.GenerateSecretKey()
+	src := sk.Public().EndpointID()
+
+	// Empty datagram must be dropped without enqueuing onto recvCh.
+	rt.deliver(context.Background(), RelayRecvDatagram{
+		URL:       u,
+		Src:       src,
+		Datagrams: relayproto.Datagrams{}.Pooled(),
+	})
+	select {
+	case b := <-recvCh:
+		t.Fatalf("unexpected batch enqueued for empty datagram: %+v", b)
+	default:
+	}
+
+	// Subsequent non-empty datagram is delivered normally.
+	rt.deliver(context.Background(), RelayRecvDatagram{
+		URL:       u,
+		Src:       src,
+		Datagrams: relayproto.DatagramsFromBytes([]byte("ok")).Pooled(),
+	})
+	select {
+	case b := <-recvCh:
+		defer b.release()
+		if string(b.data) != "ok" {
+			t.Fatalf("delivered %q, want %q", b.data, "ok")
+		}
+	default:
+		t.Fatal("expected non-empty datagram on recvCh")
+	}
+}
