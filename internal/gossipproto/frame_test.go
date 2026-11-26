@@ -41,6 +41,21 @@ func TestFrameRoundTrip(t *testing.T) {
 	if gotHeader != (StreamHeader{Topic: topic}) {
 		t.Fatalf("header = %#v, want %#v", gotHeader, StreamHeader{Topic: topic})
 	}
+	// iroh-gossip 0.103+ appends a 1-byte flags field (HANDLES_CLOSE = 1) after
+	// the 32-byte TopicID.
+	var flagged bytes.Buffer
+	var lenHdr [4]byte
+	binary.BigEndian.PutUint32(lenHdr[:], 33)
+	flagged.Write(lenHdr[:])
+	flagged.Write(topic[:])
+	flagged.WriteByte(1)
+	var gotFlagged StreamHeader
+	if err := ReadFrame(&flagged, &gotFlagged, DefaultMaxMessageSize); err != nil {
+		t.Fatalf("ReadFrame flagged header: %v", err)
+	}
+	if gotFlagged != (StreamHeader{Topic: topic}) {
+		t.Fatalf("flagged header = %#v, want %#v", gotFlagged, StreamHeader{Topic: topic})
+	}
 	var gotMessage TopicMessage
 	if err := ReadFrame(&buf, &gotMessage, DefaultMaxMessageSize); err != nil {
 		t.Fatalf("ReadFrame message: %v", err)

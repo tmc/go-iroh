@@ -74,6 +74,16 @@ func ReadFrame(r io.Reader, v any, maxSize int) error {
 	if _, err := io.ReadFull(r, b); err != nil {
 		return fmt.Errorf("gossipproto: read frame body: %w", err)
 	}
+	if hdr, ok := v.(*StreamHeader); ok {
+		// iroh-gossip 0.102+/0.103+ appends a trailing flags byte (e.g.
+		// HANDLES_CLOSE) after the 32-byte TopicID and decodes with
+		// postcard::take_from_bytes, ignoring trailing bytes.
+		if len(b) < len(hdr.Topic) {
+			return fmt.Errorf("gossipproto: unmarshal frame: %w", io.ErrUnexpectedEOF)
+		}
+		copy(hdr.Topic[:], b[:len(hdr.Topic)])
+		return nil
+	}
 	if err := postcard.Unmarshal(b, v); err != nil {
 		return fmt.Errorf("gossipproto: unmarshal frame: %w", err)
 	}
