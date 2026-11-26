@@ -54,6 +54,9 @@ func (b *PacketBuffer) Release() {
 func (b *PacketBuffer) Len() protocol.ByteCount { return protocol.ByteCount(len(b.Data)) }
 func (b *PacketBuffer) Cap() protocol.ByteCount { return protocol.ByteCount(cap(b.Data)) }
 
+// RefCount returns the current reference count of b.
+func (b *PacketBuffer) RefCount() int { return b.refCount }
+
 func (b *PacketBuffer) putBack() {
 	if cap(b.Data) == protocol.MaxPacketBufferSize {
 		bufferPool.Put(b)

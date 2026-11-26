@@ -169,9 +169,9 @@ func TestQNTSendProbeBufferReleasesPacketBuffer(t *testing.T) {
 	if string(s.data) != string([]byte{1, 2, 3}) {
 		t.Fatalf("SendProbe data = %v, want [1 2 3]", s.data)
 	}
-	// Release decremented refCount to 0; Split+Release panics if refCount was still > 0.
-	buf.Split()
-	buf.Release()
+	if buf.RefCount() != 0 {
+		t.Fatalf("buffer refCount = %d, want 0", buf.RefCount())
+	}
 }
 
 func TestSendPathBufferUsesDefaultQueueForOrdinaryPath(t *testing.T) {
@@ -219,9 +219,9 @@ func TestSendPathBufferUsesQNTRoute(t *testing.T) {
 	if string(s.data) != string([]byte{1, 2, 3}) {
 		t.Fatalf("SendProbe data = %v, want [1 2 3]", s.data)
 	}
-	// Release decremented refCount to 0; Split+Release panics if refCount was still > 0.
-	buf.Split()
-	buf.Release()
+	if buf.RefCount() != 0 {
+		t.Fatalf("buffer refCount = %d, want 0", buf.RefCount())
+	}
 	if path.qntUDPAddr == nil || !path.qntUDPAddr.IP.Equal(want.IP) || path.qntUDPAddr.Port != want.Port {
 		t.Fatalf("cached QNT addr = %v, want %v", path.qntUDPAddr, want)
 	}
@@ -241,9 +241,9 @@ func TestSendPathBufferDropsInvalidQNTRoute(t *testing.T) {
 	if s.probes != 0 {
 		t.Fatalf("SendProbe calls = %d, want 0", s.probes)
 	}
-	// Release decremented refCount to 0; Split+Release panics if refCount was still > 0.
-	buf.Split()
-	buf.Release()
+	if buf.RefCount() != 0 {
+		t.Fatalf("buffer refCount = %d, want 0", buf.RefCount())
+	}
 }
 
 func TestSendPackedCoalescedPacketPreservesOneStreamFrame(t *testing.T) {
