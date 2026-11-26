@@ -96,6 +96,13 @@ wire tests and the root iroh interop tests. Re-review if quic-go changes how it
 constructs or clones `tls.Config`, since RFC 7250 fields must survive
 `Config.Clone` — see the `RawPublicKeys` line in `../itls/tls/common.go`.
 
+Even on a conflict-free 3-way merge, audit every `streamFrames` reference in
+`internal/qng/` (especially in `packet_packer.go` and `framer.go`) against the
+single-frame hold-back `hasStreamFrame` fast path so new upstream code does not
+treat `len(pl.streamFrames) == 0` as "no STREAM frames". Before tagging a
+release, also run `go test ./... -count=1` in the downstream `go-iroh-examples`
+repository as a smoke gate.
+
 ## When to break this fork
 
 Delete or shrink qng only when upstream code makes a specific part unnecessary.

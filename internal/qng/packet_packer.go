@@ -924,7 +924,7 @@ func (p *packetPacker) composeNextPacket(
 
 	// STREAM frames are serialized after all other frames.
 	// If there are none, the last DATAGRAM frame is the last frame in the packet, and doesn't need a length field.
-	if lastDatagram != nil && len(pl.streamFrames) == 0 {
+	if lastDatagram != nil && !pl.hasStreamFrame && len(pl.streamFrames) == 0 {
 		pl.length -= lastDatagram.Length(v)
 		lastDatagram.DataLenPresent = false
 		pl.length += lastDatagram.Length(v)
