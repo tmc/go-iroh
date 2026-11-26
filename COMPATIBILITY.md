@@ -4,7 +4,7 @@ go-iroh is an independent Go implementation of iroh wire v1. This matrix records
 
 Go-client↔Go-relay pairings contain no Rust peer, so they are outside this matrix's scope; that path is covered by the standard test suite.
 
-Generated from commit `592461920a05feb776af9b93336b0c64e272f9dc` at 2026-11-26T08:46:04Z. A pass requires a recorded Rust process and binary digest; setup errors, unsupported cells, and untested cells never count as passes.
+Generated from commit `42c4919d720974a3a227123f5f308c7cd4343f54` at 2026-11-26T20:35:09Z. A pass requires a recorded Rust process and binary digest; setup errors, unsupported cells, and untested cells never count as passes.
 
 ## How to read this table
 
@@ -33,43 +33,43 @@ Matrix cells reference the **Peers** table below. Each peer entry records the Ru
 
 ## Compatibility matrix
 
-| Scenario | Tier | Rust counterpart | 1.4 (1.4.2) | 1.5 (1.5.0) |
-|---|---|---|:---:|:---:|
-| blobs/rust-get-per-child | stable | Rust test driver | pass [1] | pass [2] |
-| blobs/rust-get-sendme | stable | Rust test driver | pass [1] | pass [2] |
-| discovery/go-publish-rust-dns | stable | upstream CLI | pass [3] | pass [4] |
-| discovery/qad-report | stable | upstream CLI | pass [5] | pass [6] |
-| discovery/relay-urls | stable | upstream CLI | pass [7] | pass [8] |
-| discovery/rust-publish-go-dns | stable | Rust test driver | pass [1] | pass [2] |
-| handshake/alpn-mismatch | stable | upstream CLI | pass [5] | pass [6] |
-| handshake/close-semantics | stable | Rust test driver | pass [1] | pass [2] |
-| handshake/datagrams | stable | Rust test driver | pass [1] | pass [2] |
-| handshake/go-client-rust-server | stable | upstream CLI | pass [5] | pass [6] |
-| handshake/pq-only | stable | Rust test driver | pass [1] | pass [2] |
-| handshake/prefer-pq | stable | Rust test driver | pass [1] | pass [2] |
-| handshake/remote-info | stable | Rust test driver | pass [1] | pass [2] |
-| handshake/rust-client-go-server | stable | upstream CLI | pass [5] | pass [6] |
-| handshake/wrong-endpoint-id | stable | upstream CLI | pass [5] | pass [6] |
-| handshake/zero-rtt | stable | Rust test driver | pass [1] | pass [2] |
-| relay/go-client-rust-relay | stable | upstream CLI | pass [7] | pass [8] |
-| relay/idle-timeout | stable | upstream CLI | pass [7] | pass [8] |
-| relay/ping-pong | stable | upstream CLI | pass [7] | pass [8] |
-| relay/rust-client-go-relay | stable | Rust test driver | pass [1] | pass [2] |
-| relay/rust-client-rust-relay | stable | Rust test driver | pass [1] | pass [2] |
-| relay/websocket-upgrade | stable | upstream CLI | pass [7] | pass [8] |
-| vectors/bao-chunk-ranges | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/bao-range-proofs | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/custom-addr-ticket-go-to-rust | experimental | Rust test driver | pass [1] | pass [2] |
-| vectors/custom-addr-ticket-rust-to-go | experimental | Rust test driver | pass [1] | pass [2] |
-| vectors/endpoint-ticket-roundtrip | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/gossip-frame | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/ip-ticket-go-to-rust | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/ip-ticket-rust-to-go | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/keys-z32-sign | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/pkarr-txt | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/postcard-8bit | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/postcard-varint-strictness | stable | Rust test driver | fail (expected) [1] | fail (expected) [2] |
-| vectors/postcard-varints | stable | Rust test driver | pass [1] | pass [2] |
+| Scenario | Tier | Rust counterpart | 1.2 (1.2.0) | 1.3 (1.3.0) | 1.4 (1.4.2) | 1.5 (1.5.0) |
+|---|---|---|:---:|:---:|:---:|:---:|
+| blobs/rust-get-per-child | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| blobs/rust-get-sendme | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| discovery/go-publish-rust-dns | stable | upstream CLI | pass [5] | pass [6] | pass [7] | pass [8] |
+| discovery/qad-report | stable | upstream CLI | pass [9] | pass [10] | pass [11] | pass [12] |
+| discovery/relay-urls | stable | upstream CLI | pass [13] | pass [14] | pass [15] | pass [16] |
+| discovery/rust-publish-go-dns | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| handshake/alpn-mismatch | stable | upstream CLI | pass [9] | pass [10] | pass [11] | pass [12] |
+| handshake/close-semantics | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| handshake/datagrams | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| handshake/go-client-rust-server | stable | upstream CLI | pass [9] | pass [10] | pass [11] | pass [12] |
+| handshake/pq-only | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| handshake/prefer-pq | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| handshake/remote-info | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| handshake/rust-client-go-server | stable | upstream CLI | pass [9] | pass [10] | pass [11] | pass [12] |
+| handshake/wrong-endpoint-id | stable | upstream CLI | pass [9] | pass [10] | pass [11] | pass [12] |
+| handshake/zero-rtt | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| relay/go-client-rust-relay | stable | upstream CLI | pass [13] | pass [14] | pass [15] | pass [16] |
+| relay/idle-timeout | stable | upstream CLI | pass [13] | pass [14] | pass [15] | pass [16] |
+| relay/ping-pong | stable | upstream CLI | pass [13] | pass [14] | pass [15] | pass [16] |
+| relay/rust-client-go-relay | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| relay/rust-client-rust-relay | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| relay/websocket-upgrade | stable | upstream CLI | pass [13] | pass [14] | pass [15] | pass [16] |
+| vectors/bao-chunk-ranges | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/bao-range-proofs | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/custom-addr-ticket-go-to-rust | experimental | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/custom-addr-ticket-rust-to-go | experimental | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/endpoint-ticket-roundtrip | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/gossip-frame | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/ip-ticket-go-to-rust | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/ip-ticket-rust-to-go | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/keys-z32-sign | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/pkarr-txt | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/postcard-8bit | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/postcard-varint-strictness | stable | Rust test driver | fail (expected) [1] | fail (expected) [2] | fail (expected) [3] | fail (expected) [4] |
+| vectors/postcard-varints | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
 
 Every scenario is measured against every released pin.
 
@@ -77,19 +77,29 @@ Every scenario is measured against every released pin.
 
 | Ref | Rust peer | Pin | SHA-256 digest |
 |---:|---|---|---|
-| [1] | rust-driver | 1.4 (1.4.2) | `a35114b503fcd4b59a900a59872c93227fbe8968d7ebabb1bf703686901448db` |
-| [2] | rust-driver | 1.5 (1.5.0) | `09f75132bbfe487877af3012e32342cf7ca1c0acd15991c9595612e2cd2e06b2` |
-| [3] | iroh-dns-server | 1.4 (1.4.2) | `0638df48701ce26825952a0ce434293bff42326bef871ba045dedc36379c6229` |
-| [4] | iroh-dns-server | 1.5 (1.5.0) | `65ec0af95b179fa2c5d68d637ed173477f222a4a650cc58ff0e4b0693d7c9cb4` |
-| [5] | iroh-doctor (*) | 1.4 (1.4.2) | `4a0d7dc4d2f59b44b06afc815b898b82b273eefbf5e54ab374e07ec164e87712` |
-| [6] | iroh-doctor (*) | 1.5 (1.5.0) | `40b84e78caedacfb399d0d512f1981fbe063d38c873bccb2fcb0a3538fbdbdc6` |
-| [7] | iroh-relay | 1.4 (1.4.2) | `dc0b643144d1c693686ecc19acecdf25c471e1294008f0172ddaff90989d76ae` |
-| [8] | iroh-relay | 1.5 (1.5.0) | `642f9eaa9092b066913c9bd986d7721d5a0eee941667114022e6a4e68f0502bd` |
+| [1] | rust-driver | 1.2 (1.2.0) | `bba301d6037f1b2e9105f3cf5a0d6c457a1a7ab2c20e0adea98a9537781520d1` |
+| [2] | rust-driver | 1.3 (1.3.0) | `ed2c0c185c806089afc3c746cc3458b0aa2110a8f0bd14b69a028cb54f41ae1b` |
+| [3] | rust-driver | 1.4 (1.4.2) | `a35114b503fcd4b59a900a59872c93227fbe8968d7ebabb1bf703686901448db` |
+| [4] | rust-driver | 1.5 (1.5.0) | `09f75132bbfe487877af3012e32342cf7ca1c0acd15991c9595612e2cd2e06b2` |
+| [5] | iroh-dns-server | 1.2 (1.2.0) | `28c5e16150f3fb8ded5431ab022e92631b1c42f6e702bc1c1db649f24eac6ee5` |
+| [6] | iroh-dns-server | 1.3 (1.3.0) | `4bd648c0af4e64b0122a45baa6509fff763cba8e22b8d1b6ba3b47d9a63c5d49` |
+| [7] | iroh-dns-server | 1.4 (1.4.2) | `0638df48701ce26825952a0ce434293bff42326bef871ba045dedc36379c6229` |
+| [8] | iroh-dns-server | 1.5 (1.5.0) | `65ec0af95b179fa2c5d68d637ed173477f222a4a650cc58ff0e4b0693d7c9cb4` |
+| [9] | iroh-doctor (*) | 1.2 (1.2.0) | `b2dbd6d6c1cea50c4f887215cf2223cb1f3e2f11f98be60e584b7faf4e708ae4` |
+| [10] | iroh-doctor (*) | 1.3 (1.3.0) | `cdf0cce41c0ace2b9bc9e0b7c5d0a93da9c4430b8e738d93aebcca12868033d0` |
+| [11] | iroh-doctor (*) | 1.4 (1.4.2) | `4a0d7dc4d2f59b44b06afc815b898b82b273eefbf5e54ab374e07ec164e87712` |
+| [12] | iroh-doctor (*) | 1.5 (1.5.0) | `40b84e78caedacfb399d0d512f1981fbe063d38c873bccb2fcb0a3538fbdbdc6` |
+| [13] | iroh-relay | 1.2 (1.2.0) | `37110b49058f1cab2ccdf04c9720f5b8b3e140f10c05e9279f0768d5f7ffb127` |
+| [14] | iroh-relay | 1.3 (1.3.0) | `39da821d043fa99e85c5d1198cdbf208efeeb73e80e7b750473a77b1c68f3747` |
+| [15] | iroh-relay | 1.4 (1.4.2) | `dc0b643144d1c693686ecc19acecdf25c471e1294008f0172ddaff90989d76ae` |
+| [16] | iroh-relay | 1.5 (1.5.0) | `642f9eaa9092b066913c9bd986d7721d5a0eee941667114022e6a4e68f0502bd` |
 
 * **iroh-doctor provenance.** Upstream has shipped no iroh-doctor release for the 1.2–1.5 trains. The pin is iroh-doctor 0.101.0, whose manifest declares `iroh = "1.0.0"` and is caret-resolved up to 1.5.0, so upstream does not itself publish or test this pairing; the matrix measures it, upstream does not endorse it. Building it against 1.2.0 and later also needs one additive line in iroh-doctor's own manifest, declaring tokio's `rt-multi-thread` feature that its `Builder::new_multi_thread` call already requires and that the iroh 1.0.x dependency graph supplied incidentally through `hickory-net`, which iroh 1.2.0 and later no longer use. No iroh source is modified, and the feature is already present in the committed lock, so the `--locked` build resolves identically; the build gate in `images/iroh-*/Dockerfile` fails if that edit is not exactly one line.
 
 ### Observed incompatibility evidence
 
+- `vectors/postcard-varint-strictness` at 1.2 (1.2.0): Go and Rust agreed on 3/7 canonical-varint cases: overlong-300: Go accepted=false, Rust accepted=true.
+- `vectors/postcard-varint-strictness` at 1.3 (1.3.0): Go and Rust agreed on 3/7 canonical-varint cases: overlong-300: Go accepted=false, Rust accepted=true.
 - `vectors/postcard-varint-strictness` at 1.4 (1.4.2): Go and Rust agreed on 3/7 canonical-varint cases: overlong-300: Go accepted=false, Rust accepted=true.
 - `vectors/postcard-varint-strictness` at 1.5 (1.5.0): Go and Rust agreed on 3/7 canonical-varint cases: overlong-300: Go accepted=false, Rust accepted=true.
 
