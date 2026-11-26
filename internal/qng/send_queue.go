@@ -5,11 +5,12 @@ import (
 	"sync/atomic"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
+	"github.com/tmc/go-iroh/internal/qng/internal/udp"
 )
 
 type sender interface {
-	Send(p *packetBuffer, gsoSize uint16, ecn protocol.ECN)
-	SendProbe(*packetBuffer, net.Addr, packetInfo)
+	Send(p *udp.PacketBuffer, gsoSize uint16, ecn protocol.ECN)
+	SendProbe(*udp.PacketBuffer, net.Addr, udp.PacketInfo)
 	Run() error
 	WouldBlock() bool
 	Available() <-chan struct{}
@@ -17,7 +18,7 @@ type sender interface {
 }
 
 type queueEntry struct {
-	buf     *packetBuffer
+	buf     *udp.PacketBuffer
 	gsoSize uint16
 	ecn     protocol.ECN
 }
@@ -49,9 +50,9 @@ func newSendQueue(conn sendConn) sender {
 // Send sends out a packet. It's guaranteed to not block.
 // Callers need to make sure that there's actually space in the send queue by calling WouldBlock.
 // Otherwise Send will panic.
-func (h *sendQueue) Send(p *packetBuffer, gsoSize uint16, ecn protocol.ECN) {
+func (h *sendQueue) Send(p *udp.PacketBuffer, gsoSize uint16, ecn protocol.ECN) {
 	if gsoSize == 0 && len(p.Data) <= sendQueueInlinePacketSize && h.pending.Load() == 0 {
-		if err := h.conn.Write(p.Data, gsoSize, ecn); err == nil || isSendMsgSizeErr(err) {
+		if err := h.conn.Write(p.Data, gsoSize, ecn); err == nil || udp.IsSendMsgSizeErr(err) {
 			p.Release()
 			return
 		}
@@ -74,7 +75,7 @@ func (h *sendQueue) Send(p *packetBuffer, gsoSize uint16, ecn protocol.ECN) {
 	}
 }
 
-func (h *sendQueue) SendProbe(p *packetBuffer, addr net.Addr, info packetInfo) {
+func (h *sendQueue) SendProbe(p *udp.PacketBuffer, addr net.Addr, info udp.PacketInfo) {
 	h.conn.WriteTo(p.Data, addr, info)
 }
 
@@ -104,7 +105,7 @@ func (h *sendQueue) Run() error {
 				// 1. Checking for "datagram too large" message from the kernel, as such,
 				// 2. Path MTU discovery,and
 				// 3. Eventual detection of loss PingFrame.
-				if !isSendMsgSizeErr(err) {
+				if !udp.IsSendMsgSizeErr(err) {
 					return err
 				}
 			}

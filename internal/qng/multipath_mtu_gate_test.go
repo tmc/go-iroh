@@ -8,6 +8,7 @@ import (
 
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
+	"github.com/tmc/go-iroh/internal/qng/internal/udp"
 	"github.com/tmc/go-iroh/internal/qng/internal/utils"
 )
 
@@ -22,7 +23,7 @@ func newQNTMigrationMTUTestConn(t *testing.T, disableMTUDiscovery bool) (*Conn, 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { pc.Close() })
-	raw, err := wrapConn(pc)
+	raw, err := udp.Wrap(pc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,14 +32,14 @@ func newQNTMigrationMTUTestConn(t *testing.T, disableMTUDiscovery bool) (*Conn, 
 	c.perspective = protocol.PerspectiveClient
 	c.handshakeConfirmed = true
 	c.config.DisablePathMTUDiscovery = disableMTUDiscovery
-	c.conn = newSendConn(raw, pc.LocalAddr(), packetInfo{}, utils.DefaultLogger)
+	c.conn = newSendConn(raw, pc.LocalAddr(), udp.PacketInfo{}, utils.DefaultLogger)
 	c.mtuDiscoverer = newMTUDiscoverer(
 		utils.NewRTTStats(),
 		protocol.ByteCount(protocol.InitialPacketSize),
 		protocol.ByteCount(protocol.MaxPacketBufferSize),
 		nil,
 	)
-	return c, raw.capabilities().DF
+	return c, raw.Capabilities().DF
 }
 
 // TestQNTMigrationRespectsMTUDiscoveryGate checks that the QNT migration paths
@@ -98,13 +99,13 @@ func TestQNTMigrationRespectsMTUDiscoveryGate(t *testing.T) {
 	}
 }
 
-// dfRawConn is a rawConn whose only interesting property is its DF capability.
+// dfRawConn is a udp.Conn whose only interesting property is its DF capability.
 type dfRawConn struct {
-	rawConn
+	udp.Conn
 	df bool
 }
 
-func (c *dfRawConn) capabilities() connCapabilities { return connCapabilities{DF: c.df} }
+func (c *dfRawConn) Capabilities() udp.Capabilities { return udp.Capabilities{DF: c.df} }
 func (c *dfRawConn) LocalAddr() net.Addr            { return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)} }
 func (c *dfRawConn) Close() error                   { return nil }
 

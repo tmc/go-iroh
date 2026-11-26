@@ -4,7 +4,6 @@ import (
 	"crypto"
 	"crypto/cipher"
 	"fmt"
-	tls "github.com/tmc/go-iroh/internal/itls/tls"
 	"sync/atomic"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
@@ -41,26 +40,18 @@ type updatableAEAD struct {
 	firstPacketNumber  protocol.PacketNumber
 	handshakeConfirmed bool
 
-	invalidPacketLimit uint64
 	invalidPacketCount uint64
 
 	// Time when the keys should be dropped. Keys are dropped on the next call to Open().
 	prevRcvAEADExpiry monotime.Time
 	prevRcvAEAD       cipher.AEAD
 
-	firstRcvdWithCurrentKey protocol.PacketNumber
-	firstSentWithCurrentKey protocol.PacketNumber
-	// highestRcvdPN is the highest packet number successfully unprotected, kept
-	// per draft-ietf-quic-multipath PathID: each path has its own packet-number
-	// space, so a high-PN packet on one path must not skew the truncated
-	// packet-number reconstruction of a low-PN packet on another. With multipath
-	// off the map holds only the PathIDZero entry and behaves like the former
-	// single global value.
-	highestRcvdPN         map[protocol.PathID]protocol.PacketNumber
-	numRcvdWithCurrentKey uint64
-	numSentWithCurrentKey uint64
-	rcvAEAD               cipher.AEAD
-	sendAEAD              cipher.AEAD
+	lowestRcvdWithCurrentKey protocol.PacketNumber
+	firstSentWithCurrentKey  protocol.PacketNumber
+	numRcvdWithCurrentKey    uint64
+	numSentWithCurrentKey    uint64
+	rcvAEAD                  cipher.AEAD
+	sendAEAD                 cipher.AEAD
 	// caches cipher.AEAD.Overhead(). This speeds up calls to Overhead().
 	aeadOverhead int
 
@@ -88,15 +79,14 @@ var (
 
 func newUpdatableAEAD(rttStats *utils.RTTStats, qlogger qlogwriter.Recorder, logger utils.Logger, version protocol.Version) *updatableAEAD {
 	return &updatableAEAD{
-		firstPacketNumber:       protocol.InvalidPacketNumber,
-		largestAcked:            protocol.InvalidPacketNumber,
-		firstRcvdWithCurrentKey: protocol.InvalidPacketNumber,
-		firstSentWithCurrentKey: protocol.InvalidPacketNumber,
-		highestRcvdPN:           map[protocol.PathID]protocol.PacketNumber{},
-		rttStats:                rttStats,
-		qlogger:                 qlogger,
-		logger:                  logger,
-		version:                 version,
+		firstPacketNumber:        protocol.InvalidPacketNumber,
+		largestAcked:             protocol.InvalidPacketNumber,
+		lowestRcvdWithCurrentKey: protocol.InvalidPacketNumber,
+		firstSentWithCurrentKey:  protocol.InvalidPacketNumber,
+		rttStats:                 rttStats,
+		qlogger:                  qlogger,
+		logger:                   logger,
+		version:                  version,
 	}
 }
 
@@ -117,7 +107,7 @@ func (a *updatableAEAD) rollKeys() {
 	}
 
 	a.keyPhase++
-	a.firstRcvdWithCurrentKey = protocol.InvalidPacketNumber
+	a.lowestRcvdWithCurrentKey = protocol.InvalidPacketNumber
 	a.firstSentWithCurrentKey = protocol.InvalidPacketNumber
 	a.numRcvdWithCurrentKey = 0
 	a.numSentWithCurrentKey = 0
@@ -183,32 +173,20 @@ func (a *updatableAEAD) setAEADParameters(aead cipher.AEAD, suite cipherSuite) {
 	}
 	a.aeadOverhead = aead.Overhead()
 	a.suite = suite
-	switch suite.ID {
-	case tls.TLS_AES_128_GCM_SHA256, tls.TLS_AES_256_GCM_SHA384:
-		a.invalidPacketLimit = protocol.InvalidPacketLimitAES
-	case tls.TLS_CHACHA20_POLY1305_SHA256:
-		a.invalidPacketLimit = protocol.InvalidPacketLimitChaCha
-	default:
-		panic(fmt.Sprintf("unknown cipher suite %d", suite.ID))
-	}
-}
-
-func (a *updatableAEAD) DecodePacketNumber(pid protocol.PathID, wirePN protocol.PacketNumber, wirePNLen protocol.PacketNumberLen) protocol.PacketNumber {
-	// The zero value (no packet yet seen on pid) is packet number 0, matching the
-	// former single global highestRcvdPN field, so PathIDZero decode is unchanged.
-	return protocol.DecodePacketNumber(wirePNLen, a.highestRcvdPN[pid], wirePN)
 }
 
 func (a *updatableAEAD) Open(dst, src []byte, rcvTime monotime.Time, pid protocol.PathID, pn protocol.PacketNumber, kp protocol.KeyPhaseBit, ad []byte) ([]byte, error) {
 	dec, err := a.open(dst, src, rcvTime, pid, pn, kp, ad)
 	if err == ErrDecryptionFailed {
 		a.invalidPacketCount++
-		if a.invalidPacketCount >= a.invalidPacketLimit {
+		// RFC 9001, Section 6.6 counts failures across all keys.
+		// To avoid sharing a counter with the long header openers, we subtract their limits:
+		// Initial (twice, after a Retry), Handshake and 0-RTT.
+		// Closing earlier than required doesn't matter in practice:
+		// an attacker still needs more than 2^35 forged packets.
+		if a.invalidPacketCount >= a.suite.IntegrityLimit()-4*protocol.InvalidPacketLimitLongHeader {
 			return nil, &qerr.TransportError{ErrorCode: qerr.AEADLimitReached}
 		}
-	}
-	if err == nil {
-		a.highestRcvdPN[pid] = max(a.highestRcvdPN[pid], pn)
 	}
 	return dec, err
 }
@@ -231,7 +209,7 @@ func (a *updatableAEAD) open(dst, src []byte, rcvTime monotime.Time, pid protoco
 	}
 	nonce := putPathNonce(a.nonceBuf[:], pid, pn)
 	if kp != a.keyPhase.Bit() {
-		if a.keyPhase > 0 && a.firstRcvdWithCurrentKey == protocol.InvalidPacketNumber || pn < a.firstRcvdWithCurrentKey {
+		if a.keyPhase > 0 && a.lowestRcvdWithCurrentKey == protocol.InvalidPacketNumber || pn < a.lowestRcvdWithCurrentKey {
 			if a.prevRcvAEAD == nil {
 				return nil, ErrKeysDropped
 			}
@@ -271,7 +249,7 @@ func (a *updatableAEAD) open(dst, src []byte, rcvTime monotime.Time, pid protoco
 				KeyPhase: a.keyPhase,
 			})
 		}
-		a.firstRcvdWithCurrentKey = pn
+		a.lowestRcvdWithCurrentKey = pn
 		return dec, err
 	}
 	// The AEAD we're using here will be the qtls.aeadAESGCM13.
@@ -281,14 +259,16 @@ func (a *updatableAEAD) open(dst, src []byte, rcvTime monotime.Time, pid protoco
 		return dec, ErrDecryptionFailed
 	}
 	a.numRcvdWithCurrentKey++
-	if a.firstRcvdWithCurrentKey == protocol.InvalidPacketNumber {
+	if a.lowestRcvdWithCurrentKey == protocol.InvalidPacketNumber {
 		// We initiated the key updated, and now we received the first packet protected with the new key phase.
 		// Therefore, we are certain that the peer rolled its keys as well. Start a timer to drop the old keys.
 		if a.keyPhase > 0 {
 			a.logger.Debugf("Peer confirmed key update to phase %d", a.keyPhase)
 			a.startKeyDropTimer(rcvTime)
 		}
-		a.firstRcvdWithCurrentKey = pn
+		a.lowestRcvdWithCurrentKey = pn
+	} else {
+		a.lowestRcvdWithCurrentKey = min(a.lowestRcvdWithCurrentKey, pn)
 	}
 	return dec, err
 }
@@ -328,7 +308,9 @@ func (a *updatableAEAD) updateAllowed() bool {
 	}
 	// the first key update is allowed as soon as the handshake is confirmed
 	return a.keyPhase == 0 ||
-		// subsequent key updates as soon as a packet sent with that key phase has been acknowledged
+		// Subsequent key updates are allowed as soon as a packet sent with the current keys was acknowledged.
+		// We don't wait 3 PTOs as recommended by RFC 9001, Section 6.5,
+		// since that only matters at very high packet rates.
 		(a.firstSentWithCurrentKey != protocol.InvalidPacketNumber &&
 			a.largestAcked != protocol.InvalidPacketNumber &&
 			a.largestAcked >= a.firstSentWithCurrentKey)

@@ -30,12 +30,15 @@ func (s *schedStream) frame() ackhandler.StreamFrame {
 	return ackhandler.StreamFrame{Frame: f}
 }
 
-func (s *schedStream) popStreamFrame(protocol.ByteCount, protocol.Version) (ackhandler.StreamFrame, *wire.StreamDataBlockedFrame, bool) {
+func (s *schedStream) popStreamFrame(protocol.ByteCount, protocol.Version) (ackhandler.StreamFrame, *wire.StreamDataBlockedFrame, sendState) {
 	if s.remaining == 0 {
-		return ackhandler.StreamFrame{}, nil, false
+		return ackhandler.StreamFrame{}, nil, sendStateIdle
 	}
 	s.remaining--
-	return s.frame(), nil, s.remaining > 0
+	if s.remaining > 0 {
+		return s.frame(), nil, sendStateReady
+	}
+	return s.frame(), nil, sendStateIdle
 }
 
 func (s *schedStream) popRetransmissionFrame(protocol.ByteCount, protocol.Version) (ackhandler.StreamFrame, bool) {

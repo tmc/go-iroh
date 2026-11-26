@@ -13,6 +13,7 @@ import (
 	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
+	"github.com/tmc/go-iroh/internal/qng/internal/udp"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
 )
 
@@ -512,7 +513,7 @@ func (c *Conn) migrateOrdinarySendToQNTRoute(route netip.AddrPort, now monotime.
 	if c.multipathOut != nil && c.multipathOut.premigrationRemote == nil {
 		c.multipathOut.premigrationRemote = c.conn.RemoteAddr()
 	}
-	c.conn.ChangeRemoteAddr(net.UDPAddrFromAddrPort(route), packetInfo{})
+	c.conn.ChangeRemoteAddr(net.UDPAddrFromAddrPort(route), udp.PacketInfo{})
 	// Send one ordinary non-probing frame on the migrated direct remote before
 	// application streams depend on it. The peer's existing RFC 9000 passive
 	// migration path switches its return address only after observing non-probing
@@ -561,7 +562,7 @@ func (c *Conn) revertQNTMigration(now monotime.Time) {
 	c.sentPacketHandler.MigratedPath(now, initialPacketSize)
 	c.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(initialPacketSize)))
 	c.resetMTUDiscoverer(now, initialPacketSize, c.maxMTU())
-	c.conn.ChangeRemoteAddr(m.premigrationRemote, packetInfo{})
+	c.conn.ChangeRemoteAddr(m.premigrationRemote, udp.PacketInfo{})
 	m.revertedRoute = m.migratedRemote
 	m.revertedRouteUntil = now.Add(qntRemigrationCooldown)
 	m.migratedRemote = netip.AddrPort{}
@@ -788,7 +789,7 @@ func (c *Conn) sendOnPath(pid protocol.PathID, st *pathOpenState, now monotime.T
 	if mode == ackhandler.SendAny {
 		datagrams = st.sendData
 	}
-	buf := getPacketBuffer()
+	buf := udp.GetPacketBuffer()
 	ecn := c.multipathECNMode()
 	p, packed, err := c.packer.AppendPacketForPath(buf, pid, datagrams, c.maxPacketSize(), now, c.version)
 	if err != nil {
@@ -827,7 +828,7 @@ func (c *Conn) sendPathPacket(pid protocol.PathID, connID protocol.ConnectionID,
 	if c.pathSendQueueBlocked(st) {
 		return nil
 	}
-	buf := getPacketBuffer()
+	buf := udp.GetPacketBuffer()
 	ecn := c.multipathECNMode()
 	p, err := c.packer.PackPathFramesPacket(buf, pid, connID, frames, c.maxPacketSize(), c.version)
 	if err != nil {
@@ -851,7 +852,7 @@ func (c *Conn) pathSendQueueBlocked(st *pathOpenState) bool {
 	return true
 }
 
-func (c *Conn) sendPathBuffer(buf *packetBuffer, ecn protocol.ECN, st *pathOpenState) {
+func (c *Conn) sendPathBuffer(buf *udp.PacketBuffer, ecn protocol.ECN, st *pathOpenState) {
 	if st != nil && st.qntRoute.IsValid() {
 		addr := st.qntUDPAddr
 		if addr == nil {

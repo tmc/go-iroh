@@ -108,8 +108,8 @@ func TestSendStreamWriteWithLimitRefusalLeavesBufferedBytesSchedulable(t *testin
 	if !bytes.Equal(f.Frame.Data, []byte("header")) {
 		t.Errorf("first frame = %q, want the buffered %q", f.Frame.Data, "header")
 	}
-	if !hasMore {
-		t.Error("hasMoreData = false with a limited write still parked behind the buffer")
+	if hasMore == sendStateIdle {
+		t.Error("sendState = idle with a limited write still parked behind the buffer")
 	}
 
 	// Now the buffer is empty, so the next frame really is the limited write's,

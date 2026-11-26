@@ -628,7 +628,7 @@ func TestSentPacketHandlerAddPathDistinctController(t *testing.T) {
 	path0Cwnd := path0.congestion.GetCongestionWindow()
 
 	path1.rttStats.UpdateRTT(500*time.Millisecond, 0)
-	path1.congestion.OnPacketSent(monotime.Now(), 0, 1, 1200, true)
+	path1.congestion.OnPacketSent(monotime.Now(), 1, 1200, true)
 
 	if got := path0.rttStats.SmoothedRTT(); got != path0SmoothedRTT {
 		t.Errorf("path 0 SmoothedRTT changed after path 1 RTT sample: %v != %v", got, path0SmoothedRTT)

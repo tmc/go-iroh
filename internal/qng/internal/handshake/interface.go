@@ -32,7 +32,6 @@ type headerDecryptor interface {
 // reconstructs and decrypts byte-identically to single-path.
 type LongHeaderOpener interface {
 	headerDecryptor
-	DecodePacketNumber(pid protocol.PathID, wirePN protocol.PacketNumber, wirePNLen protocol.PacketNumberLen) protocol.PacketNumber
 	Open(dst, src []byte, pid protocol.PathID, pn protocol.PacketNumber, associatedData []byte) ([]byte, error)
 }
 
@@ -43,7 +42,6 @@ type LongHeaderOpener interface {
 // single-path behavior, unchanged.
 type ShortHeaderOpener interface {
 	headerDecryptor
-	DecodePacketNumber(pid protocol.PathID, wirePN protocol.PacketNumber, wirePNLen protocol.PacketNumberLen) protocol.PacketNumber
 	Open(dst, src []byte, rcvTime monotime.Time, pid protocol.PathID, pn protocol.PacketNumber, kp protocol.KeyPhaseBit, associatedData []byte) ([]byte, error)
 }
 

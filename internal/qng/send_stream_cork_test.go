@@ -180,8 +180,8 @@ func armBurst(str *SendStream) {
 func drainOnce(t *testing.T, str *SendStream) {
 	t.Helper()
 	for range 100 {
-		_, _, hasMore := str.popStreamFrame(protocol.MaxPacketBufferSize, protocol.Version1)
-		if !hasMore {
+		_, _, state := str.popStreamFrame(protocol.MaxPacketBufferSize, protocol.Version1)
+		if state == sendStateIdle {
 			return
 		}
 	}

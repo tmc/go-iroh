@@ -22,9 +22,9 @@ type benchStream struct {
 
 func (s *benchStream) priority() (int8, bool, uint32) { return s.urgency, true, 0 }
 
-func (s *benchStream) popStreamFrame(protocol.ByteCount, protocol.Version) (ackhandler.StreamFrame, *wire.StreamDataBlockedFrame, bool) {
+func (s *benchStream) popStreamFrame(protocol.ByteCount, protocol.Version) (ackhandler.StreamFrame, *wire.StreamDataBlockedFrame, sendState) {
 	s.frame.DataLenPresent = true
-	return ackhandler.StreamFrame{Frame: &s.frame}, nil, true
+	return ackhandler.StreamFrame{Frame: &s.frame}, nil, sendStateReady
 }
 
 func (s *benchStream) popRetransmissionFrame(protocol.ByteCount, protocol.Version) (ackhandler.StreamFrame, bool) {

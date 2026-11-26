@@ -182,6 +182,7 @@ func newQNTTransportParameterConn(local, peer uint8) *Conn {
 		c.rttStats,
 		nil,
 	)
+	c.framer = newFramer(c.connFlowController)
 	c.streamsMap = newStreamsMap(
 		context.Background(),
 		c,

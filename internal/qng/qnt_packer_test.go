@@ -11,6 +11,7 @@ import (
 	"github.com/tmc/go-iroh/internal/qng/internal/handshake"
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
+	"github.com/tmc/go-iroh/internal/qng/internal/udp"
 	"github.com/tmc/go-iroh/internal/qng/internal/utils"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
 )
@@ -151,7 +152,7 @@ func TestQNTPackNextProbeInvalidStateNoop(t *testing.T) {
 }
 
 func TestQNTSendProbeBufferReleasesPacketBuffer(t *testing.T) {
-	buf := getPacketBuffer()
+	buf := udp.GetPacketBuffer()
 	buf.Data = append(buf.Data, 1, 2, 3)
 	s := &qntProbeTestSender{available: make(chan struct{})}
 	c := &Conn{sendQueue: s}
@@ -168,13 +169,13 @@ func TestQNTSendProbeBufferReleasesPacketBuffer(t *testing.T) {
 	if string(s.data) != string([]byte{1, 2, 3}) {
 		t.Fatalf("SendProbe data = %v, want [1 2 3]", s.data)
 	}
-	if buf.refCount != 0 {
-		t.Fatalf("packet buffer refCount = %d, want 0 after synchronous probe send", buf.refCount)
-	}
+	// Release decremented refCount to 0; Split+Release panics if refCount was still > 0.
+	buf.Split()
+	buf.Release()
 }
 
 func TestSendPathBufferUsesDefaultQueueForOrdinaryPath(t *testing.T) {
-	buf := getPacketBuffer()
+	buf := udp.GetPacketBuffer()
 	buf.Data = append(buf.Data, 1, 2, 3)
 	s := &qntProbeTestSender{available: make(chan struct{})}
 	c := &Conn{sendQueue: s}
@@ -196,7 +197,7 @@ func TestSendPathBufferUsesDefaultQueueForOrdinaryPath(t *testing.T) {
 }
 
 func TestSendPathBufferUsesQNTRoute(t *testing.T) {
-	buf := getPacketBuffer()
+	buf := udp.GetPacketBuffer()
 	buf.Data = append(buf.Data, 1, 2, 3)
 	s := &qntProbeTestSender{available: make(chan struct{})}
 	c := &Conn{sendQueue: s}
@@ -218,16 +219,16 @@ func TestSendPathBufferUsesQNTRoute(t *testing.T) {
 	if string(s.data) != string([]byte{1, 2, 3}) {
 		t.Fatalf("SendProbe data = %v, want [1 2 3]", s.data)
 	}
-	if buf.refCount != 0 {
-		t.Fatalf("packet buffer refCount = %d, want 0 after synchronous route send", buf.refCount)
-	}
+	// Release decremented refCount to 0; Split+Release panics if refCount was still > 0.
+	buf.Split()
+	buf.Release()
 	if path.qntUDPAddr == nil || !path.qntUDPAddr.IP.Equal(want.IP) || path.qntUDPAddr.Port != want.Port {
 		t.Fatalf("cached QNT addr = %v, want %v", path.qntUDPAddr, want)
 	}
 }
 
 func TestSendPathBufferDropsInvalidQNTRoute(t *testing.T) {
-	buf := getPacketBuffer()
+	buf := udp.GetPacketBuffer()
 	buf.Data = append(buf.Data, 1, 2, 3)
 	s := &qntProbeTestSender{available: make(chan struct{})}
 	c := &Conn{sendQueue: s}
@@ -240,9 +241,9 @@ func TestSendPathBufferDropsInvalidQNTRoute(t *testing.T) {
 	if s.probes != 0 {
 		t.Fatalf("SendProbe calls = %d, want 0", s.probes)
 	}
-	if buf.refCount != 0 {
-		t.Fatalf("packet buffer refCount = %d, want 0 after invalid route drop", buf.refCount)
-	}
+	// Release decremented refCount to 0; Split+Release panics if refCount was still > 0.
+	buf.Split()
+	buf.Release()
 }
 
 func TestSendPackedCoalescedPacketPreservesOneStreamFrame(t *testing.T) {
@@ -272,7 +273,7 @@ func TestSendPackedCoalescedPacketPreservesOneStreamFrame(t *testing.T) {
 	}
 	handler := &coalescedStreamLossHandler{}
 	packet := &coalescedPacket{
-		buffer: getPacketBuffer(),
+		buffer: udp.GetPacketBuffer(),
 		shortHdrPacket: &shortHeaderPacket{
 			PacketNumber: 1,
 			StreamFrame: ackhandler.StreamFrame{
@@ -555,13 +556,13 @@ type qntProbeTestSender struct {
 	wouldBlock bool
 }
 
-func (s *qntProbeTestSender) Send(buf *packetBuffer, _ uint16, ecn protocol.ECN) {
+func (s *qntProbeTestSender) Send(buf *udp.PacketBuffer, _ uint16, ecn protocol.ECN) {
 	s.sends++
 	s.data = append([]byte(nil), buf.Data...)
 	s.ecn = ecn
 }
 
-func (s *qntProbeTestSender) SendProbe(buf *packetBuffer, addr net.Addr, _ packetInfo) {
+func (s *qntProbeTestSender) SendProbe(buf *udp.PacketBuffer, addr net.Addr, _ udp.PacketInfo) {
 	s.probes++
 	s.data = append([]byte(nil), buf.Data...)
 	if udp, ok := addr.(*net.UDPAddr); ok {
@@ -589,12 +590,12 @@ func queuedPathCIDsBlockedFrames(c *Conn) []*wire.PathCIDsBlockedFrame {
 type qntProbeSendConn struct{}
 
 func (qntProbeSendConn) Write([]byte, uint16, protocol.ECN) error   { return nil }
-func (qntProbeSendConn) WriteTo([]byte, net.Addr, packetInfo) error { return nil }
-func (qntProbeSendConn) Close() error                               { return nil }
-func (qntProbeSendConn) LocalAddr() net.Addr                        { return &net.UDPAddr{} }
-func (qntProbeSendConn) RemoteAddr() net.Addr                       { return &net.UDPAddr{} }
-func (qntProbeSendConn) ChangeRemoteAddr(net.Addr, packetInfo)      {}
-func (qntProbeSendConn) capabilities() connCapabilities             { return connCapabilities{} }
+func (qntProbeSendConn) WriteTo([]byte, net.Addr, udp.PacketInfo) error { return nil }
+func (qntProbeSendConn) Close() error                                   { return nil }
+func (qntProbeSendConn) LocalAddr() net.Addr                            { return &net.UDPAddr{} }
+func (qntProbeSendConn) RemoteAddr() net.Addr                           { return &net.UDPAddr{} }
+func (qntProbeSendConn) ChangeRemoteAddr(net.Addr, udp.PacketInfo)      {}
+func (qntProbeSendConn) capabilities() udp.Capabilities                 { return udp.Capabilities{} }
 func (qntProbeSendConn) SetReadDeadline(time.Time) error            { return nil }
 
 type noAckFrameSource struct{}

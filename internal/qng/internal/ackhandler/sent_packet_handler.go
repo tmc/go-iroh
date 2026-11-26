@@ -86,7 +86,7 @@ type appDataPath struct {
 	largestAckedTime monotime.Time
 
 	rttStats        *utils.RTTStats
-	congestion      congestion.SendAlgorithmWithDebugInfos
+	congestion      congestion.SendAlgorithm
 	bytesInFlight   protocol.ByteCount
 	bytesSent       uint64
 	bytesReceived   uint64
@@ -177,7 +177,7 @@ type sentPacketHandler struct {
 	// the PathIDZero appData path aliases both, so single-path behavior is
 	// byte-identical (Stage 4 spec risk #4: rttStats is the connection's, not
 	// repointed).
-	congestion congestion.SendAlgorithmWithDebugInfos
+	congestion congestion.SendAlgorithm
 	rttStats   *utils.RTTStats
 	connStats  *utils.ConnectionStats
 
@@ -216,14 +216,7 @@ func NewSentPacketHandler(
 	qlogger qlogwriter.Recorder,
 	logger utils.Logger,
 ) SentPacketHandler {
-	congestion := congestion.NewCubicSender(
-		congestion.DefaultClock{},
-		rttStats,
-		connStats,
-		initialMaxDatagramSize,
-		true, // use Reno
-		qlogger,
-	)
+	congestion := congestion.NewRenoSender(rttStats, initialMaxDatagramSize, qlogger)
 
 	pns := newPacketNumberGenerator(initialPN, skipPacketInitialPeriod, skipPacketMaxPeriod)
 	path0 := &appDataPath{
@@ -267,6 +260,7 @@ func NewSentPacketHandler(
 		h.enableECN = true
 		path0.ecnTracker = newECNTracker(logger, qlogger)
 	}
+	h.connStats.CongestionWindow.Store(uint64(h.congestion.GetCongestionWindow()))
 	h.qlogRecoveryParametersSet(true)
 	return h
 }
@@ -277,15 +271,8 @@ func NewSentPacketHandler(
 // genuinely-new path its own controller (paths.rs:304-307 builds a fresh
 // controller per PathData via the congestion-controller factory); PathIDZero
 // keeps aliasing the connection's controller.
-func (h *sentPacketHandler) newPathCongestionController(rttStats *utils.RTTStats) congestion.SendAlgorithmWithDebugInfos {
-	return congestion.NewCubicSender(
-		congestion.DefaultClock{},
-		rttStats,
-		h.connStats,
-		h.initialMaxDatagramSize,
-		true, // use Reno
-		h.qlogger,
-	)
+func (h *sentPacketHandler) newPathCongestionController(rttStats *utils.RTTStats) congestion.SendAlgorithm {
+	return congestion.NewRenoSender(rttStats, h.initialMaxDatagramSize, h.qlogger)
 }
 
 // AddPath registers a genuinely-new application-data path (pid != PathIDZero)
@@ -555,9 +542,9 @@ func (h *sentPacketHandler) SentPacketOneStream(
 			pathData.numProbesToSend--
 		}
 	}
-	pathData.congestion.OnPacketSent(t, h.totalBytesInFlight(), pn, size, isAckEliciting)
+	pathData.congestion.OnPacketSent(t, pn, size, isAckEliciting)
 	if pathData.ecnTracker != nil {
-		pathData.ecnTracker.SentPacket(pn, ecn)
+		pathData.ecnTracker.SentPacket(t, pn, ecn)
 	}
 	if p.Outstanding() {
 		pnSpace.numOutstanding++
@@ -660,10 +647,10 @@ func (h *sentPacketHandler) sentPacket(
 			appData.numProbesToSend--
 		}
 	}
-	pathData.congestion.OnPacketSent(t, h.totalBytesInFlight(), pn, size, isAckEliciting)
+	pathData.congestion.OnPacketSent(t, pn, size, isAckEliciting)
 
 	if encLevel == protocol.Encryption1RTT && pathData.ecnTracker != nil {
-		pathData.ecnTracker.SentPacket(pn, ecn)
+		pathData.ecnTracker.SentPacket(t, pn, ecn)
 	}
 
 	if p.Outstanding() {
@@ -804,7 +791,9 @@ func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.En
 	if encLevel == protocol.Encryption0RTT || encLevel == protocol.Encryption1RTT {
 		return h.ReceivedAckForPath(ack, protocol.PathIDZero, rcvTime)
 	}
-	return h.receivedAck(ack, encLevel, protocol.PathIDZero, rcvTime)
+	acked1RTTPacket, err := h.receivedAck(ack, encLevel, protocol.PathIDZero, rcvTime)
+	h.connStats.CongestionWindow.Store(uint64(h.congestion.GetCongestionWindow()))
+	return acked1RTTPacket, err
 }
 
 // ReceivedAckForPath processes a (possibly multipath) ACK that acknowledges
@@ -824,7 +813,11 @@ func (h *sentPacketHandler) ReceivedAckForPath(ack *wire.AckFrame, pid protocol.
 			ErrorMessage: fmt.Sprintf("received ACK for unknown path %d", pid),
 		}
 	}
-	return h.receivedAck(ack, protocol.Encryption1RTT, pid, rcvTime)
+	acked1RTTPacket, err := h.receivedAck(ack, protocol.Encryption1RTT, pid, rcvTime)
+	if pid == protocol.PathIDZero {
+		h.connStats.CongestionWindow.Store(uint64(h.congestion.GetCongestionWindow()))
+	}
+	return acked1RTTPacket, err
 }
 
 // receivedAck processes an ACK against the packet-number space identified by
@@ -916,7 +909,7 @@ func (h *sentPacketHandler) receivedAck(ack *wire.AckFrame, encLevel protocol.En
 		if encLevel == protocol.Encryption1RTT && ackPath.ecnTracker != nil && largestAcked > pnSpace.largestAcked {
 			congested := ackPath.ecnTracker.HandleNewlyAcked(ackedPackets, int64(ack.ECT0), int64(ack.ECT1), int64(ack.ECNCE))
 			if congested {
-				ackCongestion.OnCongestionEvent(largestAcked, 0, priorInFlight)
+				ackCongestion.OnCongestionEvent(largestAcked)
 			}
 		}
 
@@ -947,7 +940,7 @@ func (h *sentPacketHandler) receivedAck(ack *wire.AckFrame, encLevel protocol.En
 	var acked1RTTPacket bool
 	for _, p := range ackedPackets {
 		if p.includedInBytesInFlight {
-			ackCongestion.OnPacketAcked(p.PacketNumber, p.Length, priorInFlight, rcvTime)
+			ackCongestion.OnPacketAcked(p.PacketNumber, priorInFlight)
 		}
 		if p.EncryptionLevel == protocol.Encryption1RTT {
 			acked1RTTPacket = true
@@ -1025,7 +1018,9 @@ func (h *sentPacketHandler) detectSpuriousLosses(ack *wire.AckFrame, pid protoco
 		}
 	}
 	for _, pn := range spuriousLosses {
-		appData.lostPackets.Delete(pn)
+		length := appData.lostPackets.Delete(pn)
+		h.connStats.PacketsLost.Add(-1)
+		h.connStats.BytesLost.Add(-int64(length))
 	}
 	lossDelay := max(
 		max(appData.rttStats.LatestRTT(), appData.rttStats.SmoothedRTT())*time.Duration(8+h.timeThresholdEighths)/8,
@@ -1387,9 +1382,6 @@ func (h *sentPacketHandler) detectLostPackets(now monotime.Time, encLevel protoc
 	// Packets sent before this time are deemed lost.
 	lostSendTime := now.Add(-lossDelay)
 
-	// priorInFlight is the total across all spaces; each path's controller
-	// operates on the total (for PathIDZero, the single controller).
-	priorInFlight := h.totalBytesInFlight()
 	for pn, p := range hist.Packets() {
 		if pn > pnSpace.largestAcked {
 			break
@@ -1456,10 +1448,13 @@ func (h *sentPacketHandler) detectLostPackets(now monotime.Time, encLevel protoc
 		}
 		if packetLost {
 			if p.Outstanding() && space == protocol.PacketNumberSpaceAppData {
-				lossPath.lostPackets.Add(pn, p.SendTime)
+				lossPath.lostPackets.Add(pn, p.SendTime, p.Length)
 			}
 			hist.DeclareLost(pn)
-			if !p.isPathProbePacket && p.IsAckEliciting() {
+			if p.isPathProbePacket {
+				continue
+			}
+			if p.IsAckEliciting() {
 				// the bytes in flight need to be reduced no matter if the frames in this packet will be retransmitted
 				h.removeFromBytesInFlight(p)
 				h.queueFramesForRetransmission(p)
@@ -1468,11 +1463,14 @@ func (h *sentPacketHandler) detectLostPackets(now monotime.Time, encLevel protoc
 						lossPath.lostPacketCount++
 						lossPath.lostByteCount += uint64(p.Length)
 					}
-					lossCongestion.OnCongestionEvent(pn, p.Length, priorInFlight)
+					h.connStats.PacketsLost.Add(1)
+					h.connStats.BytesLost.Add(int64(p.Length))
+					lossCongestion.OnCongestionEvent(pn)
 				}
-				if encLevel == protocol.Encryption1RTT && lossPath.ecnTracker != nil {
-					lossPath.ecnTracker.LostPacket(pn)
-				}
+			}
+			// ECN validation fails if all ECN-marked packets are lost, including ACK-only packets.
+			if p.EncryptionLevel == protocol.Encryption1RTT && lossPath.ecnTracker != nil {
+				lossPath.ecnTracker.LostPacket(pn)
 			}
 		}
 	}
@@ -1516,6 +1514,7 @@ func (h *sentPacketHandler) OnLossDetectionTimeout(now monotime.Time) error {
 		}
 		// Early retransmit or time loss detection
 		h.detectLostPackets(now, encLevel, lossPathID)
+		h.connStats.CongestionWindow.Store(uint64(h.congestion.GetCongestionWindow()))
 		return nil
 	}
 
@@ -1608,7 +1607,8 @@ func (h *sentPacketHandler) ECNMode(isShortHeaderPacket bool) protocol.ECN {
 	if !h.enableECN {
 		return protocol.ECNUnsupported
 	}
-	if !isShortHeaderPacket {
+	// Before handshake confirmation, 1-RTT packets might be coalesced with long header packets.
+	if !isShortHeaderPacket || !h.handshakeConfirmed {
 		return protocol.ECNNon
 	}
 	return h.getAppDataPath(protocol.PathIDZero).ecnTracker.Mode()
@@ -1734,11 +1734,12 @@ func (h *sentPacketHandler) SendModeForPath(now monotime.Time, pid protocol.Path
 }
 
 func (h *sentPacketHandler) TimeUntilSend() monotime.Time {
-	return h.congestion.TimeUntilSend(h.totalBytesInFlight())
+	return h.congestion.TimeUntilSend()
 }
 
 func (h *sentPacketHandler) SetMaxDatagramSize(s protocol.ByteCount) {
 	h.congestion.SetMaxDatagramSize(s)
+	h.connStats.CongestionWindow.Store(uint64(h.congestion.GetCongestionWindow()))
 }
 
 func (h *sentPacketHandler) isAmplificationLimited() bool {
@@ -1759,6 +1760,11 @@ func (h *sentPacketHandler) QueueProbePacket(space protocol.PacketNumberSpace) b
 	h.hist.DeclareLost(pn)
 	h.removeFromBytesInFlight(p)
 	h.queueFramesForRetransmission(p)
+	if p.EncryptionLevel == protocol.Encryption1RTT {
+		if path := h.getAppDataPath(p.pathID); path != nil && path.ecnTracker != nil {
+			path.ecnTracker.LostPacket(pn)
+		}
+	}
 	return true
 }
 
@@ -1862,6 +1868,8 @@ func (h *sentPacketHandler) MigratedPath(now monotime.Time, initialMaxDatagramSi
 	// MigratedPath is RFC 9000 single-path connection migration, not
 	// draft-multipath; PathIDZero is still the only application-data path.
 	appData := h.getAppDataPath(protocol.PathIDZero)
+	// Packets sent on the old path are expected to have arrived within 3 PTOs of the old path.
+	oldPathDrainTime := now.Add(3 * h.rttStats.PTO(true))
 	h.rttStats.ResetForPathMigration()
 	h.lastMetrics = qlog.MetricsUpdated{}
 	h.packetThresholdDisabled = false
@@ -1883,17 +1891,14 @@ func (h *sentPacketHandler) MigratedPath(now monotime.Time, initialMaxDatagramSi
 	for pn := range h.hist.PathProbes() {
 		h.hist.RemovePathProbe(pn)
 	}
-	h.congestion = congestion.NewCubicSender(
-		congestion.DefaultClock{},
-		h.rttStats,
-		h.connStats,
-		initialMaxDatagramSize,
-		true, // use Reno
-		h.qlogger,
-	)
+	h.congestion = congestion.NewRenoSender(h.rttStats, initialMaxDatagramSize, h.qlogger)
 	// Keep the PathIDZero appData controller in sync with the rebuilt handler
 	// controller; for a single path they are the same instance.
 	appData.congestion = h.congestion
+	h.connStats.CongestionWindow.Store(uint64(h.congestion.GetCongestionWindow()))
+	if appData.ecnTracker != nil {
+		appData.ecnTracker.MigratedPath(oldPathDrainTime)
+	}
 	h.qlogRecoveryParametersSet(true)
 	h.setLossDetectionTimer(now)
 }

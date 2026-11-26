@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
+	"github.com/tmc/go-iroh/internal/qng/internal/qerr"
 )
 
 // pathPacketNumberLow62 masks a packet number to the low 62 bits, as the
@@ -78,7 +79,7 @@ func (s *longHeaderSealer) Overhead() int {
 type longHeaderOpener struct {
 	aead            cipher.AEAD
 	headerProtector headerProtector
-	highestRcvdPN   protocol.PacketNumber // highest packet number received (which could be successfully unprotected)
+	invalidPackets  uint32
 
 	// use a single array to avoid allocations
 	nonceBuf [12]byte
@@ -96,18 +97,17 @@ func newLongHeaderOpener(aead cipher.AEAD, headerProtector headerProtector) Long
 	}
 }
 
-// DecodePacketNumber reconstructs the truncated wire packet number. pid is
-// always PathIDZero (long-header packets are never multipath), so a single
-// highestRcvdPN suffices.
-func (o *longHeaderOpener) DecodePacketNumber(_ protocol.PathID, wirePN protocol.PacketNumber, wirePNLen protocol.PacketNumberLen) protocol.PacketNumber {
-	return protocol.DecodePacketNumber(wirePNLen, o.highestRcvdPN, wirePN)
-}
-
 func (o *longHeaderOpener) Open(dst, src []byte, pid protocol.PathID, pn protocol.PacketNumber, ad []byte) ([]byte, error) {
 	dec, err := o.aead.Open(dst, putPathNonce(o.nonceBuf[:], pid, pn), src, ad)
-	if err == nil {
-		o.highestRcvdPN = max(o.highestRcvdPN, pn)
-	} else {
+	if err != nil {
+		// RFC 9001, Section 6.6 counts failures across all keys.
+		// To avoid sharing a counter between the openers, each long header key has its own limit,
+		// and the 1-RTT limit is reduced accordingly.
+		// These keys are dropped long before an attacker could send 2^32 forged packets.
+		o.invalidPackets++
+		if o.invalidPackets >= protocol.InvalidPacketLimitLongHeader {
+			return nil, &qerr.TransportError{ErrorCode: qerr.AEADLimitReached}
+		}
 		err = ErrDecryptionFailed
 	}
 	return dec, err

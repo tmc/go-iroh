@@ -30,8 +30,7 @@ func TestCryptoPTOProbeWithPendingAckIsAckEliciting(t *testing.T) {
 		pnManager:           &qntProbePNManager{pn: 1},
 		acks:                pendingAckFrameSource{},
 		retransmissionQueue: newRetransmissionQueue(),
-		initialStream:       newInitialCryptoStream(true),
-		handshakeStream:     newCryptoStream(),
+		cryptoStreamManager: newCryptoStreamManager(protocol.PerspectiveClient),
 	}
 	_, pl := p.maybeGetCryptoPacket(1200, protocol.EncryptionHandshake, monotime.Now(), true, false, protocol.Version1)
 	if pl.ack == nil {

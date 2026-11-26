@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
+	"github.com/tmc/go-iroh/internal/qng/internal/udp"
 	"github.com/tmc/go-iroh/internal/qng/internal/utils"
 )
 
@@ -42,10 +43,10 @@ func TestConfigInitialRTTAppliesBeforeHandshake(t *testing.T) {
 
 type configTestSendConn struct{}
 
-func (configTestSendConn) Write([]byte, uint16, protocol.ECN) error   { return nil }
-func (configTestSendConn) WriteTo([]byte, net.Addr, packetInfo) error { return nil }
-func (configTestSendConn) Close() error                               { return nil }
-func (configTestSendConn) LocalAddr() net.Addr                        { return &net.UDPAddr{} }
-func (configTestSendConn) RemoteAddr() net.Addr                       { return &net.UDPAddr{} }
-func (configTestSendConn) ChangeRemoteAddr(net.Addr, packetInfo)      {}
-func (configTestSendConn) capabilities() connCapabilities             { return connCapabilities{} }
+func (configTestSendConn) Write([]byte, uint16, protocol.ECN) error       { return nil }
+func (configTestSendConn) WriteTo([]byte, net.Addr, udp.PacketInfo) error { return nil }
+func (configTestSendConn) Close() error                                   { return nil }
+func (configTestSendConn) LocalAddr() net.Addr                            { return &net.UDPAddr{} }
+func (configTestSendConn) RemoteAddr() net.Addr                           { return &net.UDPAddr{} }
+func (configTestSendConn) ChangeRemoteAddr(net.Addr, udp.PacketInfo)      {}
+func (configTestSendConn) capabilities() udp.Capabilities                 { return udp.Capabilities{} }

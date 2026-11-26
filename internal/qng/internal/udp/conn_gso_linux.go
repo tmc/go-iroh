@@ -1,6 +1,6 @@
 //go:build linux
 
-package quic
+package udp
 
 import (
 	"errors"
@@ -14,7 +14,7 @@ type gsoSendConn struct {
 	conn gsoCapablePacketConn
 }
 
-func newGSOSendConn(conn gsoCapablePacketConn, supportsDF bool) (rawConn, bool, error) {
+func newGSOSendConn(conn gsoCapablePacketConn, supportsDF bool) (Conn, bool, error) {
 	raw, err := conn.SyscallConn()
 	if err != nil {
 		if errors.Is(err, errors.ErrUnsupported) {
@@ -61,6 +61,6 @@ func (c *gsoSendConn) writePackets(b []byte, addr net.Addr, packetInfoOOB []byte
 	return written, nil
 }
 
-func (c *gsoSendConn) capabilities() connCapabilities {
-	return connCapabilities{DF: c.supportsDF, GSO: true}
+func (c *gsoSendConn) Capabilities() Capabilities {
+	return Capabilities{DF: c.supportsDF, GSO: true}
 }

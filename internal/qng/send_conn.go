@@ -6,19 +6,20 @@ import (
 	"sync/atomic"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
+	"github.com/tmc/go-iroh/internal/qng/internal/udp"
 	"github.com/tmc/go-iroh/internal/qng/internal/utils"
 )
 
 // A sendConn allows sending using a simple Write() on a non-connected packet conn.
 type sendConn interface {
 	Write(b []byte, gsoSize uint16, ecn protocol.ECN) error
-	WriteTo([]byte, net.Addr, packetInfo) error
+	WriteTo([]byte, net.Addr, udp.PacketInfo) error
 	Close() error
 	LocalAddr() net.Addr
 	RemoteAddr() net.Addr
-	ChangeRemoteAddr(addr net.Addr, info packetInfo)
+	ChangeRemoteAddr(addr net.Addr, info udp.PacketInfo)
 
-	capabilities() connCapabilities
+	capabilities() udp.Capabilities
 }
 
 type remoteAddrInfo struct {
@@ -27,7 +28,7 @@ type remoteAddrInfo struct {
 }
 
 type sconn struct {
-	rawConn
+	udp.Conn
 
 	localAddr net.Addr
 
@@ -53,18 +54,18 @@ type sconn struct {
 
 var _ sendConn = &sconn{}
 
-func newSendConn(c rawConn, remote net.Addr, info packetInfo, logger utils.Logger) *sconn {
+func newSendConn(c udp.Conn, remote net.Addr, info udp.PacketInfo, logger utils.Logger) *sconn {
 	localAddr := c.LocalAddr()
-	if info.addr.IsValid() {
+	if info.Addr.IsValid() {
 		if udpAddr, ok := localAddr.(*net.UDPAddr); ok {
 			addrCopy := *udpAddr
-			addrCopy.IP = info.addr.AsSlice()
+			addrCopy.IP = info.Addr.AsSlice()
 			localAddr = &addrCopy
 		}
 	}
 
 	sc := &sconn{
-		rawConn:   c,
+		Conn:      c,
 		localAddr: localAddr,
 		logger:    logger,
 	}
@@ -80,7 +81,7 @@ func (c *sconn) Write(p []byte, gsoSize uint16, ecn protocol.ECN) error {
 	defer c.writeMu.Unlock()
 	ai := c.remoteAddrInfo.Load()
 	err := c.writePacket(p, ai.addr, ai.oob, gsoSize, ecn)
-	if err != nil && isGSOError(err) {
+	if err != nil && udp.IsGSOError(err) {
 		// disable GSO for future calls
 		c.gotGSOError = true
 		if c.logger.Debug() {
@@ -101,7 +102,7 @@ func (c *sconn) Write(p []byte, gsoSize uint16, ecn protocol.ECN) error {
 
 func (c *sconn) writePacket(p []byte, addr net.Addr, oob []byte, gsoSize uint16, ecn protocol.ECN) error {
 	_, err := c.WritePacket(p, addr, oob, gsoSize, ecn)
-	if err != nil && !c.wroteFirstPacket && isPermissionError(err) {
+	if err != nil && !c.wroteFirstPacket && udp.IsPermissionError(err) {
 		_, err = c.WritePacket(p, addr, oob, gsoSize, ecn)
 	}
 	c.wroteFirstPacket = true
@@ -111,29 +112,29 @@ func (c *sconn) writePacket(p []byte, addr net.Addr, oob []byte, gsoSize uint16,
 	return err
 }
 
-func (c *sconn) WriteTo(b []byte, addr net.Addr, info packetInfo) error {
+func (c *sconn) WriteTo(b []byte, addr net.Addr, info udp.PacketInfo) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	_, err := c.WritePacket(b, addr, info.OOB(), 0, protocol.ECNUnsupported)
 	return err
 }
 
-func (c *sconn) capabilities() connCapabilities {
-	capabilities := c.rawConn.capabilities()
+func (c *sconn) capabilities() udp.Capabilities {
+	capabilities := c.Capabilities()
 	if capabilities.GSO {
 		capabilities.GSO = !c.gotGSOError
 	}
 	return capabilities
 }
 
-func (c *sconn) ChangeRemoteAddr(addr net.Addr, info packetInfo) {
+func (c *sconn) ChangeRemoteAddr(addr net.Addr, info udp.PacketInfo) {
 	c.remoteAddrInfo.Store(&remoteAddrInfo{
 		addr: addr,
 		oob:  packetInfoOOB(info),
 	})
 }
 
-func packetInfoOOB(info packetInfo) []byte {
+func packetInfoOOB(info udp.PacketInfo) []byte {
 	oob := info.OOB()
 	// Reserve space for UDP_SEGMENT and ECN control messages.
 	n := len(oob)

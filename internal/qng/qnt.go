@@ -13,6 +13,7 @@ import (
 	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
+	"github.com/tmc/go-iroh/internal/qng/internal/udp"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
 )
 
@@ -356,7 +357,7 @@ func (c *Conn) qntPopPendingProbe(challenge [8]byte) (netip.AddrPort, *wire.Path
 	return remote, &wire.PathChallengeFrame{Data: challenge}, true
 }
 
-func (c *Conn) qntPackNextProbe(connID protocol.ConnectionID, v protocol.Version) (netip.AddrPort, shortHeaderPacket, *packetBuffer, bool, error) {
+func (c *Conn) qntPackNextProbe(connID protocol.ConnectionID, v protocol.Version) (netip.AddrPort, shortHeaderPacket, *udp.PacketBuffer, bool, error) {
 	if c.packer == nil {
 		return netip.AddrPort{}, shortHeaderPacket{}, nil, false, nil
 	}

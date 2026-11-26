@@ -150,7 +150,7 @@ func TestSendStreamOffsetIntegrityUnderConcurrentDrain(t *testing.T) {
 							}
 							continue
 						}
-						if !more {
+						if more == sendStateIdle {
 							return
 						}
 					default:
@@ -209,7 +209,7 @@ func TestSendStreamTryWriteAllRefusesBehindBufferedWrite(t *testing.T) {
 		if f.Frame != nil && f.Frame.DataLen() > 0 {
 			frames = append(frames, popped{offset: f.Frame.Offset, data: append([]byte(nil), f.Frame.Data...)})
 		}
-		if !more {
+		if more == sendStateIdle {
 			break
 		}
 	}

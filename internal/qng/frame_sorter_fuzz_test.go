@@ -153,7 +153,7 @@ func (s *refSorter) push(data []byte, offset protocol.ByteCount) error {
 		data = newData
 	}
 
-	if s.gaps.Len() > protocol.MaxStreamFrameSorterGaps {
+	if s.gaps.Len() > maxStreamFrameSorterGaps {
 		return errors.New("too many gaps in received data")
 	}
 
@@ -327,7 +327,7 @@ func FuzzFrameSorterDifferential(f *testing.F) {
 			t.Fatalf("divergence at op %d (%s): %s\ntape:\n%s\ngot queue:  %s\nwant queue: %s\ngot gaps:  %v\nwant gaps: %v\ngot readPos=%d want readPos=%d",
 				i, ops[i], fmt.Sprintf(format, args...), tapeString(ops[:i+1]),
 				queueString(gotQueue(got)), queueString(refQueue(want)),
-				gapsOf(got.gaps), gapsOf(want.gaps), got.readPos, want.readPos)
+				chunkedGapsOf(got.gaps), gapsOf(want.gaps), got.readPos, want.readPos)
 		}
 
 		for i, op := range ops {
@@ -383,7 +383,7 @@ func FuzzFrameSorterDifferential(f *testing.F) {
 					}
 				}
 			}
-			gg, wg := gapsOf(got.gaps), gapsOf(want.gaps)
+			gg, wg := chunkedGapsOf(got.gaps), gapsOf(want.gaps)
 			if len(gg) != len(wg) {
 				fail(i, "gap count %d != %d", len(gg), len(wg))
 			}
@@ -405,11 +405,19 @@ func FuzzFrameSorterDifferential(f *testing.F) {
 	})
 }
 
+func chunkedGapsOf(chunks [][]byteInterval) []byteInterval {
+	var out []byteInterval
+	for _, c := range chunks {
+		out = append(out, c...)
+	}
+	return out
+}
+
 // checkInvariants verifies that the gap list is sorted, non-overlapping, and
 // complementary to the queue: no queued entry may overlap a gap.
 func checkInvariants(t *testing.T, s *frameSorter, ops []sorterOp) {
 	t.Helper()
-	gaps := gapsOf(s.gaps)
+	gaps := chunkedGapsOf(s.gaps)
 	for i, g := range gaps {
 		if g.Start >= g.End {
 			t.Fatalf("empty/inverted gap %v\ntape:\n%s", g, tapeString(ops))

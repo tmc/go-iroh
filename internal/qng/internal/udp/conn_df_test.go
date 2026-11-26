@@ -1,15 +1,15 @@
-package quic
+package udp
 
 import (
 	"net"
 	"testing"
 )
 
-// TestWrapConnSetsDF checks that wrapConn actually sets the don't-fragment bit
+// TestWrapSetsDF checks that Wrap actually sets the don't-fragment bit
 // on a UDP socket. Path MTU discovery is started only when the send connection
-// reports DF (see Conn.handleHandshakeConfirmed), so a change that stops
-// wrapConn from calling setDF silently disables PMTU discovery.
-func TestWrapConnSetsDF(t *testing.T) {
+// reports DF, so a change that stops Wrap from calling setDF silently disables
+// PMTU discovery.
+func TestWrapSetsDF(t *testing.T) {
 	pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
@@ -30,11 +30,11 @@ func TestWrapConnSetsDF(t *testing.T) {
 		t.Skip("platform does not support setting the DF bit")
 	}
 
-	c, err := wrapConn(pc)
+	c, err := Wrap(pc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.capabilities().DF; !got {
-		t.Errorf("wrapConn: capabilities().DF = false, want true")
+	if got := c.Capabilities().DF; !got {
+		t.Errorf("Wrap: Capabilities().DF = false, want true")
 	}
 }

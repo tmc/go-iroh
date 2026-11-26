@@ -46,8 +46,8 @@ func TestSendStreamCoalescesActiveNotifications(t *testing.T) {
 	if got, want := sender.streamData, 1; got != want {
 		t.Fatalf("notifications before pop: got %d, want %d", got, want)
 	}
-	if frame, _, more := str.popStreamFrame(protocol.MaxPacketBufferSize, protocol.Version1); frame.Frame == nil || more {
-		t.Fatalf("popStreamFrame = (%v, more %t), want frame and no more", frame.Frame, more)
+	if frame, _, state := str.popStreamFrame(protocol.MaxPacketBufferSize, protocol.Version1); frame.Frame == nil || state != sendStateIdle {
+		t.Fatalf("popStreamFrame = (%v, state %v), want frame and idle", frame.Frame, state)
 	}
 	if _, err := str.Write([]byte("more")); err != nil {
 		t.Fatal(err)
@@ -96,9 +96,9 @@ func TestSendStreamWriteBufferReliableCancel(t *testing.T) {
 	}
 	str.CancelWrite(1)
 
-	frame, _, more := str.popStreamFrame(protocol.MaxPacketBufferSize, protocol.Version1)
-	if frame.Frame == nil || string(frame.Frame.Data) != "reliable" || more {
-		t.Fatalf("popStreamFrame = (%v, more %t); want reliable data only", frame.Frame, more)
+	frame, _, state := str.popStreamFrame(protocol.MaxPacketBufferSize, protocol.Version1)
+	if frame.Frame == nil || string(frame.Frame.Data) != "reliable" || state != sendStateIdle {
+		t.Fatalf("popStreamFrame = (%v, state %v); want reliable data only", frame.Frame, state)
 	}
 	frame.Frame.PutBack()
 }
@@ -109,9 +109,9 @@ func TestSendStreamWriteBufferUnreliableCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	str.CancelWrite(1)
-	frame, _, more := str.popStreamFrame(protocol.MaxPacketBufferSize, protocol.Version1)
-	if frame.Frame != nil || more {
-		t.Fatalf("popStreamFrame = (%v, more %t); want no data", frame.Frame, more)
+	frame, _, state := str.popStreamFrame(protocol.MaxPacketBufferSize, protocol.Version1)
+	if frame.Frame != nil || state != sendStateIdle {
+		t.Fatalf("popStreamFrame = (%v, state %v); want no data", frame.Frame, state)
 	}
 }
 
@@ -218,7 +218,7 @@ func TestSendStreamSerializesConcurrentWrites(t *testing.T) {
 			got += len(frame.Frame.Data)
 			frame.Frame.PutBack()
 		}
-		if !more {
+		if more == sendStateIdle {
 			break
 		}
 	}
@@ -277,7 +277,7 @@ func TestSendStreamFastPathCloseFlushesTail(t *testing.T) {
 			fin = frame.Frame.Fin
 			frame.Frame.PutBack()
 		}
-		if !more {
+		if more == sendStateIdle {
 			break
 		}
 	}
@@ -330,7 +330,7 @@ func TestSendStreamWritevCopiesCallerBuffers(t *testing.T) {
 			got = append(got, frame.Frame.Data...)
 			frame.Frame.PutBack()
 		}
-		if !more {
+		if more == sendStateIdle {
 			break
 		}
 	}
@@ -365,7 +365,7 @@ func TestSendStreamWriteBufferPreservesOrder(t *testing.T) {
 			got = append(got, frame.Frame.Data...)
 			frame.Frame.PutBack()
 		}
-		if !more {
+		if more == sendStateIdle {
 			break
 		}
 	}
@@ -431,11 +431,11 @@ func TestSendStreamWriteBufferFin(t *testing.T) {
 		if frame.Frame == nil {
 			t.Fatal("popStreamFrame returned no frame")
 		}
-		if frame.Frame.Fin != !more {
-			t.Fatalf("frame %d: Fin = %t, more = %t; FIN must appear only on last frame", i, frame.Frame.Fin, more)
+		if frame.Frame.Fin != (more == sendStateIdle) {
+			t.Fatalf("frame %d: Fin = %t, state = %v; FIN must appear only on last frame", i, frame.Frame.Fin, more)
 		}
 		frame.Frame.PutBack()
-		if !more {
+		if more == sendStateIdle {
 			break
 		}
 	}
@@ -482,7 +482,7 @@ func TestSendStreamConcurrentWriteWaitsForBlockedWriter(t *testing.T) {
 			got = append(got, frame.Frame.Data...)
 			frame.Frame.PutBack()
 		}
-		if !more {
+		if more == sendStateIdle {
 			break
 		}
 	}
@@ -598,7 +598,7 @@ func TestSendStreamReadFrom(t *testing.T) {
 			got = append(got, frame.Frame.Data...)
 			frame.Frame.PutBack()
 		}
-		if !more {
+		if more == sendStateIdle {
 			break
 		}
 	}
