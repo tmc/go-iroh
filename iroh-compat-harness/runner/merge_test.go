@@ -112,7 +112,7 @@ func TestBadge(t *testing.T) {
 		{"known divergence", []Verdict{Fail, Fail}, Fail, "0/1 scenarios pass; 1 expected difference on 1.2.0 and 1.3.0", "brightgreen"},
 		{"all pass", []Verdict{Pass, Pass}, Pass, "1/1 scenarios pass on 1.2.0 and 1.3.0", "brightgreen"},
 		{"regression", []Verdict{Pass, Fail}, Pass, "1/1 pass on 1.2.0, 0/1 pass on 1.3.0", "red"},
-		{"stale expectation", []Verdict{Fail, Pass}, Fail, "0/1 pass on 1.2.0, 1/1 pass on 1.3.0", "yellow"},
+		{"stale expectation", []Verdict{Fail, Pass}, Fail, "0/1 pass; 1 expected difference on 1.2.0, 1/1 pass on 1.3.0", "yellow"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			merged, err := Merge([]Report{run("1.2.0", "abc", now), run("1.3.0", "abc", now)})
