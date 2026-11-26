@@ -4,7 +4,7 @@ go-iroh is an independent Go implementation of iroh wire v1. This matrix records
 
 Go-client↔Go-relay pairings contain no Rust peer, so they are outside this matrix's scope; that path is covered by the standard test suite.
 
-Generated from commit `3831acca99353f89ea85c98746c39c0fa8e24475` at 2026-10-01T00:25:10Z. A pass requires a recorded Rust process and binary digest; setup errors, unsupported cells, and untested cells never count as passes.
+Generated from commit `42c4919d720974a3a227123f5f308c7cd4343f54` at 2026-11-26T20:35:09Z. A pass requires a recorded Rust process and binary digest; setup errors, unsupported cells, and untested cells never count as passes.
 
 ## How to read this table
 
@@ -25,51 +25,51 @@ Matrix cells reference the **Peers** table below. Each peer entry records the Ru
 
 | Surface | Tier | Upstream train | Status | Detail |
 |---|---|---|---|---|
-| CustomAddr endpoint tickets | experimental | 1.3 (1.3.0) | verified-interop | Measured at released upstream 1.3.0 (0072d7d8), as at 1.2.0: Go accepted 6/6 Rust tickets and Rust accepted 6/6 Go tickets. Upstream moved to go-iroh's length-prefixed byte format; no go-iroh codec change is required. The superseded 1.0.3 enum encoding is kept as a frozen negative fixture in vectors/legacy_custom_addr.json, which go-iroh must keep rejecting. |
-| IPv6 addresses in endpoint tickets | stable | 1.3 (1.3.0) | verified-interop | Measured at released upstream 1.3.0 (0072d7d8): Go decoded 5/5 Rust tickets holding IPv6 addresses and Rust decoded 5/5 Go tickets, re-encoding them to Go's bytes. go-iroh once wrote a flowinfo and a scope id varint after every IPv6 port (endpointticket/ticket.go, since 955f0117); iroh-tickets serializes a SocketAddrV6 through serde as (ip, port) only, and go-iroh now writes and reads that form. |
-| Blob requests for hash sequence children | stable | 1.3 (1.3.0) | verified-interop | Measured at released upstream 1.2.0 (17c0612f) and 1.3.0 (0072d7d8): an iroh-blobs 0.103.0 client verified every blob a Go provider sent for sendme receive's first request, the sequence and every child's last chunk, and for two children in full as a resumed download asks. go-iroh's provider (blobs.ServeBlob) once answered only the root of a hash sequence; it now answers each entry of the request against its child's blob, with the chunk-range proofs below. |
-| Partial-block blob range proofs | stable | 1.3 (1.3.0) | verified-interop | Measured at released upstream 1.2.0 and 1.3.0: Go encodes the same bytes as bao-tree 0.16.1 and decodes bao-tree's encoding for all 52 corpus ranges, including two spans in one block, the chunk at infinity, and a start past the end, which is iroh-blobs' size-proof request. go-iroh once proved whole 16 KiB chunk groups (for chunks 5..7 of a 100000-byte blob, 16584 bytes where bao-tree writes 2568); blobs.EncodeBlobChunks and DecodeBlobChunks now take bao-tree chunk ranges and descend inside a group as bao-tree does, and the provider serves through them. The byte-offset EncodeBlobRange keeps the whole-group form and is not an iroh-blobs wire format. |
-| Non-canonical varints | stable | 1.3 (1.3.0) | observed-divergence | go-iroh is strictly stricter: it rejects padded varint encodings that postcard 1.1.3 accepts. No traffic produced by a conforming postcard serializer is affected, since both upstream's serializer and go-iroh's emit only canonical forms. Content relayed verbatim through gossip carries varints produced by the originating endpoint rather than the forwarding peer (gossip/discovery.go:269, docs/heads.go:77), so a non-conforming originator's own message is dropped by go-iroh while upstream accepts it, affecting only that originator. |
+| CustomAddr endpoint tickets | experimental | 1.5 (1.5.0) | verified-interop | Measured at released upstream 1.4.2 (c1ab2824) and 1.5.0 (fefd9168), as at 1.2.0 and 1.3.0: Go accepted 6/6 Rust tickets and Rust accepted 6/6 Go tickets. Upstream moved to go-iroh's length-prefixed byte format; no go-iroh codec change is required. The superseded 1.0.3 enum encoding is kept as a frozen negative fixture in vectors/legacy_custom_addr.json, which go-iroh must keep rejecting. |
+| IPv6 addresses in endpoint tickets | stable | 1.5 (1.5.0) | verified-interop | Measured at released upstream 1.4.2 (c1ab2824) and 1.5.0 (fefd9168): Go decoded 5/5 Rust tickets holding IPv6 addresses and Rust decoded 5/5 Go tickets, re-encoding them to Go's bytes. go-iroh once wrote a flowinfo and a scope id varint after every IPv6 port (endpointticket/ticket.go, since 955f0117); iroh-tickets serializes a SocketAddrV6 through serde as (ip, port) only, and go-iroh now writes and reads that form. |
+| Blob requests for hash sequence children | stable | 1.5 (1.5.0) | verified-interop | Measured at released upstream 1.4.2 (c1ab2824) and 1.5.0 (fefd9168): an iroh-blobs 0.104.1 client verified every blob a Go provider sent for sendme receive's first request, the sequence and every child's last chunk, and for two children in full as a resumed download asks. go-iroh's provider (blobs.ServeBlob) once answered only the root of a hash sequence; it now answers each entry of the request against its child's blob, with the chunk-range proofs below. |
+| Partial-block blob range proofs | stable | 1.5 (1.5.0) | verified-interop | Measured at released upstream 1.4.2 and 1.5.0: Go encodes the same bytes as bao-tree 0.17.0 and decodes bao-tree's encoding for all 52 corpus ranges, including two spans in one block, the chunk at infinity, and a start past the end, which is iroh-blobs' size-proof request. go-iroh once proved whole 16 KiB chunk groups (for chunks 5..7 of a 100000-byte blob, 16584 bytes where bao-tree writes 2568); blobs.EncodeBlobChunks and DecodeBlobChunks now take bao-tree chunk ranges and descend inside a group as bao-tree does, and the provider serves through them. The byte-offset EncodeBlobRange keeps the whole-group form and is not an iroh-blobs wire format. |
+| Non-canonical varints | stable | 1.5 (1.5.0) | observed-divergence | go-iroh is strictly stricter: it rejects padded varint encodings that postcard 1.1.3 accepts. No traffic produced by a conforming postcard serializer is affected, since both upstream's serializer and go-iroh's emit only canonical forms. Content relayed verbatim through gossip carries varints produced by the originating endpoint rather than the forwarding peer (gossip/discovery.go:269, docs/heads.go:77), so a non-conforming originator's own message is dropped by go-iroh while upstream accepts it, affecting only that originator. |
 
 ## Compatibility matrix
 
-| Scenario | Tier | Rust counterpart | 1.2 (1.2.0) | 1.3 (1.3.0) |
-|---|---|---|:---:|:---:|
-| blobs/rust-get-per-child | stable | Rust test driver | pass [1] | pass [2] |
-| blobs/rust-get-sendme | stable | Rust test driver | pass [1] | pass [2] |
-| discovery/go-publish-rust-dns | stable | upstream CLI | pass [3] | pass [4] |
-| discovery/qad-report | stable | upstream CLI | pass [5] | pass [6] |
-| discovery/relay-urls | stable | upstream CLI | pass [7] | pass [8] |
-| discovery/rust-publish-go-dns | stable | Rust test driver | pass [1] | pass [2] |
-| handshake/alpn-mismatch | stable | upstream CLI | pass [5] | pass [6] |
-| handshake/close-semantics | stable | Rust test driver | pass [1] | pass [2] |
-| handshake/datagrams | stable | Rust test driver | pass [1] | pass [2] |
-| handshake/go-client-rust-server | stable | upstream CLI | pass [5] | pass [6] |
-| handshake/pq-only | stable | Rust test driver | pass [1] | pass [2] |
-| handshake/prefer-pq | stable | Rust test driver | pass [1] | pass [2] |
-| handshake/remote-info | stable | Rust test driver | pass [1] | pass [2] |
-| handshake/rust-client-go-server | stable | upstream CLI | pass [5] | pass [6] |
-| handshake/wrong-endpoint-id | stable | upstream CLI | pass [5] | pass [6] |
-| handshake/zero-rtt | stable | Rust test driver | pass [1] | pass [2] |
-| relay/go-client-rust-relay | stable | upstream CLI | pass [7] | pass [8] |
-| relay/idle-timeout | stable | upstream CLI | pass [7] | pass [8] |
-| relay/ping-pong | stable | upstream CLI | pass [7] | pass [8] |
-| relay/rust-client-go-relay | stable | Rust test driver | pass [1] | pass [2] |
-| relay/rust-client-rust-relay | stable | Rust test driver | pass [1] | pass [2] |
-| relay/websocket-upgrade | stable | upstream CLI | pass [7] | pass [8] |
-| vectors/bao-chunk-ranges | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/bao-range-proofs | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/custom-addr-ticket-go-to-rust | experimental | Rust test driver | pass [1] | pass [2] |
-| vectors/custom-addr-ticket-rust-to-go | experimental | Rust test driver | pass [1] | pass [2] |
-| vectors/endpoint-ticket-roundtrip | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/gossip-frame | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/ip-ticket-go-to-rust | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/ip-ticket-rust-to-go | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/keys-z32-sign | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/pkarr-txt | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/postcard-8bit | stable | Rust test driver | pass [1] | pass [2] |
-| vectors/postcard-varint-strictness | stable | Rust test driver | fail (expected) [1] | fail (expected) [2] |
-| vectors/postcard-varints | stable | Rust test driver | pass [1] | pass [2] |
+| Scenario | Tier | Rust counterpart | 1.2 (1.2.0) | 1.3 (1.3.0) | 1.4 (1.4.2) | 1.5 (1.5.0) |
+|---|---|---|:---:|:---:|:---:|:---:|
+| blobs/rust-get-per-child | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| blobs/rust-get-sendme | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| discovery/go-publish-rust-dns | stable | upstream CLI | pass [5] | pass [6] | pass [7] | pass [8] |
+| discovery/qad-report | stable | upstream CLI | pass [9] | pass [10] | pass [11] | pass [12] |
+| discovery/relay-urls | stable | upstream CLI | pass [13] | pass [14] | pass [15] | pass [16] |
+| discovery/rust-publish-go-dns | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| handshake/alpn-mismatch | stable | upstream CLI | pass [9] | pass [10] | pass [11] | pass [12] |
+| handshake/close-semantics | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| handshake/datagrams | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| handshake/go-client-rust-server | stable | upstream CLI | pass [9] | pass [10] | pass [11] | pass [12] |
+| handshake/pq-only | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| handshake/prefer-pq | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| handshake/remote-info | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| handshake/rust-client-go-server | stable | upstream CLI | pass [9] | pass [10] | pass [11] | pass [12] |
+| handshake/wrong-endpoint-id | stable | upstream CLI | pass [9] | pass [10] | pass [11] | pass [12] |
+| handshake/zero-rtt | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| relay/go-client-rust-relay | stable | upstream CLI | pass [13] | pass [14] | pass [15] | pass [16] |
+| relay/idle-timeout | stable | upstream CLI | pass [13] | pass [14] | pass [15] | pass [16] |
+| relay/ping-pong | stable | upstream CLI | pass [13] | pass [14] | pass [15] | pass [16] |
+| relay/rust-client-go-relay | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| relay/rust-client-rust-relay | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| relay/websocket-upgrade | stable | upstream CLI | pass [13] | pass [14] | pass [15] | pass [16] |
+| vectors/bao-chunk-ranges | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/bao-range-proofs | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/custom-addr-ticket-go-to-rust | experimental | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/custom-addr-ticket-rust-to-go | experimental | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/endpoint-ticket-roundtrip | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/gossip-frame | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/ip-ticket-go-to-rust | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/ip-ticket-rust-to-go | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/keys-z32-sign | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/pkarr-txt | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/postcard-8bit | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
+| vectors/postcard-varint-strictness | stable | Rust test driver | fail (expected) [1] | fail (expected) [2] | fail (expected) [3] | fail (expected) [4] |
+| vectors/postcard-varints | stable | Rust test driver | pass [1] | pass [2] | pass [3] | pass [4] |
 
 Every scenario is measured against every released pin.
 
@@ -77,21 +77,31 @@ Every scenario is measured against every released pin.
 
 | Ref | Rust peer | Pin | SHA-256 digest |
 |---:|---|---|---|
-| [1] | rust-driver | 1.2 (1.2.0) | `199200316bbe95f310fcd51e7043367f636e8627228067e5c471151e741d4511` |
-| [2] | rust-driver | 1.3 (1.3.0) | `7c4450f18bff205d0915263bc1cf59c0b83ad4fc23f2d06a1595b4a2ce9cba08` |
-| [3] | iroh-dns-server | 1.2 (1.2.0) | `d556534dbecad8f97d5ed701685341aedb02986a45a3f9b150ec70bad828a4c0` |
-| [4] | iroh-dns-server | 1.3 (1.3.0) | `48400faf690331c103ab98cf1c12c56427b027bf8aaa0cab3af559f116d4ba53` |
-| [5] | iroh-doctor (*) | 1.2 (1.2.0) | `abbdf2fd285c04dcfd3672e81e2465348d290efa1d3a7df48ada06cdfb701374` |
-| [6] | iroh-doctor (*) | 1.3 (1.3.0) | `fa07ea5558a0912ed809e953db5d06d847358727064e1338cfd95588a2bb34b6` |
-| [7] | iroh-relay | 1.2 (1.2.0) | `d30f708f9a0ba738f9828f096c87642351a5f47ff925646cf3ad48eedd67d5d6` |
-| [8] | iroh-relay | 1.3 (1.3.0) | `5f54bdea38a948c1fb1f17e244eaddc89dc879ae5180f05317ecdb633b063841` |
+| [1] | rust-driver | 1.2 (1.2.0) | `bba301d6037f1b2e9105f3cf5a0d6c457a1a7ab2c20e0adea98a9537781520d1` |
+| [2] | rust-driver | 1.3 (1.3.0) | `ed2c0c185c806089afc3c746cc3458b0aa2110a8f0bd14b69a028cb54f41ae1b` |
+| [3] | rust-driver | 1.4 (1.4.2) | `a35114b503fcd4b59a900a59872c93227fbe8968d7ebabb1bf703686901448db` |
+| [4] | rust-driver | 1.5 (1.5.0) | `09f75132bbfe487877af3012e32342cf7ca1c0acd15991c9595612e2cd2e06b2` |
+| [5] | iroh-dns-server | 1.2 (1.2.0) | `28c5e16150f3fb8ded5431ab022e92631b1c42f6e702bc1c1db649f24eac6ee5` |
+| [6] | iroh-dns-server | 1.3 (1.3.0) | `4bd648c0af4e64b0122a45baa6509fff763cba8e22b8d1b6ba3b47d9a63c5d49` |
+| [7] | iroh-dns-server | 1.4 (1.4.2) | `0638df48701ce26825952a0ce434293bff42326bef871ba045dedc36379c6229` |
+| [8] | iroh-dns-server | 1.5 (1.5.0) | `65ec0af95b179fa2c5d68d637ed173477f222a4a650cc58ff0e4b0693d7c9cb4` |
+| [9] | iroh-doctor (*) | 1.2 (1.2.0) | `b2dbd6d6c1cea50c4f887215cf2223cb1f3e2f11f98be60e584b7faf4e708ae4` |
+| [10] | iroh-doctor (*) | 1.3 (1.3.0) | `cdf0cce41c0ace2b9bc9e0b7c5d0a93da9c4430b8e738d93aebcca12868033d0` |
+| [11] | iroh-doctor (*) | 1.4 (1.4.2) | `4a0d7dc4d2f59b44b06afc815b898b82b273eefbf5e54ab374e07ec164e87712` |
+| [12] | iroh-doctor (*) | 1.5 (1.5.0) | `40b84e78caedacfb399d0d512f1981fbe063d38c873bccb2fcb0a3538fbdbdc6` |
+| [13] | iroh-relay | 1.2 (1.2.0) | `37110b49058f1cab2ccdf04c9720f5b8b3e140f10c05e9279f0768d5f7ffb127` |
+| [14] | iroh-relay | 1.3 (1.3.0) | `39da821d043fa99e85c5d1198cdbf208efeeb73e80e7b750473a77b1c68f3747` |
+| [15] | iroh-relay | 1.4 (1.4.2) | `dc0b643144d1c693686ecc19acecdf25c471e1294008f0172ddaff90989d76ae` |
+| [16] | iroh-relay | 1.5 (1.5.0) | `642f9eaa9092b066913c9bd986d7721d5a0eee941667114022e6a4e68f0502bd` |
 
-* **iroh-doctor provenance.** Upstream has shipped no iroh-doctor release for the 1.2 or 1.3 train. The pin is iroh-doctor 0.101.0, whose manifest declares `iroh = "1.0.0"` and is caret-resolved up to 1.3.0, so upstream does not itself publish or test this pairing; the matrix measures it, upstream does not endorse it. Building it against 1.3.0 also needs one additive line in iroh-doctor's own manifest, declaring tokio's `rt-multi-thread` feature that its `Builder::new_multi_thread` call already requires and that the iroh 1.0.x dependency graph supplied incidentally through `hickory-net`, which iroh 1.2.0 and later no longer use. No iroh source is modified, and the feature is already present in the committed lock, so the `--locked` build resolves identically; the build gate in `images/iroh-1.3.0/Dockerfile` fails if that edit is not exactly one line.
+* **iroh-doctor provenance.** Upstream has shipped no iroh-doctor release for the 1.2–1.5 trains. The pin is iroh-doctor 0.101.0, whose manifest declares `iroh = "1.0.0"` and is caret-resolved up to 1.5.0, so upstream does not itself publish or test this pairing; the matrix measures it, upstream does not endorse it. Building it against 1.2.0 and later also needs one additive line in iroh-doctor's own manifest, declaring tokio's `rt-multi-thread` feature that its `Builder::new_multi_thread` call already requires and that the iroh 1.0.x dependency graph supplied incidentally through `hickory-net`, which iroh 1.2.0 and later no longer use. No iroh source is modified, and the feature is already present in the committed lock, so the `--locked` build resolves identically; the build gate in `images/iroh-*/Dockerfile` fails if that edit is not exactly one line.
 
 ### Observed incompatibility evidence
 
 - `vectors/postcard-varint-strictness` at 1.2 (1.2.0): Go and Rust agreed on 3/7 canonical-varint cases: overlong-300: Go accepted=false, Rust accepted=true.
 - `vectors/postcard-varint-strictness` at 1.3 (1.3.0): Go and Rust agreed on 3/7 canonical-varint cases: overlong-300: Go accepted=false, Rust accepted=true.
+- `vectors/postcard-varint-strictness` at 1.4 (1.4.2): Go and Rust agreed on 3/7 canonical-varint cases: overlong-300: Go accepted=false, Rust accepted=true.
+- `vectors/postcard-varint-strictness` at 1.5 (1.5.0): Go and Rust agreed on 3/7 canonical-varint cases: overlong-300: Go accepted=false, Rust accepted=true.
 
 ## Scenario definitions
 
@@ -150,7 +160,18 @@ See the [harness README](https://github.com/tmc/go-iroh/blob/compat-harness/iroh
 This hand-written appendix records API and wire changes the matrix cannot
 show. Report generation preserves it.
 
-### v0.3.1 (unreleased)
+### v0.5.0
+
+- Release numbering follows `v0.n.x` to track upstream Rust `iroh 1.n.*`
+  (`v0.4.x` was skipped as `go-iroh` moved directly from `1.3` to `1.5` parity;
+  verified against `1.2.0`, `1.3.0`, `1.4.2`, and `1.5.0`).
+- Upgraded vendored QUIC engine `internal/qng` (`github.com/quic-go/quic-go`)
+  from `v0.62.0` to `v0.66.0` (including `qlog` draft-14, `internal/udp/`
+  transport refactor, Reno congestion controller, 0-RTT version-bound tickets
+  and tokens, and 32-bit `CONNECTION_CLOSE` safety for `js/wasm`) while
+  preserving RFC 7250 TLS, multipath, QAD, QNT, and send-path optimizations.
+- `gossipproto` accepts the trailing `StreamHeader` flags byte introduced by
+  `iroh-gossip 0.103.0`.
 
 - `blobs` rejects non-canonical `RangeSpec` and `RangeSpecSeq` encodings on
   decode (non-increasing or overflowing boundaries/offsets and repeated specs),
