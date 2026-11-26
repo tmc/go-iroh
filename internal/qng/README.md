@@ -126,4 +126,4 @@ path-migration test is not enough evidence for iroh/noq parity.
 
 ## Forked version
 
-quic-go **v0.62.0**.
+quic-go **v0.63.0**.

@@ -1,5 +1,5 @@
 This package contains code copied from quic-go
-(https://github.com/quic-go/quic-go) at v0.62.0, used under the MIT
+(https://github.com/quic-go/quic-go) at v0.63.0, used under the MIT
 license reproduced in LICENSE.
 
 	Copyright (c) 2016 the quic-go authors & Google, Inc.
