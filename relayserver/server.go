@@ -253,7 +253,14 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 	}
 	conn.SetReadLimit(maxFrameSize)
 	ctx := r.Context()
-	defer conn.Close(websocket.StatusNormalClosure, "")
+	established := false
+	defer func() {
+		if established {
+			_ = conn.Close(websocket.StatusNormalClosure, "")
+		} else {
+			_ = conn.CloseNow()
+		}
+	}()
 
 	version, ok := relayproto.ParseProtocolVersion(conn.Subprotocol())
 	if !ok {
@@ -302,6 +309,7 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	established = true
 
 	writerCtx, writerCancel := context.WithCancel(ctx)
 	defer writerCancel()

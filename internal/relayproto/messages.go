@@ -283,12 +283,12 @@ func ParseClientToRelayMsgNoCopy(content []byte) (ClientToRelayMsg, error) {
 }
 
 func parseClientToRelayMsg(content []byte, noCopy bool) (ClientToRelayMsg, error) {
+	if len(content) > MaxPacketSize {
+		return ClientToRelayMsg{}, fmt.Errorf("%w: %d bytes", ErrFrameTooLarge, len(content))
+	}
 	ft, rest, err := readFrameType(content)
 	if err != nil {
 		return ClientToRelayMsg{}, err
-	}
-	if len(rest) > MaxPacketSize {
-		return ClientToRelayMsg{}, fmt.Errorf("%w: %d bytes", ErrFrameTooLarge, len(rest))
 	}
 	switch ft {
 	case FrameClientToRelayDatagram, FrameClientToRelayDatagramBat:

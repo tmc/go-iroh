@@ -274,3 +274,12 @@ func ping42() [8]byte {
 	}
 	return p
 }
+
+func TestParseClientToRelayFullFrameLengthLimit(t *testing.T) {
+	// Total frame length (including frame-type varint) must not exceed MaxPacketSize.
+	buf := make([]byte, MaxPacketSize+1)
+	buf[0] = byte(FrameClientToRelayDatagram)
+	if _, err := ParseClientToRelayMsg(buf); err == nil {
+		t.Fatal("ParseClientToRelayMsg accepted frame exceeding MaxPacketSize")
+	}
+}

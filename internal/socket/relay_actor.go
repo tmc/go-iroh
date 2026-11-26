@@ -480,10 +480,12 @@ type activeRelay struct {
 	parent *RelayActor
 	url    netaddr.RelayURL
 
-	sendCh   chan RelaySendItem
-	batchBuf []byte
-	stopCh   chan struct{}
-	stopOnce sync.Once
+	sendCh     chan RelaySendItem
+	batchBuf   []byte
+	stopCh     chan struct{}
+	stopCtx    context.Context
+	stopCancel context.CancelFunc
+	stopOnce   sync.Once
 
 	mu      sync.Mutex
 	isHome  bool
@@ -495,13 +497,16 @@ type activeRelay struct {
 // newActiveRelay returns an active relay for url. home marks it the home relay
 // (which never idles out).
 func newActiveRelay(parent *RelayActor, url netaddr.RelayURL, home bool) *activeRelay {
+	stopCtx, stopCancel := context.WithCancel(context.Background())
 	return &activeRelay{
-		parent: parent,
-		url:    url,
-		sendCh: make(chan RelaySendItem, perRelaySendDepth),
-		stopCh: make(chan struct{}),
-		isHome: home,
-		routes: make(map[key.EndpointID]struct{}),
+		parent:     parent,
+		url:        url,
+		sendCh:     make(chan RelaySendItem, perRelaySendDepth),
+		stopCh:     make(chan struct{}),
+		stopCtx:    stopCtx,
+		stopCancel: stopCancel,
+		isHome:     home,
+		routes:     make(map[key.EndpointID]struct{}),
 	}
 }
 
@@ -516,7 +521,10 @@ func (r *activeRelay) enqueue(item RelaySendItem) {
 
 // stop signals the active relay to exit.
 func (r *activeRelay) stop() {
-	r.stopOnce.Do(func() { close(r.stopCh) })
+	r.stopOnce.Do(func() {
+		r.stopCancel()
+		close(r.stopCh)
+	})
 }
 
 // setHome marks (or unmarks) this as the home relay.
@@ -565,6 +573,7 @@ func (r *activeRelay) dropRoute(eid key.EndpointID) {
 // matching the Rust run loop (actor.rs:325).
 func (r *activeRelay) run() {
 	delay := backoffMinDelay
+	idleSince := time.Now()
 	for {
 		select {
 		case <-r.stopCh:
@@ -580,17 +589,53 @@ func (r *activeRelay) run() {
 		if established {
 			// Reset backoff and reconnect immediately.
 			delay = backoffMinDelay
+			idleSince = time.Now()
 			continue
 		}
-		// Dial or pre-pong failure: back off.
-		select {
-		case <-r.stopCh:
+		// Dial or pre-pong failure: back off while still draining stale
+		// datagrams and enforcing the non-home idle timeout.
+		if !r.waitBackoff(jitter(delay), idleSince) {
 			return
-		case <-time.After(jitter(delay)):
 		}
 		delay *= 2
 		if delay > backoffMaxDelay {
 			delay = backoffMaxDelay
+		}
+	}
+}
+
+func (r *activeRelay) waitBackoff(wait time.Duration, idleSince time.Time) bool {
+	if !r.home() && time.Since(idleSince) >= relayInactiveCleanupTime {
+		return false
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	flush := time.NewTicker(undeliverableDatagramTimeout)
+	defer flush.Stop()
+	var idleC <-chan time.Time
+	var idleTimer *time.Timer
+	if !r.home() {
+		rem := relayInactiveCleanupTime - time.Since(idleSince)
+		if rem <= 0 {
+			return false
+		}
+		idleTimer = time.NewTimer(rem)
+		defer idleTimer.Stop()
+		idleC = idleTimer.C
+	}
+	for {
+		select {
+		case <-r.stopCh:
+			return false
+		case <-timer.C:
+			return true
+		case <-flush.C:
+			drain(r.sendCh)
+		case <-idleC:
+			if !r.home() {
+				return false
+			}
+			idleC = nil
 		}
 	}
 }
@@ -618,7 +663,7 @@ func (r *activeRelay) runOnce() (established bool, err error) {
 // (client, true, nil) on success, (nil, false, nil) on a clean stop/idle, and
 // (nil, true, err) on a dial failure that should be retried with backoff.
 func (r *activeRelay) dial() (relayClient, bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	ctx, cancel := context.WithTimeout(r.stopCtx, connectTimeout)
 	defer cancel()
 
 	type result struct {
@@ -787,7 +832,7 @@ func (r *activeRelay) runConnected(client relayClient) (bool, error) {
 // send writes one frame to the relay, bounding the call by the per-send timeout
 // (PING_INTERVAL, matching the Rust send timeout, actor.rs:744).
 func (r *activeRelay) send(client relayClient, msg relayproto.ClientToRelayMsg) error {
-	ctx, cancel := context.WithTimeout(context.Background(), pingInterval)
+	ctx, cancel := context.WithTimeout(r.stopCtx, pingInterval)
 	defer cancel()
 	return client.Send(ctx, msg)
 }
@@ -825,7 +870,7 @@ func pingTimeoutDuration(st *connectedState) time.Duration {
 // sendDatagrams merges runs of equally sized datagrams to one endpoint into
 // DatagramBatch frames, like the GSO batches the Rust client sends.
 func (r *activeRelay) sendDatagrams(client relayClient, items []RelaySendItem) error {
-	ctx, cancel := context.WithTimeout(context.Background(), pingInterval)
+	ctx, cancel := context.WithTimeout(r.stopCtx, pingInterval)
 	defer cancel()
 	return coalesceDatagrams(items, maxRelayBatch, &r.batchBuf,
 		func(m relayproto.ClientToRelayMsg) error { return client.Send(ctx, m) })
