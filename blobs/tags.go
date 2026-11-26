@@ -208,9 +208,10 @@ func (s *FSStore) GCWithEvents(ctx context.Context, onEvent func(GCEvent)) (GCRe
 		return GCResult{}, ErrStoreClosed
 	}
 	live := make(map[Hash]struct{})
+	expandedSeqs := make(map[Hash]struct{})
 	roots := s.gcRoots()
 	for _, value := range roots {
-		s.markLive(live, value)
+		s.markLive(live, expandedSeqs, value)
 	}
 	emitGCEvent(onEvent, GCEvent{Kind: GCEventMark, Live: len(live)})
 
@@ -233,14 +234,12 @@ func (s *FSStore) GCWithEvents(ctx context.Context, onEvent func(GCEvent)) (GCRe
 		if _, ok := live[hash]; ok {
 			continue
 		}
-		if !s.gcClaimDelete(hash) {
+		removed, err := s.gcDeleteIfUnprotected(hash, entry.Name())
+		if err != nil {
+			return GCResult{}, err
+		}
+		if !removed {
 			continue
-		}
-		if err := os.Remove(filepath.Join(s.dataDir, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return GCResult{}, fmt.Errorf("blobs: remove data: %w", err)
-		}
-		if err := os.Remove(filepath.Join(s.baoDir, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return GCResult{}, fmt.Errorf("blobs: remove outboard: %w", err)
 		}
 		deleted++
 		emitGCEvent(onEvent, GCEvent{Kind: GCEventDelete, Hash: hash, Deleted: deleted})
@@ -301,27 +300,51 @@ func (s *FSStore) gcRoots() []HashAndFormat {
 	return roots
 }
 
-func (s *FSStore) gcClaimDelete(hash Hash) bool {
+func (s *FSStore) gcDeleteIfUnprotected(hash Hash, name string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return false
+	if s.closed || s.protectsHashLocked(hash) {
+		return false, nil
 	}
-	return !s.protectsHashLocked(hash)
+	if err := os.Remove(filepath.Join(s.dataDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("blobs: remove data: %w", err)
+	}
+	if err := os.Remove(filepath.Join(s.baoDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("blobs: remove outboard: %w", err)
+	}
+	return true, nil
 }
 
 func (s *FSStore) protectsHashLocked(hash Hash) bool {
 	for _, value := range s.tags {
-		if value.Hash == hash {
+		if s.tagProtectsHash(value, hash) {
 			return true
 		}
 	}
 	for _, value := range s.temp {
-		if value.Hash == hash {
+		if s.tagProtectsHash(value, hash) {
 			return true
 		}
 	}
 	return false
+}
+
+func (s *FSStore) tagProtectsHash(value HashAndFormat, target Hash) bool {
+	if value.Hash == target {
+		return true
+	}
+	if value.Format.IsRaw() || value.Hash == EmptyHash {
+		return false
+	}
+	data, err := os.ReadFile(s.dataPath(value.Hash))
+	if err != nil {
+		return false
+	}
+	seq, err := ParseHashSequence(data)
+	if err != nil {
+		return false
+	}
+	return slices.Contains(seq.Hashes(), target)
 }
 
 func emitGCEvent(onEvent func(GCEvent), ev GCEvent) {
@@ -330,17 +353,18 @@ func emitGCEvent(onEvent func(GCEvent), ev GCEvent) {
 	}
 }
 
-func (s *FSStore) markLive(live map[Hash]struct{}, value HashAndFormat) {
+func (s *FSStore) markLive(live, expandedSeqs map[Hash]struct{}, value HashAndFormat) {
 	if value.Hash == EmptyHash {
-		return
-	}
-	if _, ok := live[value.Hash]; ok {
 		return
 	}
 	live[value.Hash] = struct{}{}
 	if value.Format.IsRaw() {
 		return
 	}
+	if _, ok := expandedSeqs[value.Hash]; ok {
+		return
+	}
+	expandedSeqs[value.Hash] = struct{}{}
 	data, err := os.ReadFile(s.dataPath(value.Hash))
 	if err != nil {
 		return

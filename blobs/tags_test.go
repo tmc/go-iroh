@@ -208,3 +208,95 @@ func TestFSStoreGCMarksHashSeqChildren(t *testing.T) {
 		t.Fatal("untagged blob survived GC")
 	}
 }
+
+func TestFSStoreGCHashSeqAndRawSameHash(t *testing.T) {
+	store, err := NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	child, err := store.Add([]byte("child-of-dual-tagged-root"))
+	if err != nil {
+		t.Fatalf("Add child: %v", err)
+	}
+	seq := NewHashSequence([]Hash{child})
+	root, err := store.Add(seq.Bytes())
+	if err != nil {
+		t.Fatalf("Add hash seq: %v", err)
+	}
+	// Tag the same root as both Raw and HashSeq; regardless of map iteration
+	// order in gcRoots, HashSeq children must stay live (upstream iroh-blobs#317).
+	for i := range 8 {
+		name := "raw-" + string(rune('a'+i))
+		if err := store.SetTag(name, RawHash(root)); err != nil {
+			t.Fatalf("SetTag %s: %v", name, err)
+		}
+	}
+	if err := store.SetTag("seq", HashSeqHash(root)); err != nil {
+		t.Fatalf("SetTag seq: %v", err)
+	}
+	for range 16 {
+		if _, err := store.GC(context.Background()); err != nil {
+			t.Fatalf("GC: %v", err)
+		}
+		if _, err := ReadBlob(context.Background(), store, child); err != nil {
+			t.Fatal("hash seq child was swept when root also had Raw tag")
+		}
+	}
+}
+
+func TestFSStoreGCRechecksLateHashSeqTagChildren(t *testing.T) {
+	store, err := NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	child, err := store.Add([]byte("late-seq-child"))
+	if err != nil {
+		t.Fatalf("Add child: %v", err)
+	}
+	seq := NewHashSequence([]Hash{child})
+	root, err := store.Add(seq.Bytes())
+	if err != nil {
+		t.Fatalf("Add hash seq: %v", err)
+	}
+	// Tag the HashSeq only after the mark phase has already finished; both
+	// root and child must survive the sweep (upstream iroh-blobs#240/#248).
+	result, err := store.GCWithEvents(context.Background(), func(ev GCEvent) {
+		if ev.Kind != GCEventMark {
+			return
+		}
+		if err := store.SetTag("late-seq", HashSeqHash(root)); err != nil {
+			t.Fatalf("SetTag late-seq: %v", err)
+		}
+	})
+	if err != nil {
+		t.Fatalf("GCWithEvents: %v", err)
+	}
+	if result.Deleted != 0 {
+		t.Fatalf("GCWithEvents deleted %d blobs, want 0", result.Deleted)
+	}
+	if _, err := ReadBlob(context.Background(), store, root); err != nil {
+		t.Fatal("late-tagged hash seq root was swept")
+	}
+	if _, err := ReadBlob(context.Background(), store, child); err != nil {
+		t.Fatal("late-tagged hash seq child was swept")
+	}
+}
+
+func TestParseHashInvalidNeverPanics(t *testing.T) {
+	cases := []string{
+		"",
+		"0",
+		"zz",
+		"not-a-valid-hash",
+		"0123456789abcdef",
+		string(make([]byte, 64)),
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!",
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA====",
+		"日本語テスト",
+	}
+	for _, tc := range cases {
+		if _, err := ParseHash(tc); err == nil {
+			t.Errorf("ParseHash(%q) unexpectedly succeeded", tc)
+		}
+	}
+}
