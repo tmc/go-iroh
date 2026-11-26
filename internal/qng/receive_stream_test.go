@@ -20,7 +20,8 @@ func (receiveStreamTestSender) updateStreamPriority(protocol.StreamID)          
 func (receiveStreamTestSender) recordStreamPriorityUpdated(protocol.StreamID, int8, bool) {}
 func (receiveStreamTestSender) onHasStreamControlFrame(protocol.StreamID, streamControlFrameGetter) {
 }
-func (receiveStreamTestSender) onStreamCompleted(protocol.StreamID) {}
+func (receiveStreamTestSender) onStreamCompleted(protocol.StreamID)      {}
+func (receiveStreamTestSender) onStreamCreditReleased(protocol.StreamID) {}
 
 // testStreamFC is a stream flow controller with windows wide enough that
 // flow control never blocks the tests that use it.
@@ -166,6 +167,7 @@ func (receiveStreamCompletionSender) updateStreamPriority(protocol.StreamID)    
 func (receiveStreamCompletionSender) recordStreamPriorityUpdated(protocol.StreamID, int8, bool) {}
 func (receiveStreamCompletionSender) onHasStreamControlFrame(protocol.StreamID, streamControlFrameGetter) {
 }
+func (s receiveStreamCompletionSender) onStreamCreditReleased(protocol.StreamID) {}
 func (s receiveStreamCompletionSender) onStreamCompleted(id protocol.StreamID) {
 	select {
 	case s.completed <- id:

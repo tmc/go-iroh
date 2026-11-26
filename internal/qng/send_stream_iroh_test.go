@@ -20,7 +20,8 @@ func (sendStreamIrohSender) updateStreamPriority(protocol.StreamID)             
 func (sendStreamIrohSender) recordStreamPriorityUpdated(protocol.StreamID, int8, bool) {}
 func (sendStreamIrohSender) onHasStreamControlFrame(protocol.StreamID, streamControlFrameGetter) {
 }
-func (sendStreamIrohSender) onStreamCompleted(protocol.StreamID) {}
+func (sendStreamIrohSender) onStreamCompleted(protocol.StreamID)      {}
+func (sendStreamIrohSender) onStreamCreditReleased(protocol.StreamID) {}
 
 // drainSendStream pops frames in the background until the stream sends FIN,
 // then reports the bytes the stream put on the wire. Write blocks until the

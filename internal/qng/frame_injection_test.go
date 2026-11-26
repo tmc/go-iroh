@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/netip"
 	"testing"
-	"time"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
@@ -19,11 +18,6 @@ func TestFrameInjection(t *testing.T) {
 	now := monotime.Now()
 	srcAddr := netip.MustParseAddrPort("127.0.0.1:4433")
 
-	callbacks := connRunnerCallbacks{
-		AddConnectionID:    func(protocol.ConnectionID) {},
-		RemoveConnectionID: func(protocol.ConnectionID) {},
-		ReplaceWithClosed:  func([]protocol.ConnectionID, []byte, time.Duration) {},
-	}
 	resetter := newStatelessResetter(nil)
 
 	newTestConn := func(localMaxPathID *uint32, peerMaxPathID *protocol.PathID) *Conn {
@@ -34,10 +28,10 @@ func TestFrameInjection(t *testing.T) {
 			config:          cfg,
 			perspective:     protocol.PerspectiveClient,
 			logger:          utils.DefaultLogger,
-			connIDGenerator: newConnIDGenerator(nil, protocol.ConnectionID{}, nil, resetter, callbacks, func(wire.Frame) {}, dummyConnIDGenerator{}),
+			connIDGenerator: newConnIDGenerator(&stubConnRunner{}, protocol.ConnectionID{}, protocol.ConnectionID{}, resetter, nil, func(wire.Frame) {}, dummyConnIDGenerator{}),
 			connIDManager:   newConnIDManager(protocol.ConnectionID{}, nil, nil, nil),
 		}
-		c.preSetup()
+		c.preSetup(nil)
 		if peerMaxPathID != nil {
 			c.peerParams.Store(&wire.TransportParameters{
 				InitialMaxPathID: peerMaxPathID,
@@ -184,10 +178,10 @@ func TestFrameInjection(t *testing.T) {
 			config:          cfg,
 			perspective:     protocol.PerspectiveClient,
 			logger:          utils.DefaultLogger,
-			connIDGenerator: newConnIDGenerator(nil, protocol.ConnectionID{}, nil, resetter, callbacks, func(wire.Frame) {}, dummyConnIDGenerator{}),
+			connIDGenerator: newConnIDGenerator(&stubConnRunner{}, protocol.ConnectionID{}, protocol.ConnectionID{}, resetter, nil, func(wire.Frame) {}, dummyConnIDGenerator{}),
 			connIDManager:   newConnIDManager(protocol.ConnectionID{}, nil, nil, nil),
 		}
-		c.preSetup()
+		c.preSetup(nil)
 		c.peerParams.Store(&wire.TransportParameters{
 			AddressDiscoveryRole: wire.AddressDiscoverySendOnly,
 		})

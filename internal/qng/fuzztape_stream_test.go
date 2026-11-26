@@ -114,7 +114,8 @@ func (s streamMachineSender) onHasStreamControlFrame(id protocol.StreamID, str s
 	s.m.framer.AddStreamWithControlFrames(id, str)
 }
 
-func (s streamMachineSender) onStreamCompleted(protocol.StreamID) {}
+func (s streamMachineSender) onStreamCompleted(protocol.StreamID)      {}
+func (s streamMachineSender) onStreamCreditReleased(protocol.StreamID) {}
 
 func newStreamMachine(t *fuzztape.T) *streamMachine {
 	rttStats := utils.NewRTTStats()
@@ -504,17 +505,13 @@ func newPathCIDMachine(t *fuzztape.T) *pathCIDMachine {
 
 	initial := protocol.ParseConnectionID([]byte{0x00, 0x11, 0x22, 0x33})
 	m.g = newConnIDGenerator(
-		stubConnRunner{},
+		&stubConnRunner{onAdd: func(id protocol.ConnectionID) {
+			m.addedCIDs = append(m.addedCIDs, id)
+		}},
 		initial,
-		nil,
+		protocol.ConnectionID{},
 		newStatelessResetter(nil),
-		connRunnerCallbacks{
-			AddConnectionID: func(id protocol.ConnectionID) {
-				m.addedCIDs = append(m.addedCIDs, id)
-			},
-			RemoveConnectionID: func(protocol.ConnectionID) {},
-			ReplaceWithClosed:  func([]protocol.ConnectionID, []byte, time.Duration) {},
-		},
+		nil,
 		func(f wire.Frame) {
 			m.frames = append(m.frames, f)
 		},

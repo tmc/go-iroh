@@ -189,14 +189,15 @@ func newQNTTransportParameterConn(local, peer uint8) *Conn {
 		c.newFlowController,
 		uint64(cfg.MaxIncomingStreams),
 		uint64(cfg.MaxIncomingUniStreams),
+		false,
 		protocol.PerspectiveClient,
 	)
 	c.connIDGenerator = newConnIDGenerator(
-		stubConnRunner{},
+		&stubConnRunner{},
+		protocol.ConnectionID{},
 		protocol.ConnectionID{},
 		nil,
 		nil,
-		connRunnerCallbacks{},
 		func(wire.Frame) {},
 		&protocol.DefaultConnectionIDGenerator{ConnLen: 0},
 	)

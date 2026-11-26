@@ -78,8 +78,7 @@ type updatableAEAD struct {
 	logger  utils.Logger
 	version protocol.Version
 
-	// use a single slice to avoid allocations
-	nonceBuf []byte
+	nonceBuf [aeadNonceLength]byte
 }
 
 var (
@@ -139,7 +138,11 @@ func (a *updatableAEAD) startKeyDropTimer(now monotime.Time) {
 }
 
 func (a *updatableAEAD) getNextTrafficSecret(hash crypto.Hash, ts []byte) []byte {
-	return hkdfExpandLabel(hash, ts, []byte{}, "quic ku", hash.Size())
+	label := "quic ku"
+	if a.version == protocol.Version2 {
+		label = "quicv2 ku"
+	}
+	return hkdfExpandLabel(hash, ts, []byte{}, label, hash.Size())
 }
 
 // SetReadKey sets the read key.
@@ -175,7 +178,9 @@ func (a *updatableAEAD) setAEADParameters(aead cipher.AEAD, suite cipherSuite) {
 	// (path id + packet number); putPathNonce writes the trailing 8 bytes for
 	// PathIDZero and all 12 for a non-zero path. aead.NonceSize() is 8 (the
 	// xorNonceAEAD packet-number size), so this is strictly larger.
-	a.nonceBuf = make([]byte, aeadNonceLength)
+	if aead.NonceSize() > len(a.nonceBuf) {
+		panic("unexpected nonce size")
+	}
 	a.aeadOverhead = aead.Overhead()
 	a.suite = suite
 	switch suite.ID {
@@ -224,7 +229,7 @@ func (a *updatableAEAD) open(dst, src []byte, rcvTime monotime.Time, pid protoco
 			})
 		}
 	}
-	nonce := putPathNonce(a.nonceBuf, pid, pn)
+	nonce := putPathNonce(a.nonceBuf[:], pid, pn)
 	if kp != a.keyPhase.Bit() {
 		if a.keyPhase > 0 && a.firstRcvdWithCurrentKey == protocol.InvalidPacketNumber || pn < a.firstRcvdWithCurrentKey {
 			if a.prevRcvAEAD == nil {
@@ -298,7 +303,7 @@ func (a *updatableAEAD) Seal(dst, src []byte, pid protocol.PathID, pn protocol.P
 	a.numSentWithCurrentKey++
 	// The AEAD we're using here will be the qtls.aeadAESGCM13.
 	// It uses the nonce provided here and XOR it with the IV.
-	return a.sendAEAD.Seal(dst, putPathNonce(a.nonceBuf, pid, pn), src, ad)
+	return a.sendAEAD.Seal(dst, putPathNonce(a.nonceBuf[:], pid, pn), src, ad)
 }
 
 func (a *updatableAEAD) SetLargestAcked(pn protocol.PacketNumber) error {

@@ -496,7 +496,7 @@ func qlogTracer(sink func(context.Context, QLOGConnection) io.WriteCloser) func(
 		if w == nil {
 			return nil
 		}
-		trace := qlogwriter.NewConnectionFileSeq(w, isClient, connID, []string{qlog.EventSchema})
+		trace := qlogwriter.NewConnectionFileSeq(w, isClient, connID)
 		go trace.Run()
 		return trace
 	}

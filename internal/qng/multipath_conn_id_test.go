@@ -18,16 +18,21 @@ import (
 // resolution. Wire layouts are pinned against the authoritative noq-proto
 // reference (internal/qng/n0ext/reference/frame.rs).
 
-// stubConnRunner is a no-op connRunner used only as the map key the
-// connIDGenerator stores; CID add/remove bookkeeping is observed through the
-// connRunnerCallbacks passed separately to newConnIDGenerator.
-type stubConnRunner struct{}
+// stubConnRunner is a test connRunner that optionally observes Add calls.
+type stubConnRunner struct {
+	onAdd func(protocol.ConnectionID)
+}
 
-func (stubConnRunner) Add(protocol.ConnectionID, packetHandler) bool                    { return true }
-func (stubConnRunner) Remove(protocol.ConnectionID)                                     {}
-func (stubConnRunner) ReplaceWithClosed([]protocol.ConnectionID, []byte, time.Duration) {}
-func (stubConnRunner) AddResetToken(protocol.StatelessResetToken, packetHandler)        {}
-func (stubConnRunner) RemoveResetToken(protocol.StatelessResetToken)                    {}
+func (r *stubConnRunner) Add(id protocol.ConnectionID, _ packetHandler) bool {
+	if r.onAdd != nil {
+		r.onAdd(id)
+	}
+	return true
+}
+func (*stubConnRunner) Remove(protocol.ConnectionID)                                     {}
+func (*stubConnRunner) ReplaceWithClosed([]protocol.ConnectionID, []byte, time.Duration) {}
+func (*stubConnRunner) AddResetToken(protocol.StatelessResetToken, packetHandler)        {}
+func (*stubConnRunner) RemoveResetToken(protocol.StatelessResetToken)                    {}
 
 // newTestConnIDGenerator builds a connIDGenerator that records the frames it
 // queues and the CIDs it registers/removes, so tests can inspect the
@@ -38,15 +43,11 @@ func newTestConnIDGenerator(t *testing.T) (g *connIDGenerator, frames *[]wire.Fr
 	var addedIDs []protocol.ConnectionID
 	initial := protocol.ParseConnectionID([]byte{0x00, 0x11, 0x22, 0x33})
 	g = newConnIDGenerator(
-		stubConnRunner{},
+		&stubConnRunner{onAdd: func(id protocol.ConnectionID) { addedIDs = append(addedIDs, id) }},
 		initial,
-		nil, // client: no initialClientDestConnID
+		protocol.ConnectionID{}, // client: no initialClientDestConnID
 		newStatelessResetter(nil),
-		connRunnerCallbacks{
-			AddConnectionID:    func(id protocol.ConnectionID) { addedIDs = append(addedIDs, id) },
-			RemoveConnectionID: func(protocol.ConnectionID) {},
-			ReplaceWithClosed:  func([]protocol.ConnectionID, []byte, time.Duration) {},
-		},
+		nil,
 		func(f wire.Frame) { queued = append(queued, f) },
 		&protocol.DefaultConnectionIDGenerator{ConnLen: 4},
 	)
@@ -188,15 +189,11 @@ func TestHandlePathRetireConnectionIDPathZeroUsesConnIDGenerator(t *testing.T) {
 	c := newMultipathConn(true)
 	var queued []wire.Frame
 	c.connIDGenerator = newConnIDGenerator(
-		stubConnRunner{},
+		&stubConnRunner{},
 		protocol.ParseConnectionID([]byte{0x01, 0x02, 0x03, 0x04}),
-		nil,
+		protocol.ConnectionID{},
 		newStatelessResetter(nil),
-		connRunnerCallbacks{
-			AddConnectionID:    func(protocol.ConnectionID) {},
-			RemoveConnectionID: func(protocol.ConnectionID) {},
-			ReplaceWithClosed:  func([]protocol.ConnectionID, []byte, time.Duration) {},
-		},
+		nil,
 		func(f wire.Frame) { queued = append(queued, f) },
 		&protocol.DefaultConnectionIDGenerator{ConnLen: 4},
 	)

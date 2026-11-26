@@ -32,7 +32,7 @@ func TestVerifySourceAddressRetriesBeforeConnectionConstruction(t *testing.T) {
 		sendConn sendConn,
 		connRunner connRunner,
 		origDestConnID protocol.ConnectionID,
-		retrySrcConnID *protocol.ConnectionID,
+		retrySrcConnID protocol.ConnectionID,
 		clientDestConnID protocol.ConnectionID,
 		destConnID protocol.ConnectionID,
 		srcConnID protocol.ConnectionID,
@@ -50,8 +50,8 @@ func TestVerifySourceAddressRetriesBeforeConnectionConstruction(t *testing.T) {
 		if verifyCalls.Load() == 0 {
 			t.Error("newConnection called before VerifySourceAddress")
 		}
-		if retrySrcConnID == nil {
-			t.Error("newConnection retrySrcConnID = nil, want Retry source connection id")
+		if !retrySrcConnID.Valid() {
+			t.Error("newConnection retrySrcConnID invalid, want Retry source connection id")
 		}
 		if !clientAddrValidated {
 			t.Error("newConnection clientAddrValidated = false, want true after Retry")

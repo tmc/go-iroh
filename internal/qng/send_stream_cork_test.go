@@ -19,6 +19,7 @@ type countingStreamSender struct {
 	ch    chan struct{}
 }
 
+func (c *countingStreamSender) onStreamCreditReleased(protocol.StreamID) {}
 func (c *countingStreamSender) onHasStreamData(protocol.StreamID, *SendStream) {
 	c.mu.Lock()
 	c.wakes++

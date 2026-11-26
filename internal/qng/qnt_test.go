@@ -449,7 +449,7 @@ func TestQNTRoundQueuesReachOutFramesToFramer(t *testing.T) {
 		t.Fatalf("queued REACH_OUT = round %d %v, want round 1 %v", queued[0].Round, got, local)
 	}
 
-	frames, _, _, _, _ := c.framer.Append(nil, nil, 1200, monotime.Now(), protocol.Version1)
+	frames, _ := c.framer.AppendControlFrames(nil, 1200, monotime.Now(), protocol.Version1)
 	if len(frames) != 1 {
 		t.Fatalf("framer returned %d frames, want 1", len(frames))
 	}

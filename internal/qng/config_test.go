@@ -31,7 +31,7 @@ func TestConfigInitialRTTAppliesBeforeHandshake(t *testing.T) {
 		perspective: protocol.PerspectiveClient,
 		logger:      utils.DefaultLogger,
 	}
-	c.preSetup()
+	c.preSetup(nil)
 	if got := c.rttStats.SmoothedRTT(); got != want {
 		t.Fatalf("SmoothedRTT = %v, want %v", got, want)
 	}

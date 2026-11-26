@@ -137,10 +137,10 @@ func TestAdvertiseAcceptConsistency(t *testing.T) {
 				config:          cfg,
 				perspective:     tt.perspective,
 				logger:          utils.DefaultLogger,
-				connIDGenerator: newConnIDGenerator(nil, protocol.ConnectionID{}, nil, nil, connRunnerCallbacks{}, func(wire.Frame) {}, dummyConnIDGenerator{}),
+				connIDGenerator: newConnIDGenerator(&stubConnRunner{}, protocol.ConnectionID{}, protocol.ConnectionID{}, nil, nil, func(wire.Frame) {}, dummyConnIDGenerator{}),
 				connIDManager:   newConnIDManager(protocol.ConnectionID{}, nil, nil, nil),
 			}
-			c.preSetup()
+			c.preSetup(nil)
 
 			peer := tt.peerParams()
 			c.peerParams.Store(peer)

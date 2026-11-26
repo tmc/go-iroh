@@ -32,7 +32,8 @@ func (s *sendStreamNotificationSender) onHasStreamData(protocol.StreamID, *SendS
 }
 func (s *sendStreamNotificationSender) onHasStreamControlFrame(protocol.StreamID, streamControlFrameGetter) {
 }
-func (s *sendStreamNotificationSender) onStreamCompleted(protocol.StreamID) {}
+func (s *sendStreamNotificationSender) onStreamCompleted(protocol.StreamID)      {}
+func (s *sendStreamNotificationSender) onStreamCreditReleased(protocol.StreamID) {}
 
 func TestSendStreamCoalescesActiveNotifications(t *testing.T) {
 	sender := new(sendStreamTestSender)
@@ -57,7 +58,8 @@ func TestSendStreamCoalescesActiveNotifications(t *testing.T) {
 }
 func (s *sendStreamTestSender) onHasStreamControlFrame(protocol.StreamID, streamControlFrameGetter) {
 }
-func (s *sendStreamTestSender) onStreamCompleted(protocol.StreamID) {}
+func (s *sendStreamTestSender) onStreamCompleted(protocol.StreamID)      {}
+func (s *sendStreamTestSender) onStreamCreditReleased(protocol.StreamID) {}
 
 func TestSendStreamConnectionWindowUpdateRequeuesPendingData(t *testing.T) {
 	sender := &sendStreamTestSender{}

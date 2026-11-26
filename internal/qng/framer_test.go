@@ -25,7 +25,7 @@ func TestFramerHasMaxData(t *testing.T) {
 func TestMaxDataFrameNotAliased(t *testing.T) {
 	f := newFramer(nil)
 	f.QueueMaxDataFrame(1 << 20)
-	frames, _ := f.appendControlFrames(nil, 1000, monotime.Now(), protocol.Version1)
+	frames, _ := f.AppendControlFrames(nil, 1000, monotime.Now(), protocol.Version1)
 	if len(frames) != 1 {
 		t.Fatalf("appended %d frames, want 1", len(frames))
 	}
@@ -38,7 +38,7 @@ func TestMaxDataFrameNotAliased(t *testing.T) {
 	if got := inFlight.MaximumData; got != 1<<20 {
 		t.Fatalf("in-flight frame mutated to %d after a later window update", got)
 	}
-	frames2, _ := f.appendControlFrames(nil, 1000, monotime.Now(), protocol.Version1)
+	frames2, _ := f.AppendControlFrames(nil, 1000, monotime.Now(), protocol.Version1)
 	if len(frames2) != 1 {
 		t.Fatalf("appended %d frames, want 1", len(frames2))
 	}

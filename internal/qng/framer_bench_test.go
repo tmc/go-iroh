@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
-	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
 	"github.com/tmc/go-iroh/internal/qng/internal/utils"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
@@ -82,15 +81,10 @@ func BenchmarkFramerAppend(b *testing.B) {
 			f := newBenchFramer(bb.urgencies)
 			buf := make([]ackhandler.StreamFrame, 0, 16)
 			// Append takes now only for control frames, of which there are
-			// none here, so hoist the clock out of the timed region instead of
-			// charging every iteration for a monotime.Now that the framer does
-			// not use.
-			now := monotime.Now()
-
 			// Fail loudly rather than benchmark a framer that schedules nothing.
 			if len(bb.urgencies) > 0 {
-				if _, _, has, sf, _ := f.Append(nil, buf[:0], protocol.MaxPacketBufferSize, now, protocol.Version1); !has && len(sf) == 0 {
-					b.Fatal("Append produced no STREAM frame; the benchmark is measuring an empty framer")
+				if _, _, has, sf, _ := f.AppendStreamFrames(nil, buf[:0], protocol.MaxPacketBufferSize, protocol.Version1); !has && len(sf) == 0 {
+					b.Fatal("AppendStreamFrames produced no STREAM frame; the benchmark is measuring an empty framer")
 				}
 			}
 
@@ -98,7 +92,7 @@ func BenchmarkFramerAppend(b *testing.B) {
 			b.ResetTimer()
 			frames := 0
 			for range b.N {
-				_, _, has, sf, _ := f.Append(nil, buf[:0], protocol.MaxPacketBufferSize, now, protocol.Version1)
+				_, _, has, sf, _ := f.AppendStreamFrames(nil, buf[:0], protocol.MaxPacketBufferSize, protocol.Version1)
 				frames += len(sf)
 				if has {
 					frames++

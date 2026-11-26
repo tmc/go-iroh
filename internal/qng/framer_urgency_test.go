@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
-	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
 	"github.com/tmc/go-iroh/internal/qng/internal/utils"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
@@ -60,7 +59,7 @@ func drainFramer(t *testing.T, f *framer) map[protocol.StreamID]int {
 	t.Helper()
 	got := make(map[protocol.StreamID]int)
 	for range 200 {
-		_, single, hasSingle, streamFrames, _ := f.Append(nil, nil, 1000, monotime.Now(), protocol.Version1)
+		_, single, hasSingle, streamFrames, _ := f.AppendStreamFrames(nil, nil, 1000, protocol.Version1)
 		n := 0
 		if hasSingle {
 			got[single.Frame.StreamID]++
@@ -173,7 +172,7 @@ func drainFramerFixed(t *testing.T, f *framer, packets int) map[protocol.StreamI
 	t.Helper()
 	got := make(map[protocol.StreamID]int)
 	for range packets {
-		_, single, hasSingle, streamFrames, _ := f.Append(nil, nil, 1000, monotime.Now(), protocol.Version1)
+		_, single, hasSingle, streamFrames, _ := f.AppendStreamFrames(nil, nil, 1000, protocol.Version1)
 		if hasSingle {
 			got[single.Frame.StreamID]++
 		}
