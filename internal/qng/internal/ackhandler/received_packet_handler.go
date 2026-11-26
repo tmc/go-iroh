@@ -210,18 +210,18 @@ func (h *ReceivedPacketHandler) GetAckFrame(encLevel protocol.EncryptionLevel, n
 	}
 }
 
-func (h *ReceivedPacketHandler) IsPotentiallyDuplicate(pn protocol.PacketNumber, encLevel protocol.EncryptionLevel) bool {
-	switch encLevel {
-	case protocol.EncryptionInitial:
+func (h *ReceivedPacketHandler) IsPotentiallyDuplicate(pn protocol.PacketNumber, space protocol.PacketNumberSpace) bool {
+	switch space {
+	case protocol.PacketNumberSpaceInitial:
 		if h.initialPackets != nil {
 			return h.initialPackets.IsPotentiallyDuplicate(pn)
 		}
-	case protocol.EncryptionHandshake:
+	case protocol.PacketNumberSpaceHandshake:
 		if h.handshakePackets != nil {
 			return h.handshakePackets.IsPotentiallyDuplicate(pn)
 		}
-	case protocol.Encryption0RTT, protocol.Encryption1RTT:
+	case protocol.PacketNumberSpaceAppData:
 		return h.getAppDataPath(protocol.PathIDZero).IsPotentiallyDuplicate(pn)
 	}
-	panic("unexpected encryption level")
+	panic("unexpected packet number space")
 }

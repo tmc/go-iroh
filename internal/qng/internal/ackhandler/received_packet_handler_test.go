@@ -36,18 +36,18 @@ func TestReceivedPacketHandlerDuplicateDetection(t *testing.T) {
 			now := monotime.Now()
 
 			// A packet not yet seen is not a duplicate.
-			if h.IsPotentiallyDuplicate(10, tt.encLevel) {
+			if h.IsPotentiallyDuplicate(10, tt.encLevel.PacketNumberSpace()) {
 				t.Errorf("pn 10 reported duplicate before being received")
 			}
 			if err := h.ReceivedPacket(10, protocol.ECNNon, tt.encLevel, now, true); err != nil {
 				t.Fatalf("ReceivedPacket: %v", err)
 			}
 			// The same packet number is now potentially duplicate.
-			if !h.IsPotentiallyDuplicate(10, tt.encLevel) {
+			if !h.IsPotentiallyDuplicate(10, tt.encLevel.PacketNumberSpace()) {
 				t.Errorf("pn 10 not reported duplicate after being received")
 			}
 			// A different packet number is not.
-			if h.IsPotentiallyDuplicate(11, tt.encLevel) {
+			if h.IsPotentiallyDuplicate(11, tt.encLevel.PacketNumberSpace()) {
 				t.Errorf("pn 11 reported duplicate although never received")
 			}
 		})
@@ -143,7 +143,7 @@ func TestReceivedPacketHandlerInitialHandshakeUnchanged(t *testing.T) {
 	if appAck := h.GetAckFrame(protocol.EncryptionInitial, now, false); appAck != nil {
 		t.Errorf("expected nil initial ack after drop, got %v", appAck)
 	}
-	if !h.IsPotentiallyDuplicate(0, protocol.EncryptionHandshake) {
+	if !h.IsPotentiallyDuplicate(0, protocol.PacketNumberSpaceHandshake) {
 		t.Errorf("handshake pn 0 should still be tracked after dropping initial")
 	}
 }

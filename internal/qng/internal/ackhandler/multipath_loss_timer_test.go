@@ -28,7 +28,7 @@ func TestLossAlarmArmedForNonZeroPathOnly(t *testing.T) {
 	h.SentPacketForPath(now, 0, protocol.InvalidPacketNumber, protocol.PathID(1),
 		nil, []Frame{ackElicitingFrame()}, protocol.ECNNon, 1000, false)
 
-	if h.getAppDataPath(protocol.PathIDZero).space.history.HasOutstandingPackets() {
+	if h.getAppDataPath(protocol.PathIDZero).hist.HasOutstandingPackets() {
 		t.Fatalf("path 0 has outstanding packets; the test no longer isolates path 1")
 	}
 	alarm := h.lossDetectionTime(now)
@@ -49,7 +49,7 @@ func TestLossAlarmCancelledWhenAllPathsIdle(t *testing.T) {
 	if err := h.AddPath(protocol.PathID(1)); err != nil {
 		t.Fatalf("AddPath(1): %v", err)
 	}
-	pn := h.PopPacketNumber(protocol.Encryption1RTT)
+	pn := h.PopPacketNumberForPath(protocol.PathID(1))
 	h.SentPacketForPath(now, pn, protocol.InvalidPacketNumber, protocol.PathID(1),
 		nil, []Frame{ackElicitingFrame()}, protocol.ECNNon, 1000, false)
 	if _, err := h.ReceivedAckForPath(ackFrameForPN(pn), protocol.PathID(1), now); err != nil {

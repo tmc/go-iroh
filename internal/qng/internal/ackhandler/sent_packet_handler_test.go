@@ -72,7 +72,7 @@ func ackElicitingFrame() Frame {
 // exactly as the connection drives them) and sends a single ack-eliciting 1-RTT
 // packet. It returns the allocated packet number.
 func sendAppDataPacket(h *sentPacketHandler, sendTime monotime.Time, size protocol.ByteCount) protocol.PacketNumber {
-	pn := h.PopPacketNumber(protocol.Encryption1RTT)
+	pn := h.PopPacketNumber(protocol.PacketNumberSpaceAppData)
 	h.SentPacket(
 		sendTime,
 		pn,
@@ -162,7 +162,7 @@ func TestAckRangesForPNs(t *testing.T) {
 // history, in ascending order.
 func outstandingPNs(h *sentPacketHandler) []protocol.PacketNumber {
 	var pns []protocol.PacketNumber
-	for pn, p := range h.getAppDataPath(protocol.PathIDZero).space.history.Packets() {
+	for pn, p := range h.getAppDataPath(protocol.PathIDZero).hist.Packets() {
 		if p.Outstanding() {
 			pns = append(pns, pn)
 		}
@@ -288,7 +288,7 @@ func TestSentPacketHandlerPTOCountReset(t *testing.T) {
 func TestSentPacketHandlerLostPathProbeWithoutHandler(t *testing.T) {
 	h, _ := newOracleSentHandler(t)
 	now := monotime.Now()
-	pn := h.PopPacketNumber(protocol.Encryption1RTT)
+	pn := h.PopPacketNumber(protocol.PacketNumberSpaceAppData)
 	h.SentPacket(
 		now,
 		pn,
@@ -302,12 +302,12 @@ func TestSentPacketHandlerLostPathProbeWithoutHandler(t *testing.T) {
 		true,
 	)
 
-	space := h.getAppDataPath(protocol.PathIDZero).space
-	if !space.history.HasOutstandingPathProbes() {
+	hist := h.getAppDataPath(protocol.PathIDZero).hist
+	if !hist.HasOutstandingPathProbes() {
 		t.Fatal("path probe not tracked")
 	}
 	h.detectLostPathProbes(now.Add(pathProbePacketLossTimeout + time.Millisecond))
-	if space.history.HasOutstandingPathProbes() {
+	if hist.HasOutstandingPathProbes() {
 		t.Fatal("lost path probe still tracked")
 	}
 }
@@ -370,7 +370,7 @@ func TestSentPacketHandlerReorderingLoss(t *testing.T) {
 	appData := h.getAppDataPath(protocol.PathIDZero).space
 	var wantOutstanding []protocol.PacketNumber
 	for _, pn := range sent[:len(sent)-1] {
-		if appData.history.Difference(largest, pn) < packetThreshold {
+		if h.hist.Difference(largest, pn) < packetThreshold {
 			wantOutstanding = append(wantOutstanding, pn)
 		}
 	}
@@ -697,7 +697,7 @@ func TestPTOOnNonZeroPathDrainsPath(t *testing.T) {
 		[]Frame{ackElicitingFrame()}, protocol.ECNNon, 1200, false)
 
 	path1 := h.getAppDataPath(protocol.PathID(1))
-	if !path1.space.history.HasOutstandingPackets() {
+	if !path1.hist.HasOutstandingPackets() {
 		t.Fatalf("path 1 has no outstanding packets after SentPacketForPath")
 	}
 
@@ -712,7 +712,7 @@ func TestPTOOnNonZeroPathDrainsPath(t *testing.T) {
 	if err := h.OnLossDetectionTimeout(late); err != nil {
 		t.Fatalf("OnLossDetectionTimeout: %v", err)
 	}
-	if path1.space.history.HasOutstandingPackets() {
+	if path1.hist.HasOutstandingPackets() {
 		t.Errorf("path 1 still has outstanding packets after its PTO fired; an expired deadline would re-fire forever")
 	}
 	if path1.bytesInFlight != 0 {

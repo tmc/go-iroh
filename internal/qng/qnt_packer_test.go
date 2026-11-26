@@ -255,7 +255,8 @@ func TestSendPackedCoalescedPacketPreservesOneStreamFrame(t *testing.T) {
 			func(protocol.StatelessResetToken) {},
 			func(wire.Frame) {},
 		),
-		sendQueue: &qntProbeTestSender{available: make(chan struct{})},
+		sendQueue:     &qntProbeTestSender{available: make(chan struct{})},
+		mtuDiscoverer: newMTUDiscoverer(rtt, protocol.InitialPacketSize, protocol.MaxPacketBufferSize, nil),
 		sentPacketHandler: ackhandler.NewSentPacketHandler(
 			0,
 			protocol.InitialPacketSize,
@@ -526,22 +527,22 @@ type qntProbePNManager struct {
 	pn protocol.PacketNumber
 }
 
-func (m *qntProbePNManager) PeekPacketNumber(protocol.EncryptionLevel) (protocol.PacketNumber, protocol.PacketNumberLen) {
+func (m *qntProbePNManager) PeekPacketNumber(protocol.PacketNumberSpace) (protocol.PacketNumber, protocol.PacketNumberLen) {
 	return m.pn, protocol.PacketNumberLen2
 }
 
-func (m *qntProbePNManager) PopPacketNumber(protocol.EncryptionLevel) protocol.PacketNumber {
+func (m *qntProbePNManager) PopPacketNumber(protocol.PacketNumberSpace) protocol.PacketNumber {
 	pn := m.pn
 	m.pn++
 	return pn
 }
 
 func (m *qntProbePNManager) PeekPacketNumberForPath(protocol.PathID) (protocol.PacketNumber, protocol.PacketNumberLen) {
-	return m.PeekPacketNumber(protocol.Encryption1RTT)
+	return m.PeekPacketNumber(protocol.PacketNumberSpaceAppData)
 }
 
 func (m *qntProbePNManager) PopPacketNumberForPath(protocol.PathID) protocol.PacketNumber {
-	return m.PopPacketNumber(protocol.Encryption1RTT)
+	return m.PopPacketNumber(protocol.PacketNumberSpaceAppData)
 }
 
 type qntProbeTestSender struct {

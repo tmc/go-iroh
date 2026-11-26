@@ -505,14 +505,10 @@ func (c *Conn) migrateOrdinarySendToQNTRoute(route netip.AddrPort, now monotime.
 			return
 		}
 	}
-	initialPacketSize := protocol.ByteCount(c.config.InitialPacketSize)
-	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
-	if params := c.peerParams.Load(); params.MaxUDPPayloadSize > 0 && params.MaxUDPPayloadSize < maxPacketSize {
-		maxPacketSize = params.MaxUDPPayloadSize
-	}
+	initialPacketSize := c.config.initialPacketSize()
 	c.sentPacketHandler.MigratedPath(now, initialPacketSize)
 	c.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(initialPacketSize)))
-	c.resetMTUDiscoverer(now, initialPacketSize, maxPacketSize)
+	c.resetMTUDiscoverer(now, initialPacketSize, c.maxMTU())
 	if c.multipathOut != nil && c.multipathOut.premigrationRemote == nil {
 		c.multipathOut.premigrationRemote = c.conn.RemoteAddr()
 	}
@@ -561,14 +557,10 @@ func (c *Conn) revertQNTMigration(now monotime.Time) {
 	if m == nil || !m.migratedRemote.IsValid() || m.premigrationRemote == nil {
 		return
 	}
-	initialPacketSize := protocol.ByteCount(c.config.InitialPacketSize)
-	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
-	if params := c.peerParams.Load(); params.MaxUDPPayloadSize > 0 && params.MaxUDPPayloadSize < maxPacketSize {
-		maxPacketSize = params.MaxUDPPayloadSize
-	}
+	initialPacketSize := c.config.initialPacketSize()
 	c.sentPacketHandler.MigratedPath(now, initialPacketSize)
 	c.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(initialPacketSize)))
-	c.resetMTUDiscoverer(now, initialPacketSize, maxPacketSize)
+	c.resetMTUDiscoverer(now, initialPacketSize, c.maxMTU())
 	c.conn.ChangeRemoteAddr(m.premigrationRemote, packetInfo{})
 	m.revertedRoute = m.migratedRemote
 	m.revertedRouteUntil = now.Add(qntRemigrationCooldown)

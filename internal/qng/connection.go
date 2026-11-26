@@ -2,6 +2,7 @@ package quic
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -263,7 +264,7 @@ type Conn struct {
 	unpacker      unpacker
 	frameParser   wire.FrameParser
 	packer        packer
-	mtuDiscoverer *mtuFinder // initialized when the transport parameters are received
+	mtuDiscoverer *mtuFinder // initialized after the first write at the configured Initial size
 
 	maxPayloadSizeEstimate atomic.Uint32
 
@@ -423,7 +424,7 @@ var newConnection = func(
 	}
 	s.sentPacketHandler = ackhandler.NewSentPacketHandler(
 		0,
-		protocol.ByteCount(s.config.InitialPacketSize),
+		s.config.initialPacketSize(),
 		s.rttStats,
 		&s.connStats,
 		clientAddressValidated,
@@ -433,7 +434,7 @@ var newConnection = func(
 		s.qlogger,
 		s.logger,
 	)
-	s.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(protocol.ByteCount(s.config.InitialPacketSize))))
+	s.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(s.config.initialPacketSize())))
 	statelessResetToken := statelessResetter.GetStatelessResetToken(srcConnID)
 	params := &wire.TransportParameters{
 		InitialMaxStreamDataBidiLocal:   protocol.ByteCount(s.config.InitialStreamReceiveWindow),
@@ -443,7 +444,7 @@ var newConnection = func(
 		MaxIdleTimeout:                  s.config.MaxIdleTimeout,
 		MaxBidiStreamNum:                protocol.StreamNum(s.config.MaxIncomingStreams),
 		MaxUniStreamNum:                 protocol.StreamNum(s.config.MaxIncomingUniStreams),
-		MaxAckDelay:                     protocol.MaxAckDelayInclGranularity,
+		MaxAckDelay:                     ackhandler.MaxAckDelay + protocol.TimerGranularity,
 		AckDelayExponent:                protocol.AckDelayExponent,
 		MaxUDPPayloadSize:               protocol.MaxPacketBufferSize,
 		StatelessResetToken:             &statelessResetToken,
@@ -489,7 +490,7 @@ var newConnection = func(
 		s.version,
 	)
 	s.cryptoStreamHandler = cs
-	s.packer = newPacketPacker(srcConnID, s.connIDManager.Get, s.destConnIDForPath, s.initialStream, s.handshakeStream, s.sentPacketHandler, s.retransmissionQueue, cs, s.framer, &s.receivedPacketHandler, s.datagramQueue, s.perspective)
+	s.packer = newPacketPacker(srcConnID, s.connIDManager.Get, s.destConnIDForPath, s.initialStream, s.handshakeStream, s.sentPacketHandler, s.retransmissionQueue, cs, s.framer, &s.receivedPacketHandler, s.datagramQueue, s.perspective, s.qlogger)
 	s.unpacker = newPacketUnpacker(cs, s.srcConnIDLen)
 	s.cryptoStreamManager = newCryptoStreamManager(s.initialStream, s.handshakeStream, s.oneRTTStream)
 	return &wrappedConn{Conn: s}
@@ -560,9 +561,21 @@ var newClientConnection = func(
 	)
 	s.ctx, s.ctxCancel = context.WithCancelCause(ctx)
 	s.preSetup()
+	if len(tlsConf.ServerName) > 0 {
+		s.tokenStoreKey = tlsConf.ServerName
+	} else {
+		s.tokenStoreKey = conn.RemoteAddr().String()
+	}
+	var token *ClientToken
+	if s.config.TokenStore != nil {
+		token = s.config.TokenStore.Pop(s.tokenStoreKey)
+		if token != nil {
+			s.rttStats.SetInitialRTT(token.rtt)
+		}
+	}
 	s.sentPacketHandler = ackhandler.NewSentPacketHandler(
 		initialPacketNumber,
-		protocol.ByteCount(s.config.InitialPacketSize),
+		s.config.initialPacketSize(),
 		s.rttStats,
 		&s.connStats,
 		false, // has no effect
@@ -572,7 +585,7 @@ var newClientConnection = func(
 		s.qlogger,
 		s.logger,
 	)
-	s.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(protocol.ByteCount(s.config.InitialPacketSize))))
+	s.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(s.config.initialPacketSize())))
 	oneRTTStream := newCryptoStream()
 	params := &wire.TransportParameters{
 		InitialMaxStreamDataBidiRemote: protocol.ByteCount(s.config.InitialStreamReceiveWindow),
@@ -582,7 +595,7 @@ var newClientConnection = func(
 		MaxIdleTimeout:                 s.config.MaxIdleTimeout,
 		MaxBidiStreamNum:               protocol.StreamNum(s.config.MaxIncomingStreams),
 		MaxUniStreamNum:                protocol.StreamNum(s.config.MaxIncomingUniStreams),
-		MaxAckDelay:                    protocol.MaxAckDelayInclGranularity,
+		MaxAckDelay:                    ackhandler.MaxAckDelay + protocol.TimerGranularity,
 		MaxUDPPayloadSize:              protocol.MaxPacketBufferSize,
 		AckDelayExponent:               protocol.AckDelayExponent,
 		// For interoperability with quic-go versions before May 2023, this value must be set to a value
@@ -625,17 +638,9 @@ var newClientConnection = func(
 	s.cryptoStreamHandler = cs
 	s.cryptoStreamManager = newCryptoStreamManager(s.initialStream, s.handshakeStream, oneRTTStream)
 	s.unpacker = newPacketUnpacker(cs, s.srcConnIDLen)
-	s.packer = newPacketPacker(srcConnID, s.connIDManager.Get, s.destConnIDForPath, s.initialStream, s.handshakeStream, s.sentPacketHandler, s.retransmissionQueue, cs, s.framer, &s.receivedPacketHandler, s.datagramQueue, s.perspective)
-	if len(tlsConf.ServerName) > 0 {
-		s.tokenStoreKey = tlsConf.ServerName
-	} else {
-		s.tokenStoreKey = conn.RemoteAddr().String()
-	}
-	if s.config.TokenStore != nil {
-		if token := s.config.TokenStore.Pop(s.tokenStoreKey); token != nil {
-			s.packer.SetToken(token.data)
-			s.rttStats.SetInitialRTT(token.rtt)
-		}
+	s.packer = newPacketPacker(srcConnID, s.connIDManager.Get, s.destConnIDForPath, s.initialStream, s.handshakeStream, s.sentPacketHandler, s.retransmissionQueue, cs, s.framer, &s.receivedPacketHandler, s.datagramQueue, s.perspective, s.qlogger)
+	if token != nil {
+		s.packer.SetToken(token.data)
 	}
 	return &wrappedConn{Conn: s}
 }
@@ -701,7 +706,7 @@ func (c *Conn) preSetup() {
 
 	c.receivedPacketHandler = *ackhandler.NewReceivedPacketHandler(c.logger)
 
-	c.datagramQueue = newDatagramQueue(c.scheduleSending, c.logger)
+	c.datagramQueue = newDatagramQueue(c.scheduleSending, c.logger, c.qlogger)
 	c.connState.Version = c.version
 }
 
@@ -975,6 +980,11 @@ type ConnectionStats struct {
 	// variation. See https://www.rfc-editor.org/rfc/rfc9002#section-5.3
 	MeanDeviation time.Duration
 
+	// CongestionWindow is the local sender's congestion window on the active
+	// network path, in bytes. It limits bytes in flight and includes QUIC
+	// packet overhead, excluding UDP and IP headers.
+	CongestionWindow uint64
+
 	// BytesSent is the number of bytes sent on the underlying connection,
 	// including retransmissions. Does not include UDP or any other outer
 	// framing.
@@ -1007,12 +1017,16 @@ type ConnectionStats struct {
 	PathCIDsBlocked uint64
 }
 
+// ConnectionStats returns statistics about the connection.
+// It can be called concurrently with other connection operations.
 func (c *Conn) ConnectionStats() ConnectionStats {
 	return ConnectionStats{
 		MinRTT:        c.rttStats.MinRTT(),
 		LatestRTT:     c.rttStats.LatestRTT(),
 		SmoothedRTT:   c.rttStats.SmoothedRTT(),
 		MeanDeviation: c.rttStats.MeanDeviation(),
+
+		CongestionWindow: c.connStats.CongestionWindow.Load(),
 
 		BytesSent:       c.connStats.BytesSent.Load(),
 		PacketsSent:     c.connStats.PacketsSent.Load(),
@@ -1094,17 +1108,11 @@ func (c *Conn) idleTimeoutStartTime() monotime.Time {
 }
 
 func (c *Conn) switchToNewPath(tr *Transport, now monotime.Time) {
-	initialPacketSize := protocol.ByteCount(c.config.InitialPacketSize)
+	initialPacketSize := protocol.ByteCount(cmp.Or(c.config.InitialPacketSize, protocol.MinInitialPacketSize))
 	c.sentPacketHandler.MigratedPath(now, initialPacketSize)
-	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
-	if params := c.peerParams.Load(); params.MaxUDPPayloadSize > 0 && params.MaxUDPPayloadSize < maxPacketSize {
-		maxPacketSize = params.MaxUDPPayloadSize
-	}
+	c.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(initialPacketSize)))
 	c.conn = newSendConn(tr.conn, c.conn.RemoteAddr(), packetInfo{}, utils.DefaultLogger) // TODO: find a better way
-	// After the swap, so the gate reads the socket that will carry the probes:
-	// the new Transport's socket has its own DF capability. Reset only touches
-	// mtuFinder state, so moving it past the swap changes nothing else.
-	c.resetMTUDiscoverer(now, initialPacketSize, maxPacketSize)
+	c.resetMTUDiscoverer(now, initialPacketSize, c.maxMTU())
 	c.sendQueue.Close()
 	c.sendQueue = newSendQueue(c.conn)
 	go func() {
@@ -1147,10 +1155,8 @@ func (c *Conn) handleHandshakeComplete(now monotime.Time) error {
 	}
 	if ticket != nil { // may be nil if session tickets are disabled via tls.Config.SessionTicketsDisabled
 		c.oneRTTStream.Write(ticket)
-		for c.oneRTTStream.HasData() {
-			if cf := c.oneRTTStream.PopCryptoFrame(protocol.MaxPostHandshakeCryptoFrameSize); cf != nil {
-				c.queueControlFrame(cf)
-			}
+		if cf := c.oneRTTStream.PopCryptoFrame(protocol.MaxByteCount); cf != nil {
+			c.queueControlFrame(cf)
 		}
 	}
 	token, err := c.tokenGenerator.NewToken(c.conn.RemoteAddr(), c.rttStats.SmoothedRTT())
@@ -1177,9 +1183,9 @@ func (c *Conn) handleHandshakeComplete(now monotime.Time) error {
 // paths need this locally. Reported upstream; if it is fixed there, these calls
 // can go back to Reset at the next revendor.
 func (c *Conn) resetMTUDiscoverer(now monotime.Time, start, max protocol.ByteCount) {
-	c.mtuDiscoverer.Reset(now, start, max)
-	if c.config.DisablePathMTUDiscovery || !c.conn.capabilities().DF {
-		c.mtuDiscoverer.lastProbeTime = 0
+	c.mtuDiscoverer.Reset(start, max)
+	if !c.config.DisablePathMTUDiscovery && c.conn.capabilities().DF {
+		c.mtuDiscoverer.Start(now)
 	}
 }
 
@@ -1609,16 +1615,10 @@ func (c *Conn) handleShortHeaderPacket(
 		return true, nil
 	}
 	c.pathManager.SwitchToPath(p.remoteAddr)
-	c.sentPacketHandler.MigratedPath(p.rcvTime, protocol.ByteCount(c.config.InitialPacketSize))
-	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
-	if params := c.peerParams.Load(); params.MaxUDPPayloadSize > 0 && params.MaxUDPPayloadSize < maxPacketSize {
-		maxPacketSize = params.MaxUDPPayloadSize
-	}
-	c.resetMTUDiscoverer(
-		p.rcvTime,
-		protocol.ByteCount(c.config.InitialPacketSize),
-		maxPacketSize,
-	)
+	initialPacketSize := protocol.ByteCount(cmp.Or(c.config.InitialPacketSize, protocol.MinInitialPacketSize))
+	c.sentPacketHandler.MigratedPath(p.rcvTime, initialPacketSize)
+	c.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(initialPacketSize)))
+	c.resetMTUDiscoverer(p.rcvTime, initialPacketSize, c.maxMTU())
 	c.conn.ChangeRemoteAddr(p.remoteAddr, p.info)
 	return true, nil
 }
@@ -1681,7 +1681,7 @@ func (c *Conn) handleLongHeaderPacket(p receivedPacket, hdr *wire.Header, datagr
 		packet.hdr.Log(c.logger)
 	}
 
-	if pn := packet.hdr.PacketNumber; c.receivedPacketHandler.IsPotentiallyDuplicate(pn, packet.encryptionLevel) {
+	if pn := packet.hdr.PacketNumber; c.receivedPacketHandler.IsPotentiallyDuplicate(pn, packet.encryptionLevel.PacketNumberSpace()) {
 		c.logger.Debugf("Dropping (potentially) duplicate packet.")
 		if c.qlogger != nil {
 			c.qlogger.RecordEvent(qlog.PacketDropped{
@@ -1949,7 +1949,7 @@ func (c *Conn) handleVersionNegotiationPacket(p receivedPacket) error {
 	}
 
 	c.logger.Infof("Switching to QUIC version %s.", newVersion)
-	nextPN, _ := c.sentPacketHandler.PeekPacketNumber(protocol.EncryptionInitial)
+	nextPN, _ := c.sentPacketHandler.PeekPacketNumber(protocol.PacketNumberSpaceInitial)
 	return &errCloseForRecreating{
 		nextPacketNumber: nextPN,
 		nextVersion:      newVersion,
@@ -2497,7 +2497,7 @@ func (c *Conn) destConnIDForPath(pid protocol.PathID) (protocol.ConnectionID, bo
 // connection-level IsPotentiallyDuplicate(Encryption1RTT).
 func (c *Conn) isPotentiallyDuplicate1RTT(pn protocol.PacketNumber, pid protocol.PathID) bool {
 	if pid == protocol.PathIDZero {
-		return c.receivedPacketHandler.IsPotentiallyDuplicate(pn, protocol.Encryption1RTT)
+		return c.receivedPacketHandler.IsPotentiallyDuplicate(pn, protocol.PacketNumberSpaceAppData)
 	}
 	return c.receivedPacketHandler.IsPotentiallyDuplicateForPath(pn, pid)
 }
@@ -3281,16 +3281,17 @@ func (c *Conn) applyTransportParameters() {
 		// Retire the connection ID.
 		c.connIDManager.AddFromPreferredAddress(params.PreferredAddress.ConnectionID, params.PreferredAddress.StatelessResetToken)
 	}
-	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
-	if params.MaxUDPPayloadSize > 0 && params.MaxUDPPayloadSize < maxPacketSize {
-		maxPacketSize = params.MaxUDPPayloadSize
+	if c.mtuDiscoverer != nil {
+		c.mtuDiscoverer = newMTUDiscoverer(c.rttStats, c.mtuDiscoverer.CurrentSize(), c.maxMTU(), c.qlogger)
 	}
-	c.mtuDiscoverer = newMTUDiscoverer(
-		c.rttStats,
-		protocol.ByteCount(c.config.InitialPacketSize),
-		maxPacketSize,
-		c.qlogger,
-	)
+}
+
+func (c *Conn) maxMTU() protocol.ByteCount {
+	params := c.peerParams.Load()
+	if params == nil || params.MaxUDPPayloadSize <= 0 {
+		return protocol.MaxPacketBufferSize
+	}
+	return min(protocol.MaxPacketBufferSize, params.MaxUDPPayloadSize)
 }
 
 // multipathNegotiated reports whether the QUIC multipath extension
@@ -3599,10 +3600,6 @@ func (c *Conn) sendPackets(now monotime.Time) error {
 		return nil
 	}
 
-	if cf := c.cryptoStreamManager.GetPostHandshakeData(protocol.MaxPostHandshakeCryptoFrameSize); cf != nil {
-		c.queueControlFrame(cf)
-	}
-
 	if !c.handshakeConfirmed {
 		packet, err := c.packer.PackCoalescedPacket(false, c.maxPacketSize(), now, c.version)
 		if err != nil || packet == nil {
@@ -3821,7 +3818,7 @@ func (c *Conn) sendProbePacket(sendMode ackhandler.SendMode, now monotime.Time) 
 	// or until there are no more packets to queue.
 	var packet *coalescedPacket
 	for packet == nil {
-		if wasQueued := c.sentPacketHandler.QueueProbePacket(encLevel); !wasQueued {
+		if wasQueued := c.sentPacketHandler.QueueProbePacket(encLevel.PacketNumberSpace()); !wasQueued {
 			break
 		}
 		var err error
@@ -4001,7 +3998,31 @@ func (c *Conn) sendPackedCoalescedPacket(packet *coalescedPacket, ecn protocol.E
 		}
 	}
 	c.connIDManager.SentPacket()
-	c.sendQueue.Send(packet.buffer, 0, ecn)
+	if c.mtuDiscoverer != nil {
+		c.sendQueue.Send(packet.buffer, 0, ecn)
+		return nil
+	}
+
+	// Write directly until we've tried the configured Initial size. The server
+	// can send smaller ACKs before receiving the full ClientHello. Keep those
+	// writes here too, so the send queue can't write concurrently with us.
+	packetSize := packet.buffer.Len()
+	err := c.conn.Write(packet.buffer.Data, 0, ecn)
+	packet.buffer.Release()
+	if err != nil {
+		if !isSendMsgSizeErr(err) || c.config.InitialPacketSize != 0 {
+			return err
+		}
+	}
+	initialPacketSize := c.config.initialPacketSize()
+	if packetSize >= initialPacketSize {
+		if err != nil {
+			initialPacketSize = protocol.MinInitialPacketSize
+			c.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(protocol.MinInitialPacketSize)))
+			c.sentPacketHandler.SetMaxDatagramSize(protocol.MinInitialPacketSize)
+		}
+		c.mtuDiscoverer = newMTUDiscoverer(c.rttStats, initialPacketSize, c.maxMTU(), c.qlogger)
+	}
 	return nil
 }
 
@@ -4027,19 +4048,12 @@ func (c *Conn) sendConnectionClose(e error) ([]byte, error) {
 }
 
 func (c *Conn) maxPacketSize() protocol.ByteCount {
-	if c.mtuDiscoverer == nil {
-		// Use the configured packet size on the client side.
-		// If the server sends a max_udp_payload_size that's smaller than this size, we can ignore this:
-		// Apparently the server still processed the (fully padded) Initial packet anyway.
-		if c.perspective == protocol.PerspectiveClient {
-			return protocol.ByteCount(c.config.InitialPacketSize)
-		}
-		// On the server side, there's no downside to using 1200 bytes until we received the client's transport
-		// parameters:
-		// * If the first packet didn't contain the entire ClientHello, all we can do is ACK that packet. We don't
-		//   need a lot of bytes for that.
-		// * If it did, we will have processed the transport parameters and initialized the MTU discoverer.
+	if c.perspective == protocol.PerspectiveServer && c.peerParams.Load() == nil {
+		// Use 1200-byte server packets until we've received the client's transport parameters.
 		return protocol.MinInitialPacketSize
+	}
+	if c.mtuDiscoverer == nil {
+		return c.config.initialPacketSize()
 	}
 	return c.mtuDiscoverer.CurrentSize()
 }

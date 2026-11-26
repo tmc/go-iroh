@@ -84,7 +84,7 @@ func TestPTOCounterCountsNonZeroPathPTO(t *testing.T) {
 	}
 
 	// The branch's own effect: path 1's packet is no longer outstanding.
-	if h.getAppDataPath(protocol.PathID(1)).space.history.HasOutstandingPackets() {
+	if h.getAppDataPath(protocol.PathID(1)).hist.HasOutstandingPackets() {
 		t.Fatalf("path 1 still has outstanding packets; the nonzero-path branch was not taken")
 	}
 	if got := connStats.PTOs.Load(); got != 1 {
