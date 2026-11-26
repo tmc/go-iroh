@@ -334,6 +334,9 @@ async fn pq_client(policy: &str, id: &str, addr: &str) -> Result<(), Box<dyn std
 
 async fn gossip_server() -> Result<(), Box<dyn std::error::Error>> {
     use iroh::{Endpoint, endpoint::presets, protocol::Router};
+    #[cfg(feature = "gossip-flat-reexport")]
+    use iroh_gossip::{ALPN, Event, Gossip, TopicId};
+    #[cfg(not(feature = "gossip-flat-reexport"))]
     use iroh_gossip::{ALPN, TopicId, api::Event, net::Gossip};
 
     let topic = TopicId::from_bytes(*b"go-iroh rust gossip interop 001!");
@@ -371,7 +374,7 @@ async fn gossip_server() -> Result<(), Box<dyn std::error::Error>> {
                 std::io::stdout().flush()?;
                 break;
             }
-            Event::NeighborDown(_) | Event::Lagged | Event::NeighborUp(_) | Event::Received(_) => {}
+            _ => {}
         }
     }
     router.shutdown().await?;
