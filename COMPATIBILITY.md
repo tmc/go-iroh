@@ -177,10 +177,20 @@ show. Report generation preserves it.
 - `gossip.Discovery` caps stored addresses per peer at 32 (newest first).
   `Topic.Broadcast` and `Topic.BroadcastNeighbors` reject payloads above
   `MaxContentSize` with `ErrMessageTooLarge`.
-- Gossip membership adds rejoin-when-alone with backoff, early shuffling with
-  exponential backoff, bounded refill backoff for short active views, ignoring
-  PlumTree control updates from non-neighbors, and finishing per-topic send
-  streams (`Sender.FinishTopic`) when a topic no longer wants a peer.
+- Gossip membership adds rejoin-when-alone with backoff (including recent active
+  neighbors), early shuffling with exponential backoff, bounded refill backoff
+  for short active views, ignoring PlumTree control updates from non-neighbors,
+  grace-window protection against immediate pruning of newly grafted peers,
+  isolating malformed peer streams without closing the QUIC connection, and
+  finishing per-topic send streams (`Sender.FinishTopic`) when a topic no longer
+  wants a peer.
+- `blobs.FSStore.GC` expands `HashSeq` children even when the same root is also
+  tagged `Raw`, and holds the store lock across concurrent `HashSeq` protection
+  checks and file removal.
+- `relayproto` checks total client frame length before varint decoding;
+  `relayserver` closes failed handshakes immediately (`CloseNow`), and
+  `internal/socket` relay actors cancel in-flight sends on stop and enforce
+  non-home idle cleanup during backoff.
 
 ### v0.3.0
 
