@@ -73,16 +73,17 @@ func (h *Handler) Accept(ctx context.Context, conn *iroh.Conn) error {
 func (h *Handler) readStream(ctx context.Context, from key.EndpointID, r io.Reader, maxSize int) error {
 	var header gossipproto.StreamHeader
 	if err := gossipproto.ReadFrame(r, &header, maxSize); err != nil {
-		return fmt.Errorf("gossip: read stream header: %w", err)
+		cancelStreamRead(r)
+		return nil
 	}
 	for {
 		var msg TopicMessage
 		err := gossipproto.ReadFrame(r, &msg, maxSize)
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil
+			if !errors.Is(err, io.EOF) {
+				cancelStreamRead(r)
 			}
-			return fmt.Errorf("gossip: read message: %w", err)
+			return nil
 		}
 		if h.Handle == nil {
 			continue
@@ -90,6 +91,12 @@ func (h *Handler) readStream(ctx context.Context, from key.EndpointID, r io.Read
 		if err := h.Handle(ctx, from, Message{Topic: header.Topic, Message: msg}); err != nil {
 			return fmt.Errorf("gossip: handle message: %w", err)
 		}
+	}
+}
+
+func cancelStreamRead(r io.Reader) {
+	if cr, ok := r.(interface{ CancelRead(uint64) }); ok {
+		cr.CancelRead(0)
 	}
 }
 

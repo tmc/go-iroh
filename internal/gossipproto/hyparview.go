@@ -617,6 +617,9 @@ func (s *HyparviewState) addActive(peer PeerID, data *PeerData, priority Priorit
 	}
 	s.passive.remove(peer)
 	if s.active.insert(peer) {
+		// Remember recent active neighbors so maintenance can rejoin
+		// through them if both views later empty (iroh-gossip#192).
+		s.rememberBootstrap(peer)
 		*out = append(*out, HyparviewOutEvent{
 			Kind:  HyparviewEmitEvent,
 			Event: HyparviewEvent{Kind: HyparviewNeighborUp, Peer: peer},

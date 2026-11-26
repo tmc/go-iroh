@@ -206,6 +206,7 @@ type PlumtreeState struct {
 	cache     map[MessageID]cachedGossip
 
 	graftTimerScheduled    map[MessageID]struct{}
+	graftedUntil           map[PeerID]time.Time
 	dispatchTimerScheduled bool
 	init                   bool
 
@@ -251,6 +252,7 @@ func NewPlumtreeState(me PeerID, config PlumtreeConfig) *PlumtreeState {
 		received:               map[MessageID]time.Time{},
 		cache:                  map[MessageID]cachedGossip{},
 		graftTimerScheduled:    map[MessageID]struct{}{},
+		graftedUntil:           map[PeerID]time.Time{},
 		dispatchTimerScheduled: false,
 		maxPayloadSize:         config.MaxPayloadSize,
 	}
@@ -281,7 +283,7 @@ func (s *PlumtreeState) Handle(ev PlumtreeInEvent) []PlumtreeOutEvent {
 		case PlumtreeTimerDispatchLazyPush:
 			s.onDispatchTimer(&out)
 		case PlumtreeTimerSendGraft:
-			s.onSendGraftTimer(ev.Timer.ID, &out)
+			s.onSendGraftTimer(ev.Timer.ID, ev.Now, &out)
 		case PlumtreeTimerEvictCache:
 			s.onEvictCacheTimer(ev.Now, &out)
 		}
@@ -315,7 +317,7 @@ func (s *PlumtreeState) handleMessage(sender PeerID, message PlumtreeMessage, no
 		}
 	case PlumtreeGraft:
 		if fromPeer {
-			s.onGraft(sender, message.Graft, out)
+			s.onGraft(sender, message.Graft, now, out)
 		}
 	}
 }
@@ -343,6 +345,9 @@ func (s *PlumtreeState) onGossip(sender PeerID, fromPeer bool, message Gossip, n
 		return
 	}
 	if _, ok := s.received[message.ID]; ok {
+		if until, protected := s.graftedUntil[sender]; protected && !now.IsZero() && now.Before(until) {
+			return
+		}
 		if fromPeer {
 			s.addLazy(sender)
 		}
@@ -369,7 +374,7 @@ func (s *PlumtreeState) onGossip(sender PeerID, fromPeer bool, message Gossip, n
 			s.forgetMissing(target.peer)
 		}
 		if fromPeer {
-			s.optimizeTree(sender, forward, previous, out)
+			s.optimizeTree(sender, forward, previous, now, out)
 		}
 		if message.Scope.Round > Round(s.stats.MaxLastDeliveryHop) {
 			s.stats.MaxLastDeliveryHop = uint16(message.Scope.Round)
@@ -387,7 +392,7 @@ func (s *PlumtreeState) onGossip(sender PeerID, fromPeer bool, message Gossip, n
 	})
 }
 
-func (s *PlumtreeState) optimizeTree(sender PeerID, message Gossip, ihaves []graftTarget, out *[]PlumtreeOutEvent) {
+func (s *PlumtreeState) optimizeTree(sender PeerID, message Gossip, ihaves []graftTarget, now time.Time, out *[]PlumtreeOutEvent) {
 	if message.Scope.Kind != DeliveryScopeSwarm || len(ihaves) == 0 {
 		return
 	}
@@ -401,6 +406,7 @@ func (s *PlumtreeState) optimizeTree(sender PeerID, message Gossip, ihaves []gra
 	if best.round < round && round-best.round >= s.config.OptimizationThreshold {
 		if _, ok := s.eager[best.peer]; !ok {
 			s.addEager(best.peer)
+			s.markGrafted(best.peer, now)
 			*out = append(*out, PlumtreeOutEvent{
 				Kind: PlumtreeSendMessage,
 				To:   best.peer,
@@ -442,7 +448,7 @@ func (s *PlumtreeState) onIHave(sender PeerID, ihaves []IHave, out *[]PlumtreeOu
 	}
 }
 
-func (s *PlumtreeState) onSendGraftTimer(id MessageID, out *[]PlumtreeOutEvent) {
+func (s *PlumtreeState) onSendGraftTimer(id MessageID, now time.Time, out *[]PlumtreeOutEvent) {
 	delete(s.graftTimerScheduled, id)
 	if _, ok := s.received[id]; ok {
 		return
@@ -458,6 +464,7 @@ func (s *PlumtreeState) onSendGraftTimer(id MessageID, out *[]PlumtreeOutEvent) 
 	}
 	s.forgetMissing(target.peer)
 	s.addEager(target.peer)
+	s.markGrafted(target.peer, now)
 	*out = append(*out,
 		PlumtreeOutEvent{
 			Kind: PlumtreeSendMessage,
@@ -475,8 +482,9 @@ func (s *PlumtreeState) onSendGraftTimer(id MessageID, out *[]PlumtreeOutEvent) 
 	)
 }
 
-func (s *PlumtreeState) onGraft(sender PeerID, graft Graft, out *[]PlumtreeOutEvent) {
+func (s *PlumtreeState) onGraft(sender PeerID, graft Graft, now time.Time, out *[]PlumtreeOutEvent) {
 	s.addEager(sender)
+	s.markGrafted(sender, now)
 	if graft.ID == nil {
 		return
 	}
@@ -487,6 +495,16 @@ func (s *PlumtreeState) onGraft(sender PeerID, graft Graft, out *[]PlumtreeOutEv
 			Message: PlumtreeMessage{Kind: PlumtreeGossip, Gossip: cached.message},
 		})
 	}
+}
+
+// markGrafted shields a newly grafted eager peer from immediate pruning on
+// duplicate deliveries (upstream iroh-gossip#207).
+func (s *PlumtreeState) markGrafted(peer PeerID, now time.Time) {
+	if now.IsZero() {
+		return
+	}
+	grace := max(2*s.config.GraftTimeout1, time.Second)
+	s.graftedUntil[peer] = now.Add(grace)
 }
 
 func (s *PlumtreeState) onDispatchTimer(out *[]PlumtreeOutEvent) {
@@ -524,6 +542,7 @@ func (s *PlumtreeState) onNeighborDown(peer PeerID) {
 	delete(s.nmissing, peer)
 	delete(s.eager, peer)
 	delete(s.lazy, peer)
+	delete(s.graftedUntil, peer)
 }
 
 // forgetMissing records that one of peer's targets left missing.
@@ -554,6 +573,11 @@ func (s *PlumtreeState) onEvictCacheTimer(now time.Time, out *[]PlumtreeOutEvent
 	for id, cached := range s.cache {
 		if !cached.expire.After(now) {
 			delete(s.cache, id)
+		}
+	}
+	for peer, until := range s.graftedUntil {
+		if !until.After(now) {
+			delete(s.graftedUntil, peer)
 		}
 	}
 	*out = append(*out, PlumtreeOutEvent{
